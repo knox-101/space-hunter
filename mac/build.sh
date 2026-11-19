@@ -22,6 +22,8 @@ lipo -create build/obj/SpaceHunter-arm64 build/obj/SpaceHunter-x86_64 -output "$
 
 cp ../fonts/*.ttf ../fonts/OFL.txt "$APP/Contents/Resources/fonts/"
 cp cleaners.json "$APP/Contents/Resources/"
+# the public half of the release signing key, when present, lets the app check an update before installing it
+if [ -f ../update-key/update-key.der ]; then cp ../update-key/update-key.der "$APP/Contents/Resources/"; fi
 if [ -d assets/AppIcon.iconset ]; then
   iconutil -c icns assets/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 fi

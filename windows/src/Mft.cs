@@ -64,6 +64,7 @@ namespace SpaceHunter
                 LastInfo = runs.Count + " pieces, " + count.ToString("N0") + " records";
                 if (count <= RootRecord || count > int.MaxValue) throw new InvalidDataException("odd table size");
 
+                BigFolders.Phase = "measuring";
                 var t = new Table((int)count);
                 const int chunk = 4 << 20;   // read 4 MB at a time, in disk order
                 var buf = new byte[chunk];
@@ -82,6 +83,7 @@ namespace SpaceHunter
                         offset += got; left -= got;
                     }
                 }
+                BigFolders.Phase = "sorting";
                 var root = t.Build(letter + "\\");
                 LastTable = t;
                 return root;

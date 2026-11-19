@@ -60,6 +60,14 @@ namespace SpaceHunter
         static int Main(string[] args)
         {
             if (Has(args, "--version")) { Console.WriteLine("Space Hunter " + AppVersion.Text); return 0; }
+            string verifyFile = Arg(args, "--test-verify");   // test hook: --test-verify <file> <sig> <public-key.xml>
+            if (verifyFile != null)
+            {
+                var rest = args.SkipWhile(a => a != "--test-verify").Skip(1).ToArray();
+                bool ok = rest.Length >= 3 && Updater.Verify(File.ReadAllBytes(rest[0]), File.ReadAllBytes(rest[1]), File.ReadAllText(rest[2]));
+                Console.WriteLine(ok ? "SIGNATURE OK" : "SIGNATURE BAD");
+                return ok ? 0 : 1;
+            }
             string mftDrive = Arg(args, "--test-mft");   // test hook: measure a drive both ways and compare, into a file
             if (mftDrive != null)
             {
@@ -226,7 +234,10 @@ namespace SpaceHunter
                 return 0;
             }
 
+            Updater.CleanUpOld();
             var form = new MainForm { SnapshotPath = snap, OpenPanelFor = Arg(args, "--open"), FramesDir = Arg(args, "--frames") };
+            if (Has(args, "--test-update-bar"))   // test hook: show the update bar with a made-up newer version
+                form.Shown += (s, e) => form.ShowUpdate(new Release { Version = new Version(Updater.Current.Major, Updater.Current.Minor + 1, 0), Tag = "test" });
             Application.Run(form);
             return 0;
         }

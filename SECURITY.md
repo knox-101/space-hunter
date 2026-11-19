@@ -15,7 +15,9 @@ You'll get a reply within a week. Fixes go out as a new release, credited to you
 
 ## What Space Hunter promises
 
-- It works offline. It sends nothing anywhere, and has no account and no telemetry.
+- It has no account and no telemetry. Its only network request is one check for a newer release on GitHub when it
+  opens; nothing about you or your files is sent, and offline it simply skips the check.
+- Updates are installed only if their signature matches the project's release key, which is built into the app.
 - It only deletes inside the folders listed for each item, or folders you added yourself.
 - It never cleans personal folders, protected folders or AI agents' memory folders, and it never follows links or
   junctions.

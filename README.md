@@ -1,7 +1,7 @@
 # Space Hunter
 
 **Finds the folders silently filling your disk, tells you what each one is, and clears the ones you pick in one
-confirmed click.** For Windows 10/11 and macOS 13+. Offline, no account, no telemetry, under 1 MB.
+confirmed click.** For Windows 10/11 and macOS 13+. No account, no telemetry, under 1 MB, and it works offline.
 
 ![Space Hunter on Windows](docs/screenshots/windows-main.png)
 
@@ -66,6 +66,13 @@ Download the latest version from the **Releases** page.
 - **Mac**: unzip, move **Space Hunter** to Applications, then **right-click → Open** the first time (it isn't
   notarized). For the Trash and some caches, allow it under **System Settings → Privacy & Security → Full Disk
   Access**.
+
+## Updates
+
+When it opens, Space Hunter asks GitHub once whether there's a newer release; nothing about you or your files is
+sent. If there is one, a bar offers **Update & relaunch**: it downloads the new version, checks its signature against
+the project's key built into the app, swaps it in and reopens, keeping your settings. Offline, nothing happens.
+How releases are made: [`RELEASING.md`](RELEASING.md).
 
 ## Command line (Windows)
 

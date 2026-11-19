@@ -18,4 +18,6 @@ The first release, for Windows 10/11 and macOS 13+.
 - **Protected folders** are never touched, and personal folders can't be added.
 - Only apps that are installed get a row. Items are defined in `cleaners.json`, so adding an app needs no code.
 - Scans measure four items at a time, Safe-to-delete items first.
+- **Updates:** a quiet check on launch; a bar offers Update & relaunch, and only installs releases signed with the
+  project's key.
 - **Reset to default**, a "freed so far" total, and a command line (`--report`, `--auto`, `--version`).

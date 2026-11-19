@@ -28,6 +28,7 @@ namespace SpaceHunter
         public static long ScannedBytes;        // bytes seen so far
         public static volatile bool Cancel;
         public static bool UsedIndex;           // the last scan read the drive's file table
+        public static volatile string Phase = "";   // "starting", "measuring" or "sorting" (for the display)
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         struct WIN32_FIND_DATAW
@@ -48,10 +49,10 @@ namespace SpaceHunter
 
         public static FolderNode Scan(string root)
         {
-            Scanned = 0; ScannedBytes = 0; Cancel = false;
+            Scanned = 0; ScannedBytes = 0; Cancel = false; Phase = "starting";
             if (Mft.CanScan(root))   // a whole NTFS drive: read its file table in one pass (much faster)
             {
-                try { var r = Mft.Scan(root); Total(r); UsedIndex = true; return r; }
+                try { var r = Mft.Scan(root); Phase = "sorting"; Total(r); UsedIndex = true; return r; }
                 catch (OperationCanceledException) { return new FolderNode { Name = root, Path = root }; }
                 catch (Exception e) { IndexError = e.Message; }   // anything unexpected: measure folder by folder instead
             }
@@ -62,11 +63,12 @@ namespace SpaceHunter
         // Folder by folder, through Windows (works on any drive or folder, with or without admin rights).
         public static FolderNode ScanFolders(string root)
         {
-            Scanned = 0; ScannedBytes = 0; UsedIndex = false;
+            Scanned = 0; ScannedBytes = 0; UsedIndex = false; Phase = "measuring";
             var node = new FolderNode { Name = root, Path = root.TrimEnd('\\') + "\\" };
             // list the top level, then measure each top-level folder in parallel
             var kids = List(node);
             Parallel.ForEach(kids, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount) }, k => Fill(k));
+            Phase = "sorting";
             Total(node);
             return node;
         }

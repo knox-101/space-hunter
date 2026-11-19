@@ -16,10 +16,13 @@ if not exist obj mkdir obj
 )
 set RES=
 for %%F in (..\fonts\*.ttf) do call set RES=%%RES%% /resource:"%%F",%%~nxF
+rem The public half of the release signing key, when present, lets the app check an update before installing it.
+set KEY=
+if exist ..\update-key\update-key.xml set KEY=/resource:..\update-key\update-key.xml,update-key.xml
 set ICON=
 if exist assets\SpaceHunter.ico set ICON=/win32icon:assets\SpaceHunter.ico
 "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /platform:x64 /optimize+ ^
-  /win32manifest:app.manifest %ICON% %RES% /resource:cleaners.json,cleaners.json ^
+  /win32manifest:app.manifest %ICON% %RES% /resource:cleaners.json,cleaners.json %KEY% ^
   /reference:System.Web.Extensions.dll /out:SpaceHunter.exe src\*.cs obj\Version.cs
 if errorlevel 1 (echo BUILD FAILED & exit /b 1)
 echo Built %~dp0SpaceHunter.exe (version %VER%)

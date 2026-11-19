@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 import CoreText
+import Security
 
 // MARK: - Model
 
@@ -472,6 +473,7 @@ final class AppState: ObservableObject {
     @Published var currentItem = ""
     @Published var log: [String] = []
     @Published var expected: Int64 = 1
+    @Published var update: ReleaseInfo?
     private var counter: Counter?
     // a few items are measured at once (an SSD answers several folder reads in parallel)
     private let scanQ = DispatchQueue(label: "scan", attributes: .concurrent)
@@ -576,12 +578,135 @@ final class AppState: ObservableObject {
     func finishCleaning() { cleaning = false; scan() }
 }
 
+// MARK: - Updates
+// Once per launch the app asks GitHub for the latest release of this repository (one small request; nothing about
+// you is sent). Installing downloads the new app and its signature, refuses it unless the signature matches the
+// project's public key (bundled in this app), swaps the app and reopens it. Without a bundled key it never installs.
+
+struct ReleaseInfo { let version: String; let page: String?; let zipURL: URL; let sigURL: URL }
+
+enum Updater {
+    static let repo = "knox-101/space-hunter"
+    static var current: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
+
+    static func newer(_ a: String, than b: String) -> Bool {
+        let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    static func check(_ done: @escaping (ReleaseInfo?) -> Void) {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!, timeoutInterval: 10)
+        req.setValue("SpaceHunter-updater", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = obj["tag_name"] as? String else { return done(nil) }
+            let v = tag.hasPrefix("v") || tag.hasPrefix("V") ? String(tag.dropFirst()) : tag
+            guard newer(v, than: current) else { return done(nil) }
+            var zip: URL?, sig: URL?
+            for a in (obj["assets"] as? [[String: Any]]) ?? [] {
+                guard let n = a["name"] as? String, let u = (a["browser_download_url"] as? String).flatMap(URL.init(string:)) else { continue }
+                if n == "SpaceHunter-mac.zip" { zip = u } else if n == "SpaceHunter-mac.zip.sig" { sig = u }
+            }
+            guard let zip, let sig else { return done(nil) }
+            done(ReleaseInfo(version: v, page: obj["html_url"] as? String, zipURL: zip, sigURL: sig))
+        }.resume()
+    }
+
+    static func publicKey() -> SecKey? {
+        guard let url = Bundle.main.url(forResource: "update-key", withExtension: "der"), let der = try? Data(contentsOf: url) else { return nil }
+        let attrs: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeRSA, kSecAttrKeyClass as String: kSecAttrKeyClassPublic]
+        return SecKeyCreateWithData(der as CFData, attrs as CFDictionary, nil)
+    }
+
+    static func verify(_ data: Data, _ sig: Data, key: SecKey) -> Bool {
+        SecKeyVerifySignature(key, .rsaSignatureMessagePKCS1v15SHA256, data as CFData, sig as CFData, nil)
+    }
+
+    // Returns nil when the new version is opening (the caller quits), or a sentence saying why it didn't update.
+    static func install(_ r: ReleaseInfo, say: @escaping (String) -> Void) -> String? {
+        guard let key = publicKey() else { return "This copy wasn't built with the release key, so it can't check updates. Download the new version from GitHub instead." }
+        do {
+            say("Downloading Space Hunter \(r.version) …")
+            let zip = try Data(contentsOf: r.zipURL), sig = try Data(contentsOf: r.sigURL)
+            say("Checking its signature …")
+            guard verify(zip, sig, key: key) else { return "The download's signature didn't match, so it wasn't installed. Nothing was changed." }
+            say("Installing …")
+            let fm = FileManager.default
+            let dir = fm.temporaryDirectory.appendingPathComponent("SpaceHunter-update-\(UUID().uuidString)")
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let zipFile = dir.appendingPathComponent("update.zip")
+            try zip.write(to: zipFile)
+            let unzip = Process()
+            unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            unzip.arguments = ["-x", "-k", zipFile.path, dir.path]
+            try unzip.run(); unzip.waitUntilExit()
+            let fresh = dir.appendingPathComponent("Space Hunter.app")
+            guard unzip.terminationStatus == 0, fm.fileExists(atPath: fresh.path) else { return "The update didn't unpack. Nothing was changed." }
+            let here = Bundle.main.bundleURL
+            _ = try fm.replaceItemAt(here, withItemAt: fresh)
+            // reopen once this copy has quit
+            let reopen = Process()
+            reopen.executableURL = URL(fileURLWithPath: "/bin/sh")
+            reopen.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", here.path]
+            try reopen.run()
+            return nil
+        } catch {
+            return "The update didn't install (\(error.localizedDescription)). Nothing was changed."
+        }
+    }
+}
+
+struct UpdateBar: View {
+    @EnvironmentObject var state: AppState
+    let release: ReleaseInfo
+    @State private var message: String?
+    @State private var busy = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(message ?? "Space Hunter \(release.version) is ready  ·  you have \(Updater.current). Updating takes a few seconds and keeps your settings.")
+                .font(Theme.semi(13)).foregroundColor(Theme.ink).lineLimit(2)
+            Spacer()
+            Button("What's new") { if let p = release.page, let u = URL(string: p) { NSWorkspace.shared.open(u) } }
+                .buttonStyle(KeyStyle()).disabled(busy)
+            Button("Later") { state.update = nil }.buttonStyle(KeyStyle()).disabled(busy)
+            Button(message == nil ? "Update & relaunch" : "Try again") {
+                busy = true
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let why = Updater.install(release) { m in DispatchQueue.main.async { message = m } }
+                    DispatchQueue.main.async {
+                        if why == nil { NSApp.terminate(nil) } else { message = why; busy = false }
+                    }
+                }
+            }
+            .buttonStyle(KeyStyle(primary: true)).disabled(busy)
+        }
+        .padding(.horizontal, 22).padding(.vertical, 10)
+        .background(Theme.pane)
+    }
+}
+
 // MARK: - App
 
 @main
 struct SpaceHunterApp: App {
     @StateObject private var state = AppState()
-    init() { Fonts.register() }
+    init() {
+        // test hook: SpaceHunter --test-verify <file> <sig> <key.der>  (prints and exits; used by CI)
+        let a = CommandLine.arguments
+        if let i = a.firstIndex(of: "--test-verify"), a.count > i + 3,
+           let d = try? Data(contentsOf: URL(fileURLWithPath: a[i + 1])), let s = try? Data(contentsOf: URL(fileURLWithPath: a[i + 2])),
+           let k = try? Data(contentsOf: URL(fileURLWithPath: a[i + 3])),
+           let key = SecKeyCreateWithData(k as CFData, [kSecAttrKeyType as String: kSecAttrKeyTypeRSA, kSecAttrKeyClass as String: kSecAttrKeyClassPublic] as CFDictionary, nil) {
+            let ok = Updater.verify(d, s, key: key)
+            print(ok ? "SIGNATURE OK" : "SIGNATURE BAD"); exit(ok ? 0 : 1)
+        }
+        Fonts.register()
+    }
     var body: some Scene {
         WindowGroup("Space Hunter") {
             MainView().environmentObject(state).frame(minWidth: 1000, minHeight: 680)
@@ -629,13 +754,17 @@ struct MainView: View {
                 }
             }
             .animation(.easeOut(duration: 0.26), value: state.openID)
+            if let u = state.update { UpdateBar(release: u) }
             Rectangle().fill(Theme.line).frame(height: 1)
             Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
         }
         .background(Theme.chassis)
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { state.scan() }
+        .onAppear {
+            state.scan()
+            Updater.check { r in DispatchQueue.main.async { state.update = r } }   // one quiet check; offline = nothing happens
+        }
         .sheet(isPresented: $confirm) { ConfirmSheet(confirm: $confirm).environmentObject(state) }
         .sheet(isPresented: $state.cleaning) { ProgressSheet().environmentObject(state) }
     }

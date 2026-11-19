@@ -1,8 +1,15 @@
 name: Build
 
+# Every push builds both apps and tests the update signature check.
+# Pushing a version tag (v1.2.0) also publishes a GitHub Release with both apps, each signed with the release key.
 on:
   push:
+    branches: ["**"]
+    tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   mac:
@@ -15,6 +22,17 @@ jobs:
         run: |
           chmod +x build.sh
           ./build.sh
+      - name: Test the update signature check (throwaway key)
+        working-directory: mac/build
+        run: |
+          openssl genrsa -out t.pem 2048 2>/dev/null
+          openssl rsa -in t.pem -RSAPublicKey_out -outform DER -out t.der 2>/dev/null
+          BIN="Space Hunter.app/Contents/MacOS/SpaceHunter"
+          cp "$BIN" payload; openssl dgst -sha256 -sign t.pem -out payload.sig payload
+          "./$BIN" --test-verify payload payload.sig t.der
+          printf x >> payload
+          if "./$BIN" --test-verify payload payload.sig t.der; then echo "a tampered file was accepted"; exit 1; fi
+          rm -f t.pem t.der payload payload.sig
       - name: Launch it and take a screenshot
         working-directory: mac
         run: |
@@ -42,7 +60,66 @@ jobs:
         shell: cmd
         working-directory: windows
         run: build.cmd
+      - name: Test the update signature check (throwaway key)
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+          $p = $rsa.ExportParameters($false)
+          $xml = "<RSAKeyValue><Modulus>$([Convert]::ToBase64String($p.Modulus))</Modulus><Exponent>$([Convert]::ToBase64String($p.Exponent))</Exponent></RSAKeyValue>"
+          Set-Content t.xml $xml -NoNewline
+          Copy-Item SpaceHunter.exe payload.bin
+          $sig = $rsa.SignData([IO.File]::ReadAllBytes("payload.bin"), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+          [IO.File]::WriteAllBytes("payload.sig", $sig)
+          $ok = Start-Process .\SpaceHunter.exe -ArgumentList "--test-verify payload.bin payload.sig t.xml" -Wait -PassThru
+          if ($ok.ExitCode -ne 0) { throw "a correctly signed file was refused" }
+          Add-Content payload.bin "x" -NoNewline
+          $bad = Start-Process .\SpaceHunter.exe -ArgumentList "--test-verify payload.bin payload.sig t.xml" -Wait -PassThru
+          if ($bad.ExitCode -eq 0) { throw "a tampered file was accepted" }
+          Remove-Item t.xml, payload.bin, payload.sig
       - uses: actions/upload-artifact@v5
         with:
           name: SpaceHunter-windows
           path: windows/SpaceHunter.exe
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag must match the VERSION file
+        run: |
+          V="$(tr -d '[:space:]' < VERSION)"
+          [ "v$V" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME doesn't match VERSION ($V)"; exit 1; }
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Sign both apps with the release key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "The RELEASE_SIGNING_KEY secret is missing: run tools/make-release-key.ps1 once"; exit 1; }
+          umask 077; printf '%s\n' "$RELEASE_SIGNING_KEY" > key.pem
+          openssl rsa -in key.pem -pubout -out pub.pem 2>/dev/null
+          cd dist
+          for f in SpaceHunter.exe SpaceHunter-mac.zip; do
+            openssl dgst -sha256 -sign ../key.pem -out "$f.sig" "$f"
+            openssl dgst -sha256 -verify ../pub.pem -signature "$f.sig" "$f"
+          done
+          cd ..; rm -f key.pem pub.pem
+      - name: Release notes from CHANGELOG.md
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          awk -v v="$V" 'index($0, "## " v) == 1 {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Space Hunter $V" > notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "Space Hunter ${GITHUB_REF_NAME#v}" --notes-file notes.md \
+            dist/SpaceHunter.exe dist/SpaceHunter.exe.sig dist/SpaceHunter-mac.zip dist/SpaceHunter-mac.zip.sig

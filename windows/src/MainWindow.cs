@@ -646,7 +646,8 @@ namespace SpaceHunter
 
             status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(22, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
             var divider = new Panel { Dock = DockStyle.Bottom, Height = Math.Max(1, Theme.D(1)), BackColor = Theme.Line };
-            Controls.Add(body); Controls.Add(top); Controls.Add(divider); Controls.Add(status);
+            BuildUpdateBar();
+            Controls.Add(body); Controls.Add(top); Controls.Add(updateBar); Controls.Add(divider); Controls.Add(status);
 
             Load_();
             tiers.Changed += (s, e) => { list.Tier = tiers.Current; list.Relayout(); if (drawer.IsOpen && list.Selected != null) drawer.Open(list.Selected); else drawer.Close(); list.OpenItem = drawer.IsOpen ? drawer.Panel.Current : null; };
@@ -665,7 +666,7 @@ namespace SpaceHunter
                 using (var f = new FinderForm(cats))
                 {
                     f.ShowDialog(this);
-                    if (f.Added) { drawer.Close(); list.OpenItem = null; Load_(); tiers.Current = Level.Caution; list.Tier = Level.Caution; list.Relayout(); Enqueue(cats); status.Text = "Added to the cleanup list: your folders are in the Caution section, unticked."; }
+                    if (f.Added) { drawer.Close(); list.OpenItem = null; Load_(); tiers.Current = Level.Caution; list.Tier = Level.Caution; list.Relayout(); Enqueue(cats); status.Text = "Cleanup list updated. Folders you added are in the Caution section, unticked."; }
                 }
             };
             protectKey.Click += (s, e) =>
@@ -678,7 +679,12 @@ namespace SpaceHunter
             };
             resetKey.Click += (s, e) => ResetAll();
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); e.Handled = true; } };
-            Shown += (s, e) => { list.Focus(); Enqueue(cats); };
+            Shown += (s, e) =>
+            {
+                list.Focus(); Enqueue(cats);
+                if (SnapshotPath == null && FramesDir == null)   // one quiet check for a newer version; offline = nothing happens
+                    new Thread(() => { var r = Updater.Check(); if (r != null) try { BeginInvoke((Action)(() => ShowUpdate(r))); } catch { } }) { IsBackground = true }.Start();
+            };
             ReadDisk();
         }
 
@@ -727,6 +733,49 @@ namespace SpaceHunter
             cleanKey.Enabled = !busy && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)));
             scanKey.Enabled = !busy;
             PlaceKeys(cleanKey.Parent);
+        }
+
+        // ---- updates: a bar above the status line when GitHub has a newer version ----
+        Panel updateBar; Label updateText; Key updateKey, laterKey, newsKey; Release pending;
+
+        void BuildUpdateBar()
+        {
+            updateBar = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(56), BackColor = Theme.Pane, Visible = false };
+            updateText = new Label { AutoSize = false, Font = Theme.Semi(10.5f), ForeColor = Theme.Ink, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, BackColor = Theme.Pane };
+            updateKey = new Key("update & relaunch", true); laterKey = new Key("later"); newsKey = new Key("what's new");
+            updateBar.Controls.Add(updateText); updateBar.Controls.Add(newsKey); updateBar.Controls.Add(laterKey); updateBar.Controls.Add(updateKey);
+            updateBar.Resize += (s, e) =>
+            {
+                int y = (updateBar.Height - updateKey.Height) / 2, gap = Theme.D(8);
+                updateKey.Location = new Point(updateBar.Width - updateKey.Width - Theme.D(18), y);
+                laterKey.Location = new Point(updateKey.Left - laterKey.Width - gap, y);
+                newsKey.Location = new Point(laterKey.Left - newsKey.Width - gap, y);
+                updateText.Bounds = new Rectangle(Theme.D(22), 0, Math.Max(10, newsKey.Left - Theme.D(34)), updateBar.Height);
+            };
+            laterKey.Click += (s, e) => updateBar.Visible = false;
+            newsKey.Click += (s, e) => { if (pending != null && pending.Page != null) try { Process.Start(pending.Page); } catch { } };
+            updateKey.Click += (s, e) =>
+            {
+                if (pending == null) return;
+                updateKey.Enabled = laterKey.Enabled = newsKey.Enabled = false;
+                var r = pending;
+                new Thread(() =>
+                {
+                    string why = Updater.Install(r, msg => BeginInvoke((Action)(() => updateText.Text = msg)));
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (why == null) { Close(); return; }   // the new version is starting
+                        updateText.Text = why; laterKey.Enabled = newsKey.Enabled = true; updateKey.Enabled = true; updateKey.Text = "try again";
+                    }));
+                }) { IsBackground = true }.Start();
+            };
+        }
+
+        public void ShowUpdate(Release r)
+        {
+            pending = r;
+            updateText.Text = "Space Hunter " + r.Version + " is ready  ·  you have " + AppVersion.Text + ". Updating takes a few seconds and keeps your settings.";
+            updateBar.Visible = true;
         }
 
         void Enqueue(IEnumerable<Category> items)
