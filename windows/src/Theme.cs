@@ -124,8 +124,15 @@ namespace SpaceHunter
         public static Font CMono(float s) { return Make(mono, s / A, FontStyle.Regular); }
         public static Font CMonoSemi(float s) { return Make(monoSemi, s / A, FontStyle.Regular); }
 
-        public static string TierName(Level l) { return l == Level.Safe ? "Safe to delete" : l == Level.Review ? "Review first" : "Caution"; }
-        public static string TierDesc(Level l) { return l == Level.Safe ? "Rebuilds itself" : l == Level.Review ? "Re-downloads or history" : "Can hold your history or work"; }
+        public static string TierName(Level l) { return l == Level.Safe ? "Safe to clean" : l == Level.Review ? "Review first" : "Caution"; }
+        public static string TierDesc(Level l) { return l == Level.Safe ? "Rebuilds or isn't needed" : l == Level.Review ? "Re-downloads or history" : "Can hold your history or work"; }
+        // one plain line under each section's heading, so nobody has to guess what "safe" means here
+        public static string TierExplain(Level l)
+        {
+            return l == Level.Safe ? "Caches, temp files and leftovers that apps and Windows rebuild or no longer need. Your files, logins and passwords aren't touched. Some things load a little slower once."
+                 : l == Level.Review ? "These come back by downloading again, or they're history you might still want. Read each one before you tick it."
+                 : "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes.";
+        }
 
         public static GraphicsPath Round(RectangleF r, float rad)
         {
@@ -246,6 +253,8 @@ namespace SpaceHunter
     class Key : Control
     {
         public bool Primary, Toggled;
+        bool accent;   // a tool of its own (the Space map): an orange outline and a small block icon
+        public bool Accent { get { return accent; } set { accent = value; FitWidth(); Invalidate(); } }
         bool hover, down;
         public Key(string text, bool primary = false)
         {
@@ -259,7 +268,7 @@ namespace SpaceHunter
         }
         public void FitWidth()
         {
-            using (var g = CreateGraphics()) { Theme.Hq(g); Width = (int)Math.Ceiling(g.MeasureString(Text.ToUpperInvariant(), Font).Width) + Theme.D(30); }
+            using (var g = CreateGraphics()) { Theme.Hq(g); Width = (int)Math.Ceiling(g.MeasureString(Text.ToUpperInvariant(), Font).Width) + Theme.D(accent ? 54 : 30); }
         }
         protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); FitWidth(); Invalidate(); }
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); FitWidth(); Invalidate(); }
@@ -282,9 +291,24 @@ namespace SpaceHunter
             if (press == 0)
                 using (var p = Theme.Round(new RectangleF(0.5f, 0.5f + lift, Width - 1, Height - 1 - lift - 1), rad)) using (var b = new SolidBrush(shadow)) g.FillPath(b, p);
             using (var p = Theme.Round(face, rad)) using (var b = new SolidBrush(fill)) g.FillPath(b, p);
+            var tr = new RectangleF(face.X, face.Y + s, face.Width, face.Height);
+            if (accent && Enabled)
+            {
+                using (var p = Theme.Round(RectangleF.Inflate(face, -1 * s, -1 * s), rad)) using (var pen = new Pen(Theme.Orange, 2 * s)) g.DrawPath(pen, p);
+                // four blocks of different sizes: a tiny picture of the map
+                float ix = face.X + 14 * s, iy = face.Y + face.Height / 2 - 6 * s + s, u = s;
+                using (var b = new SolidBrush(ink))
+                {
+                    g.FillRectangle(b, ix, iy, 7 * u, 12 * u);
+                    g.FillRectangle(b, ix + 8 * u, iy, 6 * u, 7 * u);
+                    g.FillRectangle(b, ix + 8 * u, iy + 8 * u, 3 * u, 4 * u);
+                }
+                using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, ix + 12 * u, iy + 8 * u, 2 * u, 4 * u);
+                tr = new RectangleF(face.X + 24 * s, face.Y + s, face.Width - 24 * s, face.Height);
+            }
             using (var b = new SolidBrush(ink))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                g.DrawString(Text.ToUpperInvariant(), Font, b, new RectangleF(face.X, face.Y + s, face.Width, face.Height), sf);
+                g.DrawString(Text.ToUpperInvariant(), Font, b, tr, sf);
         }
     }
 

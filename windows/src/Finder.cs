@@ -18,6 +18,7 @@ namespace SpaceHunter
     {
         readonly CanvasPanel head = new CanvasPanel();
         readonly FolderListView list;
+        readonly TreeMapView map;
         readonly DriveKey driveKey = new DriveKey();
         DrivePicker picker;
         public bool OpenDrivesOnStart;   // test hook
@@ -36,6 +37,8 @@ namespace SpaceHunter
             MinimumSize = SizeFromClientSize(Theme.Fit(660, 480));
             StartPosition = FormStartPosition.CenterParent;
             list = new FolderListView(cats);
+            map = new TreeMapView(cats) { Dock = DockStyle.Top, Height = Theme.D(220) };
+            Resize += (s, e) => map.Height = Math.Max(Theme.D(110), Math.Min(Theme.D(240), (ClientSize.Height - Theme.D(176 + 60 + 30)) / 2));
 
             head.Dock = DockStyle.Top; head.Height = Theme.D(158); head.Draw += PaintHead;
             var headWrap = new Panel { Dock = DockStyle.Top, Height = Theme.D(158 + 18), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
@@ -45,17 +48,18 @@ namespace SpaceHunter
             keys.Controls.Add(driveKey); keys.Controls.Add(upKey); keys.Controls.Add(openKey);
             keys.Resize += (s, e) => { openKey.Location = new Point(keys.Width - openKey.Width - Theme.D(18), Theme.D(12)); upKey.Location = new Point(openKey.Left - upKey.Width - Theme.D(8), Theme.D(12)); };
             hint.Dock = DockStyle.Bottom; hint.Height = Theme.D(30); hint.Padding = Theme.Pad(20, 7, 0, 0); hint.Font = Theme.Sans(9f); hint.ForeColor = Theme.Muted; hint.UseMnemonic = false;
-            hint.Text = "Click a folder to look inside. “Add to cleanup list” puts it in the Caution section, unticked. Nothing here deletes anything.";
+            hint.Text = "“Add to cleanup list” puts a folder in the Caution section, unticked. Nothing here deletes anything.";
             list.Dock = DockStyle.Fill;
-            Controls.Add(list); Controls.Add(keys); Controls.Add(headWrap); Controls.Add(hint);
+            Controls.Add(list); Controls.Add(map); Controls.Add(keys); Controls.Add(headWrap); Controls.Add(hint);
 
             driveKey.Click += (s, e) => OpenDrives();
             upKey.Click += (s, e) => { if (cur != null && cur.Parent != null) Go(cur.Parent); };
             openKey.Click += (s, e) => { if (cur != null) try { Process.Start("explorer.exe", "\"" + cur.Path + "\""); } catch { } };
             list.Open += (s, e) => Go((FolderNode)s);
+            map.Open += (s, e) => Go((FolderNode)s);
             list.Reveal += (s, e) => { try { Process.Start("explorer.exe", "\"" + ((FolderNode)s).Path + "\""); } catch { } };
-            list.AddedFolder += (s, e) => { Added = true; hint.Text = "Added: " + Theme.MidPath(((FolderNode)s).Path, 70) + ". It's on the cleanup list, in Caution, unticked. Click “Added” to undo."; };
-            list.RemovedFolder += (s, e) => { Added = true; hint.Text = "Taken off the cleanup list: " + Theme.MidPath(((FolderNode)s).Path, 70) + "."; };
+            list.AddedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Added: " + Theme.MidPath(((FolderNode)s).Path, 70) + ". It's on the cleanup list, in Caution, unticked. Click “Added” to undo."; };
+            list.RemovedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Taken off the cleanup list: " + Theme.MidPath(((FolderNode)s).Path, 70) + "."; };
             tick.Tick += (s, e) => { sweep++; head.Invalidate(); };
             Shown += (s, e) => StartScan(startPath ?? Path.GetPathRoot(Engine.W));
         }
@@ -72,7 +76,7 @@ namespace SpaceHunter
             scanning = true; drive = path; cur = null; list.SetNode(null);
             target = 0;
             try { if (path.TrimEnd('\\').Length <= 2) { var di = new DriveInfo(path); target = di.TotalSize - di.TotalFreeSpace; } } catch { }
-            driveKey.Drive = DriveChoice.All().FirstOrDefault(d => path.StartsWith(d.Root, StringComparison.OrdinalIgnoreCase));
+            driveKey.Drive = DriveChoice.All().FirstOrDefault(d => (path.TrimEnd('\\') + "\\").StartsWith(d.Root, StringComparison.OrdinalIgnoreCase));
             driveKey.Enabled = false;
             upKey.Enabled = openKey.Enabled = false;
             tick.Start(); head.Invalidate();
@@ -114,8 +118,15 @@ namespace SpaceHunter
 
         void Go(FolderNode n)
         {
-            cur = n; list.SetNode(n);
+            cur = n; list.SetNode(n); map.SetNode(n, FreeHere());
             upKey.Enabled = n.Parent != null; openKey.Enabled = true; head.Invalidate();
+        }
+
+        // free space shows as a block only at the top of a drive
+        long FreeHere()
+        {
+            if (cur == null || cur.Parent != null || cur.Path.TrimEnd('\\').Length > 2) return 0;
+            try { return new DriveInfo(cur.Path).TotalFreeSpace; } catch { return 0; }
         }
 
         void PaintHead(object s, PaintEventArgs e)
@@ -125,7 +136,7 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             string phase = BigFolders.Phase;
             bool waiting = scanning && (phase == "starting" || phase == "sorting" || BigFolders.Scanned == 0);
-            string label = !scanning ? "Space map  ·  looking only, nothing is deleted here"
+            string label = !scanning ? "Space map  ·  just looking, nothing is deleted here"
                          : "Space map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
                                                                      : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
@@ -276,7 +287,7 @@ namespace SpaceHunter
                 float nameW = w * 0.38f - 30;
                 using (var b = new SolidBrush(own ? Theme.Soft : Theme.Ink)) g.DrawString(r.Name, fName, b, new RectangleF(22, top + 7, nameW, 20), nowrap);
                 string sub = r.Files.ToString("N0") + (r.Files == 1 ? " file" : " files") + (r.Denied ? "  ·  partly unreadable" : "");
-                if (!own && cover.ContainsKey(r)) sub = (inside[r] ? "Covered by: " : "Holds: ") + cover[r];
+                if (!own && cover.ContainsKey(r)) sub = (inside[r] ? "Cleaned by: " : "Has cleanup items: ") + cover[r];
                 else if (!own && refusal.ContainsKey(r) && !added.Contains(r)) sub = "Can't add: " + refusal[r];
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(sub, fSub, b, new RectangleF(22, top + 27, nameW, 18), nowrap);
 
@@ -287,7 +298,7 @@ namespace SpaceHunter
                     bool undo = added.Contains(r) && hoverChip == i;   // pointing at "added" offers the way back
                     using (var p = Theme.Round(chip, 4)) using (var b = new SolidBrush(undo ? Theme.Muted : Theme.Ink)) g.FillPath(b, p);
                     using (var b = new SolidBrush(Theme.DisplayInk)) using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                        g.DrawString(undo ? "REMOVE FROM LIST" : added.Contains(r) ? "ADDED" : "ON THE LIST", fChip, b, chip, sf);
+                        g.DrawString(undo ? "REMOVE FROM LIST" : added.Contains(r) ? "ADDED" : "ALREADY INCLUDED", fChip, b, chip, sf);
                 }
                 else if (CanAddRow(r))
                 {
@@ -307,7 +318,7 @@ namespace SpaceHunter
                 }
                 string size = Engine.Fmt(r.Size); var m = g.MeasureString(size, fSize);
                 using (var b = new SolidBrush(Theme.Ink)) g.DrawString(size, fSize, b, w - m.Width - 14, top + 7);
-                string pct = (100.0 * r.Size / max).ToString(r.Size * 1000 < max ? "0.0" : "0") + "%"; var pm = g.MeasureString(pct, fSub);
+                double pv = 100.0 * r.Size / max; string pct = pv < 1 ? "<1%" : pv.ToString("0") + "%"; var pm = g.MeasureString(pct, fSub);
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(pct, fSub, b, w - pm.Width - 14, top + 27);
                 if (!own && r.Kids.Count > 0)   // drill-in chevron
                     using (var pen = new Pen(i == hover ? Theme.Ink : Theme.Soft, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -316,6 +327,139 @@ namespace SpaceHunter
             }
             var th = Thumb();
             if (!th.IsEmpty) using (var p = Theme.Round(th, 2)) using (var b = new SolidBrush(Color.FromArgb(120, Theme.Ink))) g.FillPath(b, p);
+        }
+    }
+}
+
+namespace SpaceHunter
+{
+    // The block chart: each folder is a block sized by its share of the folder you're in; at a drive's top level,
+    // free space is a hatched block. An orange corner: part of it is already a cleanup item. Click a block to go in.
+    class TreeMapView : Canvas
+    {
+        class Block { public FolderNode Node; public string Name; public long Size; public bool Free, Marked, Rest; public RectangleF R; }
+        readonly List<Category> cats;
+        readonly List<Block> blocks = new List<Block>();
+        FolderNode node; long free; int hover = -1;
+        public event EventHandler Open;
+        const float Caption = 22;
+        Font fName = Theme.CSemi(9.5f), fSize = Theme.CSans(8.75f), fCap = Theme.CSans(8.75f);
+
+        public TreeMapView(List<Category> cats) { this.cats = cats ?? new List<Category>(); }
+
+        public void SetNode(FolderNode n, long freeBytes)
+        {
+            node = n; free = freeBytes; hover = -1; Relayout(); Invalidate();
+        }
+
+        protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
+
+        void Relayout()
+        {
+            blocks.Clear();
+            if (node == null || LW < 40 || LH < Caption + 30) return;
+            var all = new List<Block>();
+            var mine = new HashSet<string>(Custom.All.Select(p => p.TrimEnd('\\')), StringComparer.OrdinalIgnoreCase);
+            foreach (var k in node.Kids.Where(k => k.Size > 0))
+            {
+                bool ins; bool marked = mine.Contains(k.Path.TrimEnd('\\')) || Engine.Coverage(k.Path, cats, out ins) != null;
+                all.Add(new Block { Node = k, Name = k.Name, Size = k.Size, Marked = marked });
+            }
+            if (node.OwnSize > 0) all.Add(new Block { Name = "Files here", Size = node.OwnSize });
+            all.Sort((a, b) => b.Size.CompareTo(a.Size));
+            long total = all.Sum(b => b.Size); if (total <= 0) return;
+            // tiny folders become one "smaller folders" block, so every block stays big enough to point at
+            var keep = all.Where(b => b.Size >= (total + free) * 0.012).Take(24).ToList();
+            var rest = all.Except(keep).ToList();
+            if (rest.Count > 0) keep.Add(new Block { Name = rest.Count + " smaller", Size = rest.Sum(b => b.Size), Rest = true, Marked = rest.Any(b => b.Marked) });
+            keep.Sort((a, b) => b.Size.CompareTo(a.Size));
+            if (free > 0) keep.Add(new Block { Name = "Free space", Size = free, Free = true });   // always last: the empty end of the disk
+            total = keep.Sum(b => b.Size);
+            Squarify(keep, new RectangleF(18, 0, LW - 36, LH - Caption));
+            blocks.AddRange(keep);
+        }
+
+        static double Worst(List<double> row, double side)
+        {
+            double s = row.Sum(), mx = row.Max(), mn = row.Min();
+            return Math.Max(side * side * mx / (s * s), s * s / (side * side * mn));
+        }
+
+        static void Squarify(List<Block> items, RectangleF r)
+        {
+            double total = items.Sum(b => (double)b.Size); if (total <= 0) return;
+            double scale = r.Width * r.Height / total;
+            int i = 0; var rect = r;
+            while (i < items.Count)
+            {
+                double side = Math.Min(rect.Width, rect.Height); if (side <= 0) break;
+                var row = new List<double>(); int start = i; double prev = double.MaxValue;
+                while (i < items.Count)
+                {
+                    row.Add(items[i].Size * scale);
+                    double w = Worst(row, side);
+                    if (row.Count > 1 && w > prev) { row.RemoveAt(row.Count - 1); break; }
+                    prev = w; i++;
+                }
+                double sum = row.Sum();
+                if (rect.Width >= rect.Height)
+                {
+                    float cw = (float)(sum / rect.Height), y = rect.Y;
+                    for (int k = 0; k < row.Count; k++) { float h = (float)(row[k] / cw); items[start + k].R = new RectangleF(rect.X, y, cw, h); y += h; }
+                    rect = new RectangleF(rect.X + cw, rect.Y, rect.Width - cw, rect.Height);
+                }
+                else
+                {
+                    float rh = (float)(sum / rect.Width), x = rect.X;
+                    for (int k = 0; k < row.Count; k++) { float w = (float)(row[k] / rh); items[start + k].R = new RectangleF(x, rect.Y, w, rh); x += w; }
+                    rect = new RectangleF(rect.X, rect.Y + rh, rect.Width, rect.Height - rh);
+                }
+            }
+        }
+
+        bool CanOpen(Block b) { return b.Node != null && b.Node.Kids.Count > 0; }
+        int At(float x, float y) { for (int i = 0; i < blocks.Count; i++) if (blocks[i].R.Contains(x, y)) return i; return -1; }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            int h = At(X(e), Y(e));
+            if (h != hover) { hover = h; Cursor = h >= 0 && CanOpen(blocks[h]) ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        }
+        protected override void OnMouseLeave(EventArgs e) { if (hover != -1) { hover = -1; Invalidate(); } }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            int i = At(X(e), Y(e));
+            if (i >= 0 && CanOpen(blocks[i]) && Open != null) Open(blocks[i].Node, EventArgs.Empty);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = Begin(e); g.Clear(Theme.Chassis);
+            var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                var b = blocks[i]; var r = RectangleF.Inflate(b.R, -1.5f, -1.5f);
+                if (r.Width < 2 || r.Height < 2) continue;
+                bool hot = i == hover && CanOpen(b);
+                if (b.Free) Theme.Hatch(g, r, Theme.Line, Theme.Hover);
+                else using (var br = new SolidBrush(hot ? Theme.Ink : b.Rest ? Theme.Hover : Theme.Key)) g.FillRectangle(br, r);
+                if (b.Marked)
+                {
+                    float c = Math.Min(14, Math.Min(r.Width, r.Height) / 2);
+                    using (var br = new SolidBrush(Theme.Orange)) g.FillPolygon(br, new[] { new PointF(r.Right - c, r.Y), new PointF(r.Right, r.Y), new PointF(r.Right, r.Y + c) });
+                }
+                if (r.Width >= 46 && r.Height >= 34)
+                {
+                    var tr = new RectangleF(r.X + 8, r.Y + 6, r.Width - 16 - (b.Marked ? 8 : 0), 18);
+                    Color ink = hot ? Theme.DisplayInk : Theme.Ink, soft = hot ? Theme.DisplayMuted : Theme.Soft;
+                    using (var br = new SolidBrush(b.Free ? Theme.Muted : ink)) g.DrawString(b.Name, fName, br, tr, nowrap);
+                    using (var br = new SolidBrush(soft)) g.DrawString(Engine.Fmt(b.Size), fSize, br, new RectangleF(r.X + 8, r.Y + 23, r.Width - 16, 16), nowrap);
+                }
+            }
+            string cap = "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  hatched: free space" : "");
+            if (hover >= 0) { var hb = blocks[hover]; cap = hb.Name + "  ·  " + Engine.Fmt(hb.Size) + (hb.Marked ? "  ·  part of it is already a cleanup item" : "") + (CanOpen(hb) ? "  ·  click to go inside" : ""); }
+            using (var br = new SolidBrush(Theme.Muted))
+                g.DrawString(cap, fCap, br, new RectangleF(20, LH - Caption + 4, LW - 40, 16), nowrap);
         }
     }
 }

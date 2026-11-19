@@ -53,9 +53,10 @@ namespace SpaceHunter
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString("Protected folders  ·  never cleaned, whatever is ticked", fLabel, b, pad, 12);
+            // never "0 folders": the built-in protection is always there, even before you add your own
             int n = Keep.All.Count;
-            using (var b = new SolidBrush(Theme.Orange)) g.DrawString(n + (n == 1 ? " FOLDER" : " FOLDERS"), fBig, b, pad - 5, 28);
-            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString("Yours, plus the places Space Hunter never touches.", fSub, b, pad, 104);
+            using (var b = new SolidBrush(Theme.Orange)) g.DrawString(BuiltIn.Length + " BUILT IN + " + n + " YOURS", fBig, b, pad - 5, 28);
+            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString("The places Space Hunter never touches, plus any folder you add.", fSub, b, pad, 104);
         }
 
         void Fill()
@@ -79,16 +80,21 @@ namespace SpaceHunter
                 row.Controls.Add(rm); row.Controls.Add(link);
                 rows.Controls.Add(row);
             }
-            rows.Controls.Add(Heading("Always protected"));
-            foreach (var line in new[] {
-                "Documents, Desktop and OneDrive. In Downloads, only old installers and archives, and only if you tick that item",
-                "AI agents' memory folders (for example Claude Code's memory)",
-                "Windows itself (only its temp, cache and log folders are cleaned)",
-                "Anything reached through a shortcut-style link (links are never followed)" })
+            rows.Controls.Add(Heading("Built in"));
+            foreach (var line in BuiltIn)
                 rows.Controls.Add(Text_(line, Theme.Muted, w));
             rows.ResumeLayout();
             head.Invalidate();
         }
+
+        static readonly string[] BuiltIn = {
+            "Documents, Desktop, Pictures, Videos, Music, Favorites and OneDrive",
+            "Downloads, except old installers and archives, and those only when you tick that item",
+            "Your code and project folders (source, Projects)",
+            "Keys and sign-in settings (.ssh, .gnupg, .aws, .azure, .kube, .docker)",
+            "AI agents' memory folders (for example Claude Code's memory)",
+            "Windows itself (only its temp, cache and log folders are cleaned)",
+            "Anything reached through a shortcut-style link (links are never followed)" };
 
         Label Heading(string t)
         {

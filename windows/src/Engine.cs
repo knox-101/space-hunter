@@ -424,6 +424,8 @@ namespace SpaceHunter
             if (string.IsNullOrEmpty(path) || path.TrimEnd('\\').Length <= 2) { why = "a whole drive"; return false; }   // "C:" alone means the current folder
             string p = Norm(path);
             if (p.Length <= 3) { why = "a whole drive"; return false; }
+            string top = Path.GetFileName(p);
+            if (top.StartsWith("$") || top.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase)) { why = "kept by Windows"; return false; }
             var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
             foreach (var sys in new[] { W, pf, pf86, PD })
@@ -431,6 +433,9 @@ namespace SpaceHunter
             foreach (var keep in new[] { H, L, R, Path.GetDirectoryName(H) }.Concat(PersonalFolders()))
                 if (!string.IsNullOrEmpty(keep) && Under(Norm(keep), p)) { why = "it holds your profile or personal folders"; return false; }
             if (PersonalFolderOf(p) != null) { why = "it's inside your personal files (" + Path.GetFileName(PersonalFolderOf(p)) + ")"; return false; }
+            // a folder made directly on a drive (like C:\Personal) usually holds your own files: never offer it
+            var parent = Path.GetDirectoryName(p);
+            if (parent == null || parent.TrimEnd('\\').Length <= 2) { why = "likely your own files (made right on the drive)"; return false; }
             if (Keep.IsKept(p)) { why = "it's a protected folder"; return false; }
             if (Custom.All.Any(c => Under(p, Norm(c)))) { why = "it's already on the cleanup list"; return false; }
             return true;
@@ -440,6 +445,11 @@ namespace SpaceHunter
         public static string Coverage(string path, List<Category> cats, out bool inside)
         {
             inside = false; string p = Norm(path);
+            if (Path.GetFileName(p).Equals("$Recycle.Bin", StringComparison.OrdinalIgnoreCase))   // the Recycle Bin item empties it
+            {
+                var bin = cats.FirstOrDefault(c => c.Kind == Kind.RecycleBin);
+                if (bin != null) { inside = true; return bin.Name; }
+            }
             foreach (var c in cats)
                 foreach (var r in c.Roots)
                     if (Under(p, Norm(r))) { inside = true; return c.Name; }

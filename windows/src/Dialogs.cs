@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
+﻿// Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Space Hunter (Windows) - the confirm window and the live cleaning window.
 using System;
@@ -19,6 +19,7 @@ namespace SpaceHunter
         public bool Recycle;   // false = delete permanently
         readonly Key delKey = new Key("permanently delete"), binKey = new Key("recycle bin");
         readonly Label hint;
+        Key ok, cancel; long total;
         const int RowH = 32, HeadH = 26, MaxPerGroup = 4;
 
         // One line of the list: a section heading, or an item (or a "+ N more" line) with its size.
@@ -26,7 +27,7 @@ namespace SpaceHunter
 
         public ConfirmForm(List<Category> sel)
         {
-            long total = sel.Sum(c => c.Bytes);
+            total = sel.Sum(c => c.Bytes);
             var lines = new List<Line>();
             // grouped by risk, so it's plain which ticked items need care
             foreach (var lvl in new[] { Level.Safe, Level.Review, Level.Caution })
@@ -34,23 +35,19 @@ namespace SpaceHunter
                 var items = sel.Where(c => c.Level == lvl).OrderByDescending(c => c.Bytes).ToList();
                 if (items.Count == 0) continue;
                 lines.Add(new Line { Head = true, Level = lvl, Text = Theme.TierName(lvl) + (lvl == Level.Caution ? "  !" : "") });
-                var shown = lvl == Level.Safe ? new List<Category>() : items.Where(c => !c.Blocked).Take(MaxPerGroup).ToList();
-                if (lvl == Level.Safe)
-                {
-                    var measured = items.Where(c => !c.Blocked).ToList();
-                    if (measured.Count > 0) lines.Add(new Line { Level = lvl, Text = measured.Count + " item" + (measured.Count == 1 ? "" : "s") + " that rebuild themselves", Size = Engine.Fmt(measured.Sum(c => c.Bytes)) });
-                }
+                // every section names its items, so you see the real list before anything goes
+                var shown = items.Where(c => !c.Blocked).Take(MaxPerGroup).ToList();
                 foreach (var c in shown) lines.Add(new Line { Level = lvl, Text = c.Name, Size = Engine.Fmt(c.Bytes) });
-                var rest = items.Where(c => !c.Blocked && !shown.Contains(c) && lvl != Level.Safe).ToList();
+                var rest = items.Where(c => !c.Blocked && !shown.Contains(c)).ToList();
                 if (rest.Count > 0) lines.Add(new Line { Level = lvl, Text = "+ " + rest.Count + " more", Size = Engine.Fmt(rest.Sum(c => c.Bytes)) });
                 var blocked = items.Where(c => c.Blocked).ToList();   // only when the app runs without admin rights
                 if (blocked.Count > 0) lines.Add(new Line { Level = lvl, Text = "+ " + blocked.Count + " Windows folder" + (blocked.Count == 1 ? "" : "s") + " (" + string.Join(", ", blocked.Select(c => c.Name)) + ")", Size = "size after cleaning" });
             }
             int listH = lines.Sum(l => l.Head ? HeadH : RowH);
-            Theme.Window(this, "Space Hunter", 560, 268 + listH);
+            Theme.Window(this, "Space Hunter", 560, 282 + listH);
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            // the safe choice first: anything beyond "Safe to delete" goes to the Recycle Bin unless you choose otherwise
+            // the safe choice first: anything beyond "Safe to clean" goes to the Recycle Bin unless you choose otherwise
             Recycle = sel.Any(c => !c.Safe);
 
             var h = new Label { Text = "Clean " + Engine.Fmt(total) + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = Theme.P(26, 22), UseMnemonic = false };
@@ -76,11 +73,8 @@ namespace SpaceHunter
             hint = new Label { Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, Location = Theme.P(28, 150 + listH), AutoSize = true, MaximumSize = Theme.D(508, 0), UseMnemonic = false };
             delKey.Click += (s, e) => { Recycle = false; ShowHow(); };
             binKey.Click += (s, e) => { Recycle = true; ShowHow(); };
+            cancel = new Key("cancel"); ok = new Key("clean", true);
             ShowHow();
-
-            var cancel = new Key("cancel"); var ok = new Key("clean " + Engine.Fmt(total), true);
-            ok.Location = new Point(ClientSize.Width - ok.Width - Theme.D(26), ClientSize.Height - Theme.D(58));
-            cancel.Location = new Point(ok.Left - cancel.Width - Theme.D(8), ok.Top);
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             ok.Click += (s, e) => { DialogResult = DialogResult.OK; Close(); };
             Controls.AddRange(new Control[] { h, lst, how, delKey, binKey, hint, cancel, ok });
@@ -103,8 +97,12 @@ namespace SpaceHunter
         {
             delKey.Toggled = !Recycle; binKey.Toggled = Recycle;
             delKey.Invalidate(); binKey.Invalidate();
-            hint.Text = Recycle ? "Everything goes to the Recycle Bin, so you can restore it; the space comes back when you empty the bin. A file too big for the bin is kept, not deleted. If the Recycle Bin item is ticked, the old bin is emptied first."
-                                : "Everything is deleted permanently. The space comes back straight away.";
+            // the key says what will actually happen
+            ok.Text = (Recycle ? "move " + Engine.Fmt(total) + " to recycle bin" : "permanently delete " + Engine.Fmt(total)); ok.FitWidth();
+            ok.Location = new Point(ClientSize.Width - ok.Width - Theme.D(26), ClientSize.Height - Theme.D(58));
+            cancel.Location = new Point(ok.Left - cancel.Width - Theme.D(8), ok.Top);
+            hint.Text = Recycle ? "Everything goes to the Recycle Bin, so you can restore it. The space comes back only when you empty the bin. A file too big for the bin is kept, not deleted. If the Recycle Bin item is ticked, the old bin is emptied first."
+                                : "Everything is deleted permanently and can't be restored. The space comes back straight away.";
         }
     }
 
@@ -124,7 +122,7 @@ namespace SpaceHunter
         public ProgressForm(List<Category> selection, long expectedBytes)
         {
             sel = selection; expected = Math.Max(1, expectedBytes);
-            Theme.Window(this, "Space Hunter  ·  cleaning", 780, 560);
+            Theme.Window(this, "Space Hunter  Â·  cleaning", 780, 560);
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
             ShowInTaskbar = false;
 
@@ -160,8 +158,8 @@ namespace SpaceHunter
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             int i = Math.Min(index, sel.Count - 1);
-            string label = done ? (cnt.Cancel ? "Stopped  ·  nothing else will be cleaned" : "Done  ·  all ticked items")
-                                : "Cleaning  ·  item " + (i + 1) + " of " + sel.Count + "  ·  " + sel[i].Name;
+            string label = done ? (cnt.Cancel ? "Stopped  Â·  nothing else will be cleaned" : "Done  Â·  all ticked items")
+                                : "Cleaning  Â·  item " + (i + 1) + " of " + sel.Count + "  Â·  " + sel[i].Name;
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
             bool binOnly = cnt.Bytes == 0 && cnt.RecycledBytes > 0;
             string num, unit; Theme.SizeParts(binOnly ? cnt.RecycledBytes : cnt.Bytes, out num, out unit);
@@ -171,7 +169,7 @@ namespace SpaceHunter
                 g.DrawString(num, fBig, b, pad - 5, 28);
                 g.DrawString(unit + (binOnly ? " TO RECYCLE BIN" : " FREED"), fUnit, b, pad - 5 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
             }
-            string stat = cnt.Files.ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
+            string stat = cnt.Files.ToString("N0") + " files  Â·  " + cnt.Skipped.ToString("N0") + " skipped  Â·  " + clock.Elapsed.ToString(@"m\:ss");
             using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
             if (cnt.RecycledBytes > 0 && !binOnly)
                 using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
@@ -206,7 +204,7 @@ namespace SpaceHunter
                 Engine.Log((cnt.Cancel ? "STOPPED " : "CLEANED ") + Engine.Fmt(cnt.Bytes) + ", " + cnt.Files.ToString("N0") + " files; " +
                            (cnt.RecycledBytes > 0 ? Engine.Fmt(cnt.RecycledBytes) + " to Recycle Bin; " : "") + "skipped " +
                            cnt.Skipped.ToString("N0") + " (in use, recent or too big for the bin). " + string.Join(" | ", summary));
-                foreach (var line in summary) feed.Enqueue("— " + line);
+                foreach (var line in summary) feed.Enqueue("â€” " + line);
                 done = true;
             });
             t.IsBackground = true; t.Start();
@@ -255,7 +253,7 @@ namespace SpaceHunter
             if (done && tick.Enabled && feed.IsEmpty)
             {
                 tick.Stop(); clock.Stop(); display.Invalidate();
-                stopKey.Text = "close"; stopKey.Enabled = true; Text = "Space Hunter  ·  " + (cnt.Cancel ? "stopped" : "done");
+                stopKey.Text = "close"; stopKey.Enabled = true; Text = "Space Hunter  Â·  " + (cnt.Cancel ? "stopped" : "done");
                 stopKey.Left = ClientSize.Width - stopKey.Width - Theme.D(18); logKey.Visible = true;
                 if (SnapshotPath != null) { Program.Snap(this, SnapshotPath); Close(); }
             }

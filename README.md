@@ -14,7 +14,7 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · first-run steps are 
 - **Shows every place separately**: temp files, Windows leftovers, browser and app caches, developer caches (npm,
   pip, Gradle, Xcode…), AI tool leftovers (e.g. Claude Code and Codex history, downloaded models), old installers.
   Only apps you actually have get a row.
-- **Sorts them by risk**: **Safe to delete** (rebuilds itself, ticked at start), **Review first** (comes back by
+- **Sorts them by risk**: **Safe to clean** (rebuilds or isn't needed, ticked at start), **Review first** (comes back by
   re-downloading) and **Caution** (can hold your history or work).
 - **Explains each one**: click a row to see what it is, what gets deleted, whether it's safe and what happens after,
   and choose "only files older than N days" or "everything".

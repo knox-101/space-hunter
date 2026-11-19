@@ -19,7 +19,7 @@ namespace SpaceHunter
     {
         public long Selected, ReviewUnticked, Free, Total, FreedAll;
         public int Cleans;
-        public bool Scanning, Compact;
+        public bool Scanning, Compact, OnlySafe = true;
         public List<KeyValuePair<DateTime, long>> History = new List<KeyValuePair<DateTime, long>>();
         Font fLabel = Theme.CSemi(11f), fHist = Theme.CSemi(10f), fBig = Theme.CDisplay(50f), fUnit = Theme.CDisplay(20f), fDisk = Theme.CSans(11f),
              fLegend = Theme.CSemi(10.5f), fSmall = Theme.CSans(9.5f);
@@ -45,15 +45,24 @@ namespace SpaceHunter
                 var ns = g.MeasureString(num, fBig);
                 g.DrawString(num, fBig, b, pad - 6, 30);
                 g.DrawString(unit, fUnit, b, pad - 6 + ns.Width - 8, 30 + ns.Height - g.MeasureString(unit, fUnit).Height - 13);
+                // beside the number: what kind of space it is, and what else is there if you look
+                if (!Scanning && Selected > 0)
+                {
+                    float tx = pad - 6 + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14;
+                    using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString(OnlySafe ? (FreedAll == 0 ? "all safe to clean  ·  one click on Clean" : "all safe to clean") : "includes items to check first", fLegend, ib, tx, 44);
+                    if (ReviewUnticked > 0)
+                        using (var mb = new SolidBrush(Theme.DisplayMuted)) g.DrawString("+ " + Engine.Fmt(ReviewUnticked) + " more you can check yourself", fLegend, mb, tx, 64);
+                }
             }
             string disk = Total > 0 ? Engine.Fmt(Free) + " free of " + Engine.Fmt(Total) : "";
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) { var ds = g.MeasureString(disk, fDisk); g.DrawString(disk, fDisk, b, right - ds.Width, 35); }
 
             // history: free space over time + everything freed so far
-            if (!Compact && History.Count >= 2)
+            if (History.Count >= 2)
             {
                 var pts = History.Skip(Math.Max(0, History.Count - 60)).ToList();
-                float sw = 170, sh = 26, sx = right - sw, sy = 66;
+                // short windows (125% and 150% scaling) get a shorter line, with its label beside it
+                float sw = Compact ? 120 : 170, sh = Compact ? 16 : 26, sx = right - sw, sy = Compact ? 80 : 66;
                 long mn = pts.Min(p => p.Value), mx = pts.Max(p => p.Value); if (mx == mn) mx = mn + 1;
                 var line = new List<PointF>();
                 for (int i = 0; i < pts.Count; i++)
@@ -63,7 +72,8 @@ namespace SpaceHunter
                 using (var b = new SolidBrush(Theme.DisplayMuted))
                 {
                     var hl = "Free space since " + pts[0].Key.ToString("d MMM"); var hs = g.MeasureString(hl, fHist);
-                    g.DrawString(hl, fHist, b, right - hs.Width, sy + sh + 3);
+                    if (Compact) g.DrawString(hl, fHist, b, sx - hs.Width - 10, sy + sh / 2 - hs.Height / 2);
+                    else g.DrawString(hl, fHist, b, right - hs.Width, sy + sh + 3);
                 }
             }
             if (FreedAll > 0)
@@ -96,8 +106,8 @@ namespace SpaceHunter
                     }
             }
             float lx = bx, ly = by + bh + 12;
-            lx = Legend(g, lx, ly, Theme.Orange, false, "Ticked: you get back " + Engine.Fmt(Selected), Theme.DisplayInk);
-            lx = Legend(g, lx, ly, Theme.Orange, true, "Not ticked (Review + Caution): " + Engine.Fmt(ReviewUnticked), Theme.DisplayInk);
+            lx = Legend(g, lx, ly, Theme.Orange, false, "Ticked: " + Engine.Fmt(Selected), Theme.DisplayInk);
+            lx = Legend(g, lx, ly, Theme.Orange, true, "Not ticked: " + Engine.Fmt(ReviewUnticked), Theme.DisplayInk);
             lx = Legend(g, lx, ly, Theme.DisplayUsed, false, "Used", Theme.DisplayMuted);
             Legend(g, lx, ly, Theme.DisplayTrack, false, "Free", Theme.DisplayMuted);
         }
@@ -177,7 +187,7 @@ namespace SpaceHunter
         List<Category> cats = new List<Category>();
         public Level Tier = Level.Safe;
         float totalH, scroll, dragOffset; int hover = -1; bool dragThumb;
-        const float RowH = 54, SmallH = 38, ToolsH = 44;
+        const float RowH = 54, SmallH = 38, ToolsH = 80;
         public Category Selected, OpenItem;   // OpenItem: the row whose panel is showing
         public event EventHandler SelectionChanged, CheckedChanged, PanelRequested;
         Font fName = Theme.CSemi(10.5f), fNameSel = Theme.CBold(10.5f), fLine = Theme.CSans(9f), fSize = Theme.CSemi(11f),
@@ -302,6 +312,8 @@ namespace SpaceHunter
                     tickAll = new RectangleF(tickNone.X - nw.Width - 22, top + 13, nw.Width + 4, 22);
                     using (var b = new SolidBrush(Theme.Ink)) { g.DrawString(n, fTool, b, tickAll.X + 2, top + 14); g.DrawString(a, fTool, b, tickNone.X + 2, top + 14); }
                     using (var p = new Pen(Theme.Ink)) { g.DrawLine(p, tickAll.X + 2, top + 33, tickAll.Right - 2, top + 33); g.DrawLine(p, tickNone.X + 2, top + 33, tickNone.Right - 2, top + 33); }
+                    // what this section is, in one plain line
+                    using (var b = new SolidBrush(Theme.Muted)) g.DrawString(Theme.TierExplain(Tier), fLine, b, new RectangleF(22, top + 40, Math.Min(w - 40, 760), 36));
                     using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
                     continue;
                 }
@@ -629,7 +641,7 @@ namespace SpaceHunter
             disp.Dock = DockStyle.Top; disp.Height = Theme.D(disp.DesignHeight);
             var top = new Panel { Dock = DockStyle.Top, Height = Theme.D(disp.DesignHeight + 18 + 64), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            scanKey = new Key("scan again"); finderKey = new Key("space map"); protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
+            scanKey = new Key("scan again"); finderKey = new Key("space map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
             keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
@@ -697,14 +709,14 @@ namespace SpaceHunter
             list.SetItems(cats);
         }
 
-        // Back to the defaults: only "Safe to delete" ticked, default ages. Protected folders stay protected.
+        // Back to the defaults: only "Safe to clean" ticked, default ages. Protected folders stay protected.
         void ResetAll()
         {
             foreach (var c in cats) c.ResetToDefault();
             Settings.Save(cats);
             if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current);
             Enqueue(cats);
-            status.Text = "Back to default: safe-to-delete items ticked, default ages. Protected folders stay protected.";
+            status.Text = "Back to default: Safe to clean items ticked, default ages. Protected folders stay protected.";
         }
 
         void PlaceKeys(Control keys)
@@ -729,6 +741,7 @@ namespace SpaceHunter
         {
             bool busy; lock (qLock) busy = workerRunning;
             disp.Selected = cats.Where(c => c.Checked).Sum(c => c.Bytes);
+            disp.OnlySafe = !cats.Any(c => c.Checked && !c.Safe && (c.Bytes > 0 || c.Files > 0));
             disp.ReviewUnticked = cats.Where(c => !c.Checked && !c.Safe && c.Kind != Kind.RecycleBin).Sum(c => c.Bytes);
             disp.Scanning = busy;
             disp.Invalidate(); tiers.Invalidate(); list.Invalidate();
@@ -798,6 +811,7 @@ namespace SpaceHunter
         }
 
         const int ScanWorkers = 4;
+        int _cl;
         int workers;
 
         void StartScanWorker()
@@ -819,7 +833,9 @@ namespace SpaceHunter
                 {
                     ReadDisk(); History.Record(disp.Free); disp.History = History.Read();
                     list.Relayout(); Refresh_();
-                    status.Text = "Scan done.  Pick a section above.  Click a row to read about it and change its settings.  Only the box ticks it.";
+                    status.Text = History.FreedAllTime(out _cl) == 0
+                        ? "Quick cleanup: the Safe to clean items are ticked for you, so one click on Clean is enough. You see the list before anything goes."
+                        : "Scan done.  Click a row to see what it is.  Tick the box to include it.";
                     if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; } OpenPanelFor = null; }
                     if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
                 }));

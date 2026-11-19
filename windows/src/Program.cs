@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Space Hunter (Windows) - entry point.
 //   SpaceHunter.exe                     the app (asks for admin rights at launch)
-//   SpaceHunter.exe --auto              clean the ticked "Safe to delete" items WITHOUT asking, log, exit
+//   SpaceHunter.exe --auto              clean the ticked "Safe to clean" items WITHOUT asking, log, exit
 //   SpaceHunter.exe --report            print a scan, delete nothing
 //   SpaceHunter.exe --version           print the version
 // Console output is only visible when redirected from an Administrator terminal (it's a windowed app):
