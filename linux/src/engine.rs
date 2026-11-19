@@ -379,10 +379,15 @@ fn newest(dir: &Path) -> SystemTime {
     n
 }
 
+// Test hook only (--test-engine --by-changed): judge age by "last changed" alone, because a test can backdate that
+// (touch -d) but never when a file arrived.
+pub static BY_CHANGED_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 // A file's age: the newer of "last changed" and "arrived here" (copying or unzipping sets a new status-change time),
 // so photos copied in today count as new, whatever their own date.
 pub fn age_time(m: &fs::Metadata) -> SystemTime {
     let changed = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    if BY_CHANGED_ONLY.load(std::sync::atomic::Ordering::Relaxed) { return changed; }
     let arrived = SystemTime::UNIX_EPOCH + Duration::from_secs(m.ctime().max(0) as u64);
     if arrived > changed { arrived } else { changed }
 }

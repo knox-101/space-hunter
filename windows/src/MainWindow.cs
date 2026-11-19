@@ -716,7 +716,7 @@ namespace SpaceHunter
 
             status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(22, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
             // which version this is, always visible (bottom right)
-            status.Controls.Add(new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = Theme.Pad(0, 0, 22, 0),
+            status.Controls.Add(new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = Theme.Pad(0, 11, 22, 0),
                                             TextAlign = ContentAlignment.TopRight, ForeColor = Theme.Soft, Font = Theme.Sans(8.5f), BackColor = Theme.Chassis, UseMnemonic = false });
             divider = new Panel { Dock = DockStyle.Bottom, Height = Math.Max(1, Theme.D(1)), BackColor = Theme.Line };
             BuildUpdateBar();

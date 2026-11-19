@@ -181,6 +181,7 @@ fn main() -> glib::ExitCode {
     if let Some(i) = args.iter().position(|a| a == "--test-engine") {
         let dir = std::path::PathBuf::from(args.get(i + 1).cloned().unwrap_or_default());
         let sub = args.iter().any(|a| a == "--subfolders");
+        if args.iter().any(|a| a == "--by-changed") { engine::BY_CHANGED_ONLY.store(true, std::sync::atomic::Ordering::Relaxed); }
         if !engine::is_safe_root(&dir, false, false) { println!("REFUSED {}", dir.display()); return glib::ExitCode::from(3i32); }
         let c = engine::Cat {
             id: "test".into(), name: "Test folder".into(), level: engine::Level::Safe,

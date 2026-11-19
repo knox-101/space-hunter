@@ -123,25 +123,35 @@ jobs:
           old "$RUNNER_TEMP/outside.txt" outside; ln -s "$RUNNER_TEMP/outside.txt" "$T/link.txt"
 
           echo "-- old files go; new, protected, memory and linked files stay"
-          "$BIN" --test-engine "$T"
+          "$BIN" --test-engine "$T" --by-changed
           ok test ! -e "$T/old1.log"; ok test ! -e "$T/a/old2.log"
           ok test -e "$T/a/memory/mem.md"; ok test -e "$T/keepme/k.txt"; ok test -e "$T/new.txt"
           ok test -L "$T/link.txt"; ok test -e "$RUNNER_TEMP/outside.txt"
 
           echo "-- Trash mode: the file goes to the Trash, where it can be restored"
           old "$T/old3.log" cccc
-          "$BIN" --test-engine "$T" --trash
+          "$BIN" --test-engine "$T" --trash --by-changed
           ok test ! -e "$T/old3.log"; ok test -e "$XDG_DATA_HOME/Trash/files/old3.log"
 
           echo "-- sub-folders: an untouched project goes, one with a recent file stays"
           mkdir -p "$T/s/oldproj" "$T/s/newproj"
           old "$T/s/oldproj/f" x; old "$T/s/newproj/f1" y; echo z > "$T/s/newproj/f2"; touch -d '3 days ago' "$T/s/oldproj"
-          "$BIN" --test-engine "$T/s" --subfolders
+          "$BIN" --test-engine "$T/s" --subfolders --by-changed
           ok test ! -e "$T/s/oldproj"; ok test -e "$T/s/newproj/f1"
+
+          echo "-- a file that arrived just now stays, even with an old date (copied or unzipped photos)"
+          old "$T/arrived.jpg" photo
+          "$BIN" --test-engine "$T"
+          ok test -e "$T/arrived.jpg"
+
+          echo "-- an empty folder a program just made stays; one this clean emptied goes"
+          mkdir -p "$T/fresh-empty" "$T/e"; old "$T/e/gone.log" x
+          "$BIN" --test-engine "$T" --by-changed
+          ok test -d "$T/fresh-empty"; ok test ! -e "$T/e"
 
           echo "-- a folder owned by someone else (here root) is never entered"
           sudo mkdir -p "$T/rootowned"; sudo sh -c "printf x > '$T/rootowned/f'"; sudo touch -d '3 days ago' "$T/rootowned/f"
-          "$BIN" --test-engine "$T"
+          "$BIN" --test-engine "$T" --by-changed
           ok test -e "$T/rootowned/f"
           sudo rm -rf "$T/rootowned"
 

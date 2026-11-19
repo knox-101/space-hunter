@@ -3,6 +3,29 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.4.0 (2026-11-19)
+
+- **Update checks work on shared networks.** On a busy network (an office, a campus, a hotspot shared by many people)
+  GitHub could refuse the update check, so no update was ever offered. Space Hunter now asks a second way when that
+  happens. If you're on 1.3.1 or older and never saw an update, download this version once from the
+  [download page](https://github.com/knox-101/space-hunter/releases/latest); after that, updates arrive by themselves.
+- **The version is always shown**, bottom right of the main window.
+- **A file's age counts from when it arrived.** Photos or projects you copied, unzipped or downloaded today count as
+  new, even if their own date is years old, so an "older than N days" item never takes them.
+- **Empty folders:** a clean removes the folders it emptied, and empty folders older than the item's age. An empty
+  folder an app made a moment ago stays.
+- **When a clean finishes**, the window shows a short list of what was cleaned, item by item, instead of every
+  single file (every file is still in the log).
+- **Storage map:** folders that can't be added say why in a few calm words ("Your own files", "App settings",
+  "Browser profile") instead of a long warning on every row. Closing the map stops its scan straight away.
+- AI tools' and editors' own folders (`.claude`, `.codex`, `.gemini`, `.cursor`, `.vscode`, `.config` and similar)
+  can't be added to the cleanup list: they hold settings and sign-ins. Their caches and old chats stay cleanable
+  items as before.
+- Small grey text is darker, so it's easier to read.
+- A size measured a moment ago can no longer be overwritten by an older, slower measurement of the same item.
+- Linux: **What's inside** shows each folder's size, and the header reads "Freed so far", the same as on Windows
+  and Mac.
+
 ## 1.3.1 (2026-11-19)
 
 Fixes from a full stress test. Updating is recommended.
