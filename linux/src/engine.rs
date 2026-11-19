@@ -157,6 +157,14 @@ pub mod custom {
     pub fn all() -> Vec<String> { lines("your-folders.txt") }
     pub fn add(p: &str) { let mut a = all(); if !a.iter().any(|x| x == p) { a.push(p.to_string()); } write_lines("your-folders.txt", &a); }
     pub fn remove(p: &str) { let a: Vec<String> = all().into_iter().filter(|x| x != p).collect(); write_lines("your-folders.txt", &a); }
+    // inside a folder you added: the files and sub-folders you unticked, which that item never cleans
+    pub fn skip() -> Vec<String> { lines("your-folders-skip.txt") }
+    pub fn is_skipped(p: &Path, list: &[String]) -> bool { list.iter().any(|k| p.starts_with(k)) }
+    pub fn set_skipped(p: &str, on: bool) {
+        let mut a: Vec<String> = skip().into_iter().filter(|x| x != p).collect();
+        if on { a.push(p.to_string()); }
+        write_lines("your-folders-skip.txt", &a);
+    }
 }
 
 // "0" = everything; "30m", "1h", "14d"
@@ -399,6 +407,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
     let cutoff = SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
     let mut kept = keep::all();
     kept.extend(keep::builtin());   // Space Hunter itself, always
+    if c.is_custom { kept.extend(custom::skip()); }   // what you unticked inside a folder you added
     let me = uid();
     let root_user = is_root();
     let trash_it = to_trash && c.kind != Kind::Trash && !c.admin;   // emptying the Trash can't go to the Trash
@@ -609,4 +618,85 @@ pub fn coverage(p: &Path, cats: &[Cat]) -> (Option<String>, bool) {
     let mut t = holds.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
     if holds.len() > 2 { t.push_str(&format!(" +{}", holds.len() - 2)); }
     (Some(t), false)
+}
+
+// A folder you added, in plain words: the kinds of files, how old they are, and what the folder looks like.
+pub fn describe(root: &Path) -> String {
+    if let Ok(m) = fs::symlink_metadata(root) {
+        if m.is_file() {
+            let e = root.extension().map(|e| format!("a {} file of ", e.to_string_lossy().to_uppercase())).unwrap_or_default();
+            return format!("A single file: {}{}, last changed {}.", e, fmt(size_of(&m)), ago(m.modified().unwrap_or(SystemTime::UNIX_EPOCH)));
+        }
+    }
+    const KINDS: [(&str, &[&str]); 7] = [
+        ("videos", &["mp4", "mov", "mkv", "avi", "wmv", "webm", "m4v", "mts"]),
+        ("photos and images", &["jpg", "jpeg", "png", "gif", "heic", "webp", "bmp", "tif", "tiff", "raw", "cr2", "nef", "arw", "dng", "psd", "svg", "xcf"]),
+        ("music and audio", &["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus"]),
+        ("documents", &["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "odt", "ods", "odp", "csv", "rtf"]),
+        ("3D and CAD files", &["stl", "3mf", "obj", "fbx", "blend", "step", "stp", "iges", "igs", "sldprt", "sldasm", "dwg", "dxf", "fcstd", "gcode"]),
+        ("archives and installers", &["zip", "rar", "7z", "tar", "gz", "xz", "zst", "bz2", "iso", "deb", "rpm", "appimage", "exe", "msi", "dmg"]),
+        ("code", &["rs", "py", "js", "ts", "tsx", "jsx", "java", "c", "cpp", "h", "go", "swift", "kt", "html", "css", "json", "ipynb", "sh"]),
+    ];
+    let mut bytes: HashMap<&str, u64> = HashMap::new();
+    let mut count: HashMap<&str, u64> = HashMap::new();
+    let (mut total, mut n, mut old30, mut old365) = (0u64, 0u64, 0u64, 0u64);
+    let mut newest = SystemTime::UNIX_EPOCH;
+    let mut signs: Vec<&str> = Vec::new();
+    let mut kept = keep::all(); kept.extend(keep::builtin()); kept.extend(custom::skip());
+    let now = SystemTime::now();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rd = match fs::read_dir(&dir) { Ok(r) => r, Err(_) => continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let m = match fs::symlink_metadata(&p) { Ok(m) => m, Err(_) => continue };
+            if m.file_type().is_symlink() || keep::is_kept(&p, &kept) { continue; }
+            if m.is_dir() {
+                let sign = match e.file_name().to_string_lossy().to_lowercase().as_str() {
+                    ".git" => Some("a code project (its history is in a .git folder)"),
+                    "node_modules" => Some("JavaScript packages (node_modules) that reinstall with npm install"),
+                    "cache" | "caches" | ".cache" => Some("cache folders that apps rebuild"),
+                    "venv" | ".venv" => Some("a Python environment (venv) that can be recreated"),
+                    "build" | "dist" | "target" => Some("build output that is made again on the next build"),
+                    _ => None,
+                };
+                if let Some(sg) = sign { if !signs.contains(&sg) { signs.push(sg); } }
+                stack.push(p);
+                continue;
+            }
+            if !m.is_file() { continue; }
+            let ext = p.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let kind = KINDS.iter().find(|(_, xs)| xs.contains(&ext.as_str())).map(|(k, _)| *k).unwrap_or("other files");
+            let sz = size_of(&m);
+            *bytes.entry(kind).or_default() += sz; *count.entry(kind).or_default() += 1;
+            total += sz; n += 1;
+            let t = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            if t > newest { newest = t; }
+            let days = now.duration_since(t).map(|d| d.as_secs() / 86400).unwrap_or(0);
+            if days > 30 { old30 += sz; } if days > 365 { old365 += sz; }
+            if n >= 400_000 { break; }
+        }
+        if n >= 400_000 { break; }
+    }
+    if n == 0 { return "It's empty right now.".into(); }
+    let mut top: Vec<(&str, u64)> = bytes.iter().map(|(k, v)| (*k, *v)).collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut out = format!("{} in {} files{}. ", fmt(total), n, if n >= 400_000 { " (counted the first 400,000)" } else { "" });
+    out.push_str(if top[0].1 * 100 / total.max(1) >= 60 { "Mostly " } else { "Mainly " });
+    out.push_str(&top.iter().take(3).map(|(k, v)| format!("{} ({}, {})", k, fmt(*v), count[k])).collect::<Vec<_>>().join(", "));
+    out.push_str(". ");
+    if newest > SystemTime::UNIX_EPOCH { out.push_str(&format!("Last changed {}. ", ago(newest))); }
+    if old30 > 0 { out.push_str(&format!("{} hasn't been touched for over a month{}. ", fmt(old30), if old365 > 0 { format!(", {} for over a year", fmt(old365)) } else { String::new() })); }
+    if !signs.is_empty() { out.push_str(&format!("It has {}.", signs.join("; "))); }
+    out.trim().to_string()
+}
+
+pub fn ago(t: SystemTime) -> String {
+    let h = SystemTime::now().duration_since(t).map(|d| d.as_secs() / 3600).unwrap_or(0);
+    if h < 1 { return "within the last hour".into(); }
+    if h < 24 { return format!("{} hours ago", h); }
+    let d = h / 24;
+    if d < 60 { return format!("{} days ago", d); }
+    if d < 730 { return format!("{} months ago", d / 30); }
+    format!("{} years ago", d / 365)
 }

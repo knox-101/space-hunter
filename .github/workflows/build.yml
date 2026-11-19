@@ -177,6 +177,15 @@ jobs:
           shot storage --storage "$HOME"
           shot storage-deep --storage "$HOME" --drill 3
           shot protect --protect
+          # a folder of your own on the cleanup list, opened in its panel
+          mkdir -p "$HOME/work/old-renders/2024 exports" "$HOME/work/old-renders/keep this"
+          head -c 3000000 /dev/urandom > "$HOME/work/old-renders/final-cut.mp4"; echo notes > "$HOME/work/old-renders/notes.txt"
+          head -c 800000 /dev/urandom > "$HOME/work/old-renders/2024 exports/a.png"
+          find "$HOME/work/old-renders" -exec touch -d '90 days ago' {} +
+          mkdir -p "$HOME/.config/space-hunter"
+          echo "$HOME/work/old-renders" > "$HOME/.config/space-hunter/your-folders.txt"
+          echo "$HOME/work/old-renders/keep this" > "$HOME/.config/space-hunter/your-folders-skip.txt"
+          shot inside --open "custom:$HOME/work/old-renders"
           ls -l target/release/space-hunter screenshot-*.png
       - uses: actions/upload-artifact@v5
         with:

@@ -59,6 +59,8 @@ pub struct Ui {
     status: gtk::Label,
     prog_win: RefCell<Option<gtk::Window>>,
     opts: Opts,
+    inside_here: RefCell<Option<(String, PathBuf)>>,                       // a folder you added: where its panel list is looking
+    described: RefCell<std::collections::HashMap<String, String>>,       // what's inside folders you added, worked out once
 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -295,6 +297,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
         legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel, status,
         prog_win: RefCell::new(None), opts,
+        inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
     });
 
     {
@@ -616,6 +619,7 @@ fn fill_panel(u: &Rc<Ui>) {
     let s = label(&stats, "panel-stats"); s.set_wrap(true); s.set_max_width_chars(46);
     u.panel.append(&s);
 
+    if c.is_custom && c.refused().is_none() && c.roots[0].is_dir() { inside_list(u, &c); }
     if matches!(c.kind, Kind::Contents | Kind::Subfolders) && c.refused().is_none() {
         u.panel.append(&head("What to clean"));
         let older = c.age_minutes > 0;
@@ -652,7 +656,26 @@ fn fill_panel(u: &Rc<Ui>) {
         let hint = if older { format!("Files untouched for {} or more.", engine::fmt_age(c.age_minutes)) } else { "Every file, whatever its age.".to_string() };
         u.panel.append(&body_text(&format!("{} Delete or Trash is chosen when you press Clean.", hint)));
     }
-    for (h, b) in [("What is it?", &c.what), ("What gets cleaned", &c.deletes), ("Is it safe?", &c.safe_text), ("What happens after", &c.after)] {
+    // a folder or file you added: say what's actually in it (worked out here, nothing is sent anywhere)
+    let what = if c.is_custom {
+        let root = c.roots[0].to_string_lossy().to_string();
+        match u.described.borrow().get(&root) {
+            Some(d) => d.clone(),
+            None => {
+                let (tx, rx) = mpsc::channel::<String>();
+                let r2 = c.roots[0].clone();
+                std::thread::spawn(move || { let _ = tx.send(engine::describe(&r2)); });
+                let (uu, key) = (u.clone(), root.clone());
+                glib::timeout_add_local(Duration::from_millis(150), move || match rx.try_recv() {
+                    Ok(d) => { uu.described.borrow_mut().insert(key.clone(), d); fill_panel(&uu); glib::ControlFlow::Break }
+                    Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(_) => glib::ControlFlow::Break,
+                });
+                format!("Looking inside {}\u{2026}", c.roots[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+            }
+        }
+    } else { c.what.clone() };
+    for (h, b) in [("What is it?", &what), ("What gets cleaned", &c.deletes), ("Is it safe?", &c.safe_text), ("What happens after", &c.after)] {
         if b.is_empty() { continue; }
         u.panel.append(&head(h));
         u.panel.append(&body_text(b));
@@ -699,6 +722,67 @@ fn fill_panel(u: &Rc<Ui>) {
         });
         u.panel.append(&rm);
     }
+}
+
+// Inside a folder you added: its files and sub-folders, each with a tick box. Unticked ones stay; a folder's name
+// opens it, and Back goes up (never above the folder you added).
+fn inside_list(u: &Rc<Ui>, c: &Cat) {
+    let root = c.roots[0].clone();
+    let here = match u.inside_here.borrow().as_ref() { Some((id, h)) if id == &c.id && h.starts_with(&root) => h.clone(), _ => root.clone() };
+    *u.inside_here.borrow_mut() = Some((c.id.clone(), here.clone()));
+    u.panel.append(&head("Inside this folder  \u{00B7}  untick what should stay"));
+    let name = c.name.replace("  (your folder)", "");
+    u.panel.append(&body_text(&if c.checked { "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it.".to_string() }
+                              else { format!("Nothing in here is cleaned until you tick \u{201C}{}\u{201D} in the list. Untick anything that should always stay.", name) }));
+    if here != root {
+        let rel = here.strip_prefix(&root).map(|r| r.to_string_lossy().replace('/', "  \u{203A}  ")).unwrap_or_default();
+        let b = gtk::Button::with_label(&format!("\u{2190}  Back  \u{00B7}  {}  \u{203A}  {}", name, rel));
+        b.add_css_class("crumb");
+        let (uu, up) = (u.clone(), here.parent().map(|p| p.to_path_buf()).unwrap_or(root.clone()));
+        let id = c.id.clone();
+        b.connect_clicked(move |_| { *uu.inside_here.borrow_mut() = Some((id.clone(), up.clone())); fill_panel(&uu); });
+        u.panel.append(&b);
+    }
+    let skip = engine::custom::skip();
+    let mut entries: Vec<(String, PathBuf, bool, u64, std::time::SystemTime)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&here) {
+        for e in rd.flatten() {
+            if let Ok(m) = std::fs::symlink_metadata(e.path()) {
+                if m.file_type().is_symlink() { continue; }
+                entries.push((e.file_name().to_string_lossy().to_string(), e.path(), m.is_dir(), m.len(), m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
+            }
+        }
+    }
+    entries.sort_by(|a, b| b.2.cmp(&a.2).then(if a.2 { a.0.to_lowercase().cmp(&b.0.to_lowercase()) } else { b.3.cmp(&a.3) }));
+    if entries.is_empty() { u.panel.append(&label("Empty", "group-note")); }
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
+    for (n, p, dir, len, modified) in entries.iter().take(60) {
+        let inherited = p.parent().map(|pp| engine::custom::is_skipped(pp, &skip)).unwrap_or(false) && p.parent() != Some(root.as_path());
+        let off = inherited || engine::custom::is_skipped(p, &skip);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("rowline");
+        let chk = gtk::CheckButton::new();
+        chk.set_active(!off); chk.set_sensitive(!inherited);
+        if !c.checked { chk.set_opacity(0.5); }
+        let (uu, ps) = (u.clone(), p.to_string_lossy().to_string());
+        let id = c.id.clone();
+        chk.connect_toggled(move |b| { engine::custom::set_skipped(&ps, !b.is_active()); uu.described.borrow_mut().clear(); scan(&uu, Some(vec![id.clone()])); });
+        row.append(&chk);
+        let nb = gtk::Button::new(); nb.add_css_class("row-btn"); nb.set_hexpand(true);
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let nl = label(n, "row-name"); nl.set_hexpand(true); nl.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        line.append(&nl);
+        let too_new = !*dir && c.age_minutes > 0 && *modified > cutoff;
+        line.append(&label(&if *dir { "folder  \u{203A}".to_string() } else if too_new { "too new, stays".to_string() } else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) }, "row-sub"));
+        nb.set_child(Some(&line));
+        if *dir {
+            let (uu, pp, id) = (u.clone(), p.clone(), c.id.clone());
+            nb.connect_clicked(move |_| { *uu.inside_here.borrow_mut() = Some((id.clone(), pp.clone())); fill_panel(&uu); });
+        }
+        row.append(&nb);
+        u.panel.append(&row);
+    }
+    if entries.len() > 60 { u.panel.append(&label(&format!("+ {} more (open the folder in Files to see them all)", entries.len() - 60), "group-note")); }
 }
 
 // Measure items in the background, a few at once, and fill the numbers in as they arrive.
