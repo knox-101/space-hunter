@@ -115,11 +115,12 @@ jobs:
             openssl dgst -sha256 -verify ../pub.pem -signature "$f.sig" "$f"
           done
           cd ..; rm -f key.pem pub.pem
-      - name: Release notes from CHANGELOG.md
+      - name: Release notes (download table + this version's CHANGELOG.md section)
         run: |
           V="${GITHUB_REF_NAME#v}"
-          awk -v v="$V" 'index($0, "## " v) == 1 {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
-          [ -s notes.md ] || echo "Space Hunter $V" > notes.md
+          sed "s/VERSION/$V/g" .github/release-notes.md > notes.md
+          awk -v v="$V" 'index($0, "## " v) == 1 {on=1; next} /^## / && on {exit} on' CHANGELOG.md > changes.md
+          if [ -s changes.md ]; then cat changes.md >> notes.md; else echo "Space Hunter $V." >> notes.md; fi
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
