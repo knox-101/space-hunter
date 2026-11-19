@@ -20,6 +20,7 @@ namespace SpaceHunter
         public FolderNode Parent;
         public List<FolderNode> Kids = new List<FolderNode>();
         public long OwnFiles, OwnSize;          // files directly in this folder
+        public bool IsFile;                     // a row for one file in the Space map's list (read when you open its folder)
     }
 
     static class BigFolders

@@ -126,7 +126,7 @@ namespace SpaceHunter
 
         // Names a newcomer can act on without opening anything: the first is the no-worry clean.
         public static string TierName(Level l) { return l == Level.Safe ? "Quick clean" : l == Level.Review ? "History & re-downloads" : "Personal & work items"; }
-        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Comes back by downloading, or is history" : "Can hold your work or history. Check first"; }
+        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Downloads again when needed, or old history" : "Can hold your work or history. Check before cleaning"; }
         // one plain line under each section's heading, so nobody has to guess what's in it
         public static string TierExplain(Level l)
         {

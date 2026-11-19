@@ -184,7 +184,7 @@ namespace SpaceHunter
                 else using (var pen = new Pen(soft, 1.3f)) g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
                 string sub = nItems == 0 ? "Nothing to clean here right now"
                            : nTicked == 0 ? "None of " + nItems + " ticked"
-                           : nTicked + " of " + nItems + " ticked  ·  " + Engine.Fmt(ticked);
+                           : nTicked + " of " + nItems + " ticked" + (ticked > 0 ? "  ·  " + Engine.Fmt(ticked) : "");
                 using (var b = new SolidBrush(nTicked > 0 ? ink : soft)) g.DrawString(sub, nTicked > 0 ? fSubB : fSub, b, x + 17, cy);
             }
         }
@@ -220,7 +220,7 @@ namespace SpaceHunter
             foreach (var it in full) { rows.Add(new Row { Y = y, H = RowH, C = it }); y += RowH; }
             if (empty.Count > 0)
             {
-                rows.Add(new Row { Y = y, H = 34, Note = "NOTHING TO CLEAR RIGHT NOW  ·  " + empty.Count }); y += 34;
+                rows.Add(new Row { Y = y, H = 34, Note = "Nothing to clean right now (" + empty.Count + ")" }); y += 34;
                 foreach (var it in empty) { rows.Add(new Row { Y = y, H = SmallH, C = it }); y += SmallH; }
             }
             totalH = y + 12;
@@ -316,7 +316,7 @@ namespace SpaceHunter
                 if (top > LH || top + r.H < 0) continue;
                 if (r.Tools)
                 {
-                    string t = Theme.TierName(Tier).ToUpperInvariant() + "  ·  " + Theme.TierDesc(Tier);
+                    string t = Theme.TierName(Tier).ToUpperInvariant();   // the line under it says what's in it
                     using (var b = new SolidBrush(Theme.Ink)) g.DrawString(t, fTitle, b, 22, top + 14);
                     var a = "Untick all"; var n = "Tick all";
                     var aw = g.MeasureString(a, fTool); var nw = g.MeasureString(n, fTool);
@@ -329,7 +329,7 @@ namespace SpaceHunter
                     using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
                     continue;
                 }
-                if (r.Note != null) { using (var b = new SolidBrush(Theme.Soft)) g.DrawString(r.Note, fNote, b, 22, top + 14); continue; }
+                if (r.Note != null) { using (var b = new SolidBrush(Theme.Soft)) g.DrawString(r.Note, fLine, b, 22, top + 12); continue; }
 
                 var c = r.C;
                 bool empty = IsEmpty(c), small = r.H == SmallH;
@@ -371,7 +371,7 @@ namespace SpaceHunter
                 }
                 using (var br = new SolidBrush(Theme.Ink)) g.DrawString(c.Name, nameFont, br, new RectangleF(x, top + 8, tw, 22), nowrap);
                 string sub = c.Blocked ? "A Windows system folder" :
-                             c.Short + (c.Kind == Kind.Contents || c.Kind == Kind.Subfolders ? (c.AgeMinutes > 0 ? "  ·  older than " + Engine.FmtAge(c.AgeMinutes) : "  ·  everything") : "");
+                             c.Short + (c.Kind == Kind.Contents || c.Kind == Kind.Subfolders ? (c.AgeMinutes > 0 ? "  ·  older than " + Engine.FmtAge(c.AgeMinutes) : "  ·  all files, any age") : "");
                 using (var br = new SolidBrush(Theme.Soft)) g.DrawString(sub, fLine, br, new RectangleF(x, top + 30, tw, 18), nowrap);
             }
             var th = Thumb();
@@ -457,7 +457,7 @@ namespace SpaceHunter
             inside.Resized += (s, e) => ScrollBy(0);
             flow.Controls.Add(inside);
             // right under the age setting, so it's the first thing you see for your own folder
-            int at = flow.Controls.GetChildIndex(ageHint) + 1;
+            int at = flow.Controls.GetChildIndex(stats) + 1;
             flow.Controls.SetChildIndex(insideHead, at); flow.Controls.SetChildIndex(insideHint, at + 1); flow.Controls.SetChildIndex(inside, at + 2);
             removeRow = Row(8);
             removeKey = new Key("remove from cleanup list");
@@ -532,6 +532,13 @@ namespace SpaceHunter
             insideHead.Visible = insideHint.Visible = inside.Visible = c.IsCustom;
             if (c.IsCustom) Describe(c);
             if (c.IsCustom && (inside.Root == null || !string.Equals(inside.Root, c.Roots[0], StringComparison.OrdinalIgnoreCase))) inside.Open(c.Roots[0]);
+            if (c.IsCustom)
+            {
+                inside.Active = c.Checked; inside.AgeMinutes = c.AgeMinutes; inside.Invalidate();
+                insideHint.Text = c.Checked
+                    ? "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it."
+                    : "Nothing in here is cleaned until you tick \u201c" + c.Name.Replace("  (your folder)", "") + "\u201d in the list. Untick anything that should always stay.";
+            }
             folders.Controls.Clear();
             var list = c.IsCustom ? new List<string>() : FolderList(c);
             foldersHead.Visible = folders.Visible = list.Count > 0;
@@ -948,9 +955,11 @@ namespace SpaceHunter
     // folder's name opens it, and the top line goes back up (never above the folder you added).
     class InsideList : Canvas
     {
-        class Entry { public string Path, Name; public bool Dir; public long Size; }
+        class Entry { public string Path, Name; public bool Dir; public long Size; public DateTime Modified; }
         readonly List<Entry> rows = new List<Entry>();
         public string Root, Here;
+        public bool Active = true;   // the item itself is ticked; otherwise every tick here is shown dimmed
+        public int AgeMinutes;       // files newer than this stay, whatever is ticked
         int hover = -1, hoverBox = -1, more;
         const float RowH = 30, Max = 60;
         public event EventHandler Changed, Resized;
@@ -970,7 +979,7 @@ namespace SpaceHunter
                 foreach (var i in items.OfType<DirectoryInfo>().OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase))
                     rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true });
                 foreach (var f in items.OfType<FileInfo>().OrderByDescending(x => { try { return x.Length; } catch { return 0L; } }))
-                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length });
+                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = f.LastWriteTime });
             }
             catch { }
             if (rows.Count > Max) { more = rows.Count - (int)Max; rows.RemoveRange((int)Max, more); }
@@ -1031,12 +1040,13 @@ namespace SpaceHunter
                 var box = new RectangleF(6, y + 7, 15, 15);
                 if (!off)
                 {
-                    using (var p = Theme.Round(box, 2)) using (var b = new SolidBrush(Theme.Orange)) g.FillPath(b, p);
+                    using (var p = Theme.Round(box, 2)) using (var b = new SolidBrush(Active ? Theme.Orange : Theme.Line)) g.FillPath(b, p);
                     using (var pen = new Pen(Theme.Ink, 2f)) g.DrawLines(pen, new[] { new PointF(box.X + 3.5f, box.Y + 7.5f), new PointF(box.X + 6.5f, box.Y + 10.5f), new PointF(box.X + 11.5f, box.Y + 4.5f) });
                 }
                 else using (var p = Theme.Round(box, 2)) using (var pen = new Pen(inherited ? Theme.Line : Theme.Ink, 1.5f)) g.DrawPath(pen, p);
-                string size = r.Dir ? "folder" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
-                using (var b = new SolidBrush(off ? Theme.Soft : Theme.Ink))
+                bool tooNew = !r.Dir && AgeMinutes > 0 && r.Modified > DateTime.Now.AddMinutes(-AgeMinutes);
+                string size = r.Dir ? "folder" : tooNew ? "too new, stays" : r.Size < 1024 ? "under 1 KB" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
+                using (var b = new SolidBrush(Theme.Ink))
                     g.DrawString(r.Name, fName, b, new RectangleF(30, y + 6, w - 30 - sm.Width - (r.Dir ? 26 : 10), 20), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(size, fSize, b, w - sm.Width - (r.Dir ? 20 : 4), y + 8);
                 if (r.Dir)
