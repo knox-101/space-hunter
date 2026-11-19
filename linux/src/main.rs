@@ -267,7 +267,7 @@ fn main() -> glib::ExitCode {
     }
     // the password helper (started by pkexec as root): cleans the named system items, then exits
     if let Some(i) = args.iter().position(|a| a == "--clean-system") {
-        return glib::ExitCode::from(engine::clean_system(args.get(i + 1).map(|s| s.as_str()).unwrap_or("")) as u8);
+        return glib::ExitCode::from(engine::clean_system(args.get(i + 1).map(|s| s.as_str()).unwrap_or("")));
     }
     // test hook: list every item found on this PC with its size
     if args.iter().any(|a| a == "--report") {
@@ -283,7 +283,7 @@ fn main() -> glib::ExitCode {
     if let Some(i) = args.iter().position(|a| a == "--test-engine") {
         let dir = std::path::PathBuf::from(args.get(i + 1).cloned().unwrap_or_default());
         let sub = args.iter().any(|a| a == "--subfolders");
-        if !engine::is_safe_root(&dir, false, false) { println!("REFUSED {}", dir.display()); return glib::ExitCode::from(3); }
+        if !engine::is_safe_root(&dir, false, false) { println!("REFUSED {}", dir.display()); return glib::ExitCode::from(3i32); }
         let c = engine::Cat {
             id: "test".into(), name: "Test folder".into(), level: engine::Level::Safe,
             kind: if sub { engine::Kind::Subfolders } else { engine::Kind::Contents }, admin: false,

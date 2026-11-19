@@ -364,7 +364,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
     let me = uid();
     let root_user = is_root();
     let trash_it = to_trash && c.kind != Kind::Trash && !c.admin;   // emptying the Trash can't go to the Trash
-    let mut handle = |path: &Path, m: &fs::Metadata, cut: SystemTime, cnt: &mut Counter| {
+    let handle = |path: &Path, m: &fs::Metadata, cut: SystemTime, cnt: &mut Counter| {
         if let Some(ext) = &c.extensions {
             let e = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             if !ext.contains(&e) { return; }
