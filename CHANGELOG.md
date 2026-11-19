@@ -3,7 +3,7 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
-## 1.2.0 (unreleased)
+## 1.2.0 (2026-11-19)
 
 - **Space Hunter for Linux.** The same app, look and features as on Windows and Mac: the three sections, the item
   panel, the confirm and cleaning windows, the Storage map, protected folders and signed one-click updates. Download
