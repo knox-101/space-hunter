@@ -106,6 +106,9 @@ jobs:
           [ -n "$RELEASE_SIGNING_KEY" ] || { echo "The RELEASE_SIGNING_KEY secret is missing: run tools/make-release-key.ps1 once"; exit 1; }
           umask 077; printf '%s\n' "$RELEASE_SIGNING_KEY" > key.pem
           openssl rsa -in key.pem -pubout -out pub.pem 2>/dev/null
+          # the apps were built with update-key/; the secret must be its other half, or every update would be refused
+          openssl rsa -in key.pem -RSAPublicKey_out -outform DER 2>/dev/null | cmp -s - update-key/update-key.der \
+            || { rm -f key.pem pub.pem; echo "RELEASE_SIGNING_KEY doesn't match update-key/update-key.der"; exit 1; }
           cd dist
           for f in SpaceHunter.exe SpaceHunter-mac.zip; do
             openssl dgst -sha256 -sign ../key.pem -out "$f.sig" "$f"

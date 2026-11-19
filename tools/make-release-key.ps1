@@ -3,49 +3,53 @@
 <#
   Creates the release signing key, ONCE, for the project owner.
 
-  - The private half goes straight into the repository's secret RELEASE_SIGNING_KEY (GitHub keeps it encrypted;
-    nobody, including you, can read it back) and is then deleted from this computer. It is never shown.
   - The public half is written to update-key\ in two formats (Windows and Mac). Commit those files: both apps are
     built with them and refuse any update that wasn't signed with the private half.
+  - The private half then goes straight into the repository's secret RELEASE_SIGNING_KEY (GitHub keeps it
+    encrypted; nobody, including you, can read it back) and is deleted from this computer. It is never shown.
+  The public files are written first, so a failure part-way never leaves the secret and the files mismatched.
 
   Needs: GitHub CLI signed in to the owner's account (gh auth status), and OpenSSL (comes with Git for Windows).
   Usage, from the repository folder:   powershell -ExecutionPolicy Bypass -File tools\make-release-key.ps1
 #>
-$ErrorActionPreference = 'Stop'
+# native tools print progress on their error stream; judge them by exit code, not by that text
+$ErrorActionPreference = 'Continue'
 $repo = 'knox-101/space-hunter'
 $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $root 'update-key'
 
+function Fail($msg) { Write-Host $msg -ForegroundColor Red; exit 1 }
+
 if ((Test-Path (Join-Path $out 'update-key.xml')) -and -not ($args -contains '-Replace')) {
-    Write-Host 'A release key already exists (update-key\). Making a new one would stop every installed copy from'
-    Write-Host 'accepting updates. If you really mean to, run again with -Replace.'
-    exit 1
+    Fail 'A release key already exists (update-key\). Making a new one stops every installed copy from accepting updates. If you really mean to, run again with -Replace.'
 }
 $openssl = (Get-Command openssl -ErrorAction SilentlyContinue).Source
 if (-not $openssl) { $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe' }
-if (-not (Test-Path $openssl)) { throw 'OpenSSL not found. Install Git for Windows, or put openssl on PATH.' }
-gh auth status 1>$null 2>$null
-if ($LASTEXITCODE -ne 0) { throw 'GitHub CLI is not signed in. Run: gh auth login' }
+if (-not (Test-Path $openssl)) { Fail 'OpenSSL not found. Install Git for Windows, or put openssl on PATH.' }
+cmd /c "gh auth status >nul 2>nul"
+if ($LASTEXITCODE -ne 0) { Fail 'GitHub CLI is not signed in. Run: gh auth login' }
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('sh-key-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $tmp | Out-Null
 $private = Join-Path $tmp 'private.pem'
 try {
-    & $openssl genrsa -out $private 3072 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'OpenSSL could not create the key.' }
+    cmd /c "`"$openssl`" genrsa -out `"$private`" 3072 2>nul"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $private)) { Fail 'OpenSSL could not create the key.' }
 
-    # private half -> repository secret (read from the file; never printed)
-    Get-Content $private -Raw | gh secret set RELEASE_SIGNING_KEY --repo $repo
-    if ($LASTEXITCODE -ne 0) { throw 'Could not store the secret on GitHub.' }
-
-    # public half -> update-key\ (Mac: PKCS#1 DER; Windows: .NET RSA XML)
+    # 1. public half -> update-key\ (Mac: PKCS#1 DER; Windows: .NET RSA XML)
     New-Item -ItemType Directory $out -Force | Out-Null
-    & $openssl rsa -in $private -RSAPublicKey_out -outform DER -out (Join-Path $out 'update-key.der') 2>$null
-    $hex = ((& $openssl rsa -in $private -noout -modulus 2>$null) -split '=')[1].Trim()
+    $der = Join-Path $out 'update-key.der'
+    cmd /c "`"$openssl`" rsa -in `"$private`" -RSAPublicKey_out -outform DER -out `"$der`" 2>nul"
+    if ($LASTEXITCODE -ne 0) { Fail 'Could not write the public key.' }
+    $line = cmd /c "`"$openssl`" rsa -in `"$private`" -noout -modulus 2>nul"
+    $hex = ($line -split '=')[1].Trim()
     $bytes = New-Object byte[] ($hex.Length / 2)
     for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring(2 * $i, 2), 16) }
-    $xml = '<RSAKeyValue><Modulus>' + [Convert]::ToBase64String($bytes) + '</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
-    [IO.File]::WriteAllText((Join-Path $out 'update-key.xml'), $xml)
+    [IO.File]::WriteAllText((Join-Path $out 'update-key.xml'), '<RSAKeyValue><Modulus>' + [Convert]::ToBase64String($bytes) + '</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>')
+
+    # 2. private half -> repository secret (read from the file; never printed)
+    cmd /c "gh secret set RELEASE_SIGNING_KEY --repo $repo < `"$private`""
+    if ($LASTEXITCODE -ne 0) { Fail 'Could not store the secret on GitHub. Nothing was published; run this again.' }
 }
 finally {
     if (Test-Path $private) { Remove-Item $private -Force }
