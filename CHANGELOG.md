@@ -3,6 +3,19 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.2.0 (unreleased)
+
+- **Space Hunter for Linux.** The same app, look and features as on Windows and Mac: the three sections, the item
+  panel, the confirm and cleaning windows, the Storage map, protected folders and signed one-click updates. Download
+  `SpaceHunter-x86_64.AppImage`, or with Nix: `nix run github:knox-101/space-hunter`. System folders (such as
+  downloaded updates) ask for your password once. Folders inside installed tools and app settings are never offered
+  for the cleanup list.
+- **A finish moment**: when a clean ends, the bar clears and the freed total counts up for about a second, then
+  **Done** closes the cleaning window. It's skipped when your system is set to reduce motion.
+- The cleaning window can be **minimised**; the main window shows its progress, and Clean becomes **Show cleaning**.
+- **Open in Explorer** (Finder, Files) now sits in the folder trail of the Storage map, beside the folder it opens.
+- Protected folders: the Downloads line now says what can be cleaned there, instead of contradicting "never cleaned".
+
 ## 1.1.0 (2026-11-19)
 
 - **Clearer sections**: **Quick clean** (caches and leftovers that rebuild), **Big caches & history** and
