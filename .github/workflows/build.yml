@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    name: macOS app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build Space Hunter.app (universal)
+        working-directory: mac
+        run: |
+          chmod +x build.sh
+          ./build.sh
+      - name: Launch it and take a screenshot
+        working-directory: mac
+        run: |
+          open "build/Space Hunter.app"
+          sleep 12
+          screencapture -x build/screenshot-main.png || true
+          pgrep -lf SpaceHunter || (echo "App did not stay running" && exit 1)
+          pkill -f "Space Hunter.app" || true
+      - name: Zip the app
+        working-directory: mac/build
+        run: ditto -c -k --keepParent "Space Hunter.app" "SpaceHunter-mac.zip"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: SpaceHunter-mac
+          path: |
+            mac/build/SpaceHunter-mac.zip
+            mac/build/screenshot-*.png
+
+  windows:
+    name: Windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build SpaceHunter.exe
+        shell: cmd
+        working-directory: windows
+        run: build.cmd
+      - uses: actions/upload-artifact@v5
+        with:
+          name: SpaceHunter-windows
+          path: windows/SpaceHunter.exe

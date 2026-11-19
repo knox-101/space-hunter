@@ -1,0 +1,796 @@
+// Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Space Hunter (Windows) - the main window: the display, the three section tiles, the list,
+// the item panel that slides in from the right, and the keys.
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Windows.Forms;
+
+namespace SpaceHunter
+{
+    // The dark display: the number you get back, the disk as one bar with a clear legend, and the history.
+    class DisplayPanel : Canvas
+    {
+        public long Selected, ReviewUnticked, Free, Total, FreedAll;
+        public int Cleans;
+        public bool Scanning, Compact;
+        public List<KeyValuePair<DateTime, long>> History = new List<KeyValuePair<DateTime, long>>();
+        Font fLabel = Theme.CMonoSemi(7.5f), fBig = Theme.CDisplay(50f), fUnit = Theme.CDisplay(20f), fDisk = Theme.CSans(11f),
+             fLegend = Theme.CSemi(10.5f), fSmall = Theme.CSans(9.5f);
+
+        public float DesignHeight { get { return Compact ? 172 : 206; } }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = Begin(e); float W = LW, H = LH;
+            g.Clear(Theme.Chassis);
+            using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
+            using (var pen = new Pen(Color.Black, 2)) g.DrawLine(pen, 7, 2, W - 7, 2);   // inset lip
+            float pad = 22, right = W - pad;
+            using (var b = new SolidBrush(Theme.DisplayMuted))
+            {
+                g.DrawString(Scanning ? "SPACE HUNTER  ·  SCANNING" : "SPACE HUNTER  ·  READY TO FREE", fLabel, b, pad, 16);
+                var dl = "DISK " + Path.GetPathRoot(Engine.W).TrimEnd('\\'); var sz = g.MeasureString(dl, fLabel);
+                g.DrawString(dl, fLabel, b, right - sz.Width, 16);
+            }
+            string num, unit; Theme.SizeParts(Selected, out num, out unit);
+            using (var b = new SolidBrush(Theme.Orange))
+            {
+                var ns = g.MeasureString(num, fBig);
+                g.DrawString(num, fBig, b, pad - 6, 30);
+                g.DrawString(unit, fUnit, b, pad - 6 + ns.Width - 8, 30 + ns.Height - g.MeasureString(unit, fUnit).Height - 13);
+            }
+            string disk = Total > 0 ? Engine.Fmt(Free) + " free of " + Engine.Fmt(Total) : "";
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) { var ds = g.MeasureString(disk, fDisk); g.DrawString(disk, fDisk, b, right - ds.Width, 32); }
+
+            // history: free space over time + everything freed so far
+            if (!Compact && History.Count >= 2)
+            {
+                var pts = History.Skip(Math.Max(0, History.Count - 60)).ToList();
+                float sw = 170, sh = 26, sx = right - sw, sy = 66;
+                long mn = pts.Min(p => p.Value), mx = pts.Max(p => p.Value); if (mx == mn) mx = mn + 1;
+                var line = new List<PointF>();
+                for (int i = 0; i < pts.Count; i++)
+                    line.Add(new PointF(sx + sw * i / (pts.Count - 1), sy + sh - (float)(sh * (pts[i].Value - mn) / (double)(mx - mn))));
+                using (var pen = new Pen(Theme.DisplayInk, 1.5f)) g.DrawLines(pen, line.ToArray());
+                using (var b = new SolidBrush(Theme.Orange)) { var lp = line[line.Count - 1]; g.FillEllipse(b, lp.X - 3, lp.Y - 3, 6, 6); }
+                using (var b = new SolidBrush(Theme.DisplayMuted))
+                {
+                    var hl = "FREE SPACE SINCE " + pts[0].Key.ToString("d MMM").ToUpperInvariant(); var hs = g.MeasureString(hl, fLabel);
+                    g.DrawString(hl, fLabel, b, right - hs.Width, sy + sh + 4);
+                }
+            }
+            if (FreedAll > 0)
+                using (var b = new SolidBrush(Theme.DisplayMuted))
+                {
+                    var fl = "Freed so far: " + Engine.Fmt(FreedAll) + " in " + Cleans + (Cleans == 1 ? " clean" : " cleans");
+                    var fs = g.MeasureString(fl, fSmall); g.DrawString(fl, fSmall, b, right - fs.Width, Compact ? 58 : 116);
+                }
+
+            // the disk: used | ticked (orange) | review first, not ticked (hatched) | free
+            float bx = pad, bw = W - 2 * pad, by = Compact ? 116 : 148, bh = 16;
+            using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, bx, by, bw, bh);
+            if (Total > 0)
+            {
+                double used = (double)(Total - Free) / Total;
+                double sel = Math.Min(used, (double)Selected / Total);
+                double rev = Math.Min(used - sel, (double)ReviewUnticked / Total);
+                float x0 = bx, w0 = (float)(bw * (used - sel - rev)), w1 = (float)(bw * sel), w2 = (float)(bw * rev);
+                if (Selected > 0 && w1 < 4) { w1 = 4; w0 = Math.Max(0, w0 - 4); }
+                if (ReviewUnticked > 0 && w2 < 4) { w2 = 4; w0 = Math.Max(0, w0 - 4); }
+                using (var b = new SolidBrush(Theme.DisplayUsed)) g.FillRectangle(b, x0, by, w0, bh);
+                using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, x0 + w0, by, w1, bh);
+                Theme.Hatch(g, new RectangleF(x0 + w0 + w1, by, w2, bh), Theme.Orange, Theme.DisplayTrack);
+                using (var pen = new Pen(Theme.Screen, 2)) { g.DrawLine(pen, x0 + w0, by, x0 + w0, by + bh); g.DrawLine(pen, x0 + w0 + w1, by, x0 + w0 + w1, by + bh); }
+                if (Selected > 0)   // a caret marks the part you get back, even when it's thin
+                    using (var b = new SolidBrush(Theme.Orange))
+                    {
+                        float cx = x0 + w0 + w1 / 2;
+                        g.FillPolygon(b, new[] { new PointF(cx - 6, by - 11), new PointF(cx + 6, by - 11), new PointF(cx, by - 3) });
+                    }
+            }
+            float lx = bx, ly = by + bh + 12;
+            lx = Legend(g, lx, ly, Theme.Orange, false, "Ticked: you get back " + Engine.Fmt(Selected), Theme.DisplayInk);
+            lx = Legend(g, lx, ly, Theme.Orange, true, "Not ticked (Review + Caution): " + Engine.Fmt(ReviewUnticked), Theme.DisplayInk);
+            lx = Legend(g, lx, ly, Theme.DisplayUsed, false, "Used", Theme.DisplayMuted);
+            Legend(g, lx, ly, Theme.DisplayTrack, false, "Free", Theme.DisplayMuted);
+        }
+
+        float Legend(Graphics g, float x, float y, Color c, bool hatch, string text, Color ink)
+        {
+            var box = new RectangleF(x, y + 3, 13, 13);
+            if (hatch) Theme.Hatch(g, box, c, Theme.Screen);
+            else using (var b = new SolidBrush(c)) g.FillRectangle(b, box);
+            if (c == Theme.DisplayTrack) using (var p = new Pen(Theme.DisplayMuted)) g.DrawRectangle(p, box.X, box.Y, box.Width, box.Height);
+            using (var b = new SolidBrush(ink)) g.DrawString(text, fLegend, b, x + 19, y);
+            return x + 19 + g.MeasureString(text, fLegend).Width + 24;
+        }
+    }
+
+    // Three tiles, one per section, so every section is visible at once. Click one to list its items.
+    class TierBar : Canvas
+    {
+        public Level Current = Level.Safe;
+        public List<Category> Cats = new List<Category>();
+        public event EventHandler Changed;
+        int hover = -1;
+        Font fName = Theme.CBold(11.5f), fDesc = Theme.CSans(9f), fSize = Theme.CSemi(13f), fSub = Theme.CSans(8.75f), fSubB = Theme.CSemi(8.75f);
+        static readonly Level[] Order = { Level.Safe, Level.Review, Level.Caution };
+
+        public TierBar() { Cursor = Cursors.Hand; TabStop = false; }
+
+        RectangleF Tile(int i) { float w = (LW - 2 * 18 - 2 * 10) / 3f; return new RectangleF(18 + i * (w + 10), 6, w, LH - 14); }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            var pt = new PointF(X(e), Y(e)); int h = -1;
+            for (int i = 0; i < 3; i++) if (Tile(i).Contains(pt)) h = i;
+            if (h != hover) { hover = h; Invalidate(); }
+        }
+        protected override void OnMouseLeave(EventArgs e) { hover = -1; Invalidate(); }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            var pt = new PointF(X(e), Y(e));
+            for (int i = 0; i < 3; i++)
+                if (Tile(i).Contains(pt) && Current != Order[i]) { Current = Order[i]; Invalidate(); if (Changed != null) Changed(this, EventArgs.Empty); }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = Begin(e); g.Clear(Theme.Chassis);
+            for (int i = 0; i < 3; i++)
+            {
+                var lvl = Order[i]; var r = Tile(i); bool on = lvl == Current;
+                var items = Cats.Where(c => c.Level == lvl).ToList();
+                long total = items.Sum(c => c.Bytes), ticked = items.Where(c => c.Checked).Sum(c => c.Bytes);
+                int nTicked = items.Count(c => c.Checked && (c.Blocked || c.Bytes > 0 || c.Files > 0));
+                Color fill = on ? Theme.Ink : (hover == i ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key);
+                Color ink = on ? Theme.DisplayInk : Theme.Ink, soft = on ? Theme.DisplayMuted : Theme.Soft;
+                using (var p = Theme.Round(new RectangleF(r.X, r.Y + 3, r.Width, r.Height - 3), 6)) using (var b = new SolidBrush(on ? Color.Black : Theme.KeyShadow)) g.FillPath(b, p);
+                using (var p = Theme.Round(new RectangleF(r.X, r.Y, r.Width, r.Height - 3), 6)) using (var b = new SolidBrush(fill)) g.FillPath(b, p);
+                float x = r.X + 16;
+                if (lvl != Level.Safe) { Theme.Hatch(g, new RectangleF(r.X + 10, r.Y + 12, 5, r.Height - 27), ink, fill); x = r.X + 24; }
+                string name = Theme.TierName(lvl) + (lvl == Level.Caution ? "  !" : "");
+                using (var b = new SolidBrush(ink)) g.DrawString(name, fName, b, x, r.Y + 10);
+                bool roomy = r.Height >= 80;   // compact tiles (short screens) fold the description into the count line
+                if (roomy) using (var b = new SolidBrush(soft)) g.DrawString(Theme.TierDesc(lvl), fDesc, b, x, r.Y + 33);
+                string size = Engine.Fmt(total); var ss = g.MeasureString(size, fSize);
+                using (var b = new SolidBrush(ink)) g.DrawString(size, fSize, b, r.Right - 14 - ss.Width, r.Y + 9);
+                string sub = (roomy ? "" : Theme.TierDesc(lvl) + "  ·  ") + items.Count + " items  ·  " + (nTicked == 0 ? "none ticked" : nTicked + " ticked" + (ticked > 0 ? ", " + Engine.Fmt(ticked) : ""));
+                using (var b = new SolidBrush(nTicked > 0 ? ink : soft)) g.DrawString(sub, nTicked > 0 ? fSubB : fSub, b, x, roomy ? r.Bottom - 31 : r.Y + 38);
+            }
+        }
+    }
+
+    // The items of one section. One strong checkbox per row, a "what happens" line, the size, and a chevron:
+    // the whole row opens the item's panel; only the box ticks it.
+    class CategoryList : Canvas
+    {
+        class Row { public float Y, H; public Category C; public string Note; public bool Tools; }
+        readonly List<Row> rows = new List<Row>();
+        List<Category> cats = new List<Category>();
+        public Level Tier = Level.Safe;
+        float totalH, scroll, dragOffset; int hover = -1; bool dragThumb;
+        const float RowH = 54, SmallH = 38, ToolsH = 44;
+        public Category Selected, OpenItem;   // OpenItem: the row whose panel is showing
+        public event EventHandler SelectionChanged, CheckedChanged, PanelRequested;
+        Font fName = Theme.CSemi(10.5f), fNameSel = Theme.CBold(10.5f), fLine = Theme.CSans(9f), fSize = Theme.CSemi(11f),
+             fFiles = Theme.CSans(8.5f), fTool = Theme.CSemi(9f), fTitle = Theme.CBold(10f), fNote = Theme.CMonoSemi(7.5f);
+        RectangleF tickAll, tickNone;
+
+        public CategoryList() { TabStop = true; }
+
+        public void SetItems(List<Category> c) { cats = c; Relayout(); }
+
+        public void Relayout()
+        {
+            rows.Clear(); float y = 0;
+            rows.Add(new Row { Y = y, H = ToolsH, Tools = true }); y += ToolsH;
+            var items = cats.Where(x => x.Level == Tier).ToList();
+            var full = items.Where(x => !IsEmpty(x)).OrderByDescending(x => x.Bytes).ToList();
+            var empty = items.Where(IsEmpty).ToList();
+            foreach (var it in full) { rows.Add(new Row { Y = y, H = RowH, C = it }); y += RowH; }
+            if (empty.Count > 0)
+            {
+                rows.Add(new Row { Y = y, H = 34, Note = "NOTHING TO CLEAR RIGHT NOW  ·  " + empty.Count }); y += 34;
+                foreach (var it in empty) { rows.Add(new Row { Y = y, H = SmallH, C = it }); y += SmallH; }
+            }
+            totalH = y + 12;
+            if (Selected == null || Selected.Level != Tier || !cats.Contains(Selected)) Selected = full.Concat(empty).FirstOrDefault();
+            ScrollTo(scroll);
+            Invalidate();
+        }
+
+        static bool IsEmpty(Category c) { return !c.Blocked && c.Scanned && c.Bytes == 0 && c.Files == 0; }
+
+        float MaxScroll { get { return Math.Max(0, totalH - LH); } }
+        void ScrollTo(float v) { scroll = Math.Max(0, Math.Min(MaxScroll, v)); Invalidate(); }
+        protected override void OnResize(EventArgs e) { base.OnResize(e); ScrollTo(scroll); }
+        protected override void OnMouseWheel(MouseEventArgs e) { ScrollTo(scroll - e.Delta / 120f * RowH); }
+        protected override bool IsInputKey(Keys k) { return k == Keys.Up || k == Keys.Down || k == Keys.Space || k == Keys.Enter || base.IsInputKey(k); }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            var list = rows.Where(r => r.C != null).Select(r => r.C).ToList();
+            int i = list.IndexOf(Selected);
+            if (e.KeyCode == Keys.Down && i < list.Count - 1) Select(list[i + 1]);
+            else if (e.KeyCode == Keys.Up && i > 0) Select(list[i - 1]);
+            else if (e.KeyCode == Keys.Space && Selected != null) Toggle(Selected);
+            else if (e.KeyCode == Keys.Enter && Selected != null && PanelRequested != null) PanelRequested(Selected, EventArgs.Empty);
+        }
+
+        void Select(Category c)
+        {
+            Selected = c;
+            var r = rows.First(x => x.C == c);
+            if (r.Y < scroll) ScrollTo(r.Y);
+            else if (r.Y + r.H > scroll + LH) ScrollTo(r.Y + r.H - LH);
+            Invalidate();
+            if (SelectionChanged != null) SelectionChanged(this, EventArgs.Empty);
+        }
+
+        void Toggle(Category c)
+        {
+            if (IsEmpty(c)) return;
+            c.Checked = !c.Checked; Invalidate();
+            if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
+        }
+
+        public void SetAll(bool on)
+        {
+            foreach (var c in cats.Where(x => x.Level == Tier && !IsEmpty(x))) c.Checked = on;
+            Invalidate(); if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
+        }
+
+        RectangleF Thumb()
+        {
+            if (MaxScroll <= 0) return RectangleF.Empty;
+            float h = Math.Max(40, LH * LH / totalH);
+            return new RectangleF(LW - 8, (LH - h) * scroll / MaxScroll, 4, h);
+        }
+
+        Row At(float y) { y += scroll; return rows.FirstOrDefault(x => x.C != null && y >= x.Y && y < x.Y + x.H); }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            Focus();
+            float x = X(e), y = Y(e);
+            var th = Thumb();
+            if (!th.IsEmpty && x >= LW - 12) { dragThumb = true; dragOffset = y - th.Y; return; }
+            if (tickAll.Contains(x, y)) { SetAll(true); return; }
+            if (tickNone.Contains(x, y)) { SetAll(false); return; }
+            var r = At(y);
+            if (r == null) return;
+            if (x < 56) { Toggle(r.C); return; }
+            Selected = r.C; Invalidate();
+            if (PanelRequested != null) PanelRequested(r.C, EventArgs.Empty);
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            float x = X(e), y = Y(e);
+            if (dragThumb) { var th = Thumb(); float track = LH - th.Height; if (track > 0) ScrollTo((y - dragOffset) * MaxScroll / track); return; }
+            var r = At(y); int hv = r == null ? -1 : rows.IndexOf(r);
+            Cursor = hv >= 0 || tickAll.Contains(x, y) || tickNone.Contains(x, y) ? Cursors.Hand : Cursors.Default;
+            if (hv != hover) { hover = hv; Invalidate(); }
+        }
+        protected override void OnMouseUp(MouseEventArgs e) { dragThumb = false; }
+        protected override void OnMouseLeave(EventArgs e) { if (hover != -1) { hover = -1; Invalidate(); } }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = Begin(e); g.Clear(Theme.Chassis);
+            float w = LW - 14;
+            var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+            for (int ri = 0; ri < rows.Count; ri++)
+            {
+                var r = rows[ri];
+                float top = r.Y - scroll;
+                if (top > LH || top + r.H < 0) continue;
+                if (r.Tools)
+                {
+                    string t = Theme.TierName(Tier).ToUpperInvariant() + "  ·  " + Theme.TierDesc(Tier);
+                    using (var b = new SolidBrush(Theme.Ink)) g.DrawString(t, fTitle, b, 22, top + 14);
+                    var a = "Untick all"; var n = "Tick all";
+                    var aw = g.MeasureString(a, fTool); var nw = g.MeasureString(n, fTool);
+                    tickNone = new RectangleF(w - aw.Width - 4, top + 13, aw.Width + 4, 22);
+                    tickAll = new RectangleF(tickNone.X - nw.Width - 22, top + 13, nw.Width + 4, 22);
+                    using (var b = new SolidBrush(Theme.Ink)) { g.DrawString(n, fTool, b, tickAll.X + 2, top + 14); g.DrawString(a, fTool, b, tickNone.X + 2, top + 14); }
+                    using (var p = new Pen(Theme.Ink)) { g.DrawLine(p, tickAll.X + 2, top + 33, tickAll.Right - 2, top + 33); g.DrawLine(p, tickNone.X + 2, top + 33, tickNone.Right - 2, top + 33); }
+                    using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
+                    continue;
+                }
+                if (r.Note != null) { using (var b = new SolidBrush(Theme.Soft)) g.DrawString(r.Note, fNote, b, 22, top + 14); continue; }
+
+                var c = r.C;
+                bool empty = IsEmpty(c), small = r.H == SmallH;
+                if (c == Selected || hover == ri) using (var br = new SolidBrush(c == Selected ? Theme.Selected : Theme.Hover)) g.FillRectangle(br, 10, top, w - 6, r.H - 1);
+                using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
+
+                // checkbox: filled orange with a dark tick, an ink outline, or grey when there's nothing to clear
+                var box = new RectangleF(24, top + (r.H - 17) / 2f, 17, 17);
+                if (empty) using (var path = Theme.Round(box, 2)) using (var pen = new Pen(Theme.Line, 1.6f)) g.DrawPath(pen, path);
+                else if (c.Checked)
+                {
+                    using (var path = Theme.Round(box, 2)) using (var br = new SolidBrush(Theme.Orange)) g.FillPath(br, path);
+                    using (var pen = new Pen(Theme.Ink, 2.2f) { StartCap = LineCap.Square, EndCap = LineCap.Square })
+                        g.DrawLines(pen, new[] { new PointF(box.X + 4, box.Y + 8.5f), new PointF(box.X + 7.5f, box.Y + 12), new PointF(box.X + 13, box.Y + 5) });
+                }
+                else using (var path = Theme.Round(box, 2)) using (var pen = new Pen(Theme.Ink, 1.6f)) g.DrawPath(pen, path);
+
+                // chevron at the end: the whole row opens its panel
+                using (var pen = new Pen(c == OpenItem ? Theme.Orange : hover == ri ? Theme.Ink : Theme.Soft, c == OpenItem ? 2.4f : 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                {
+                    float cx = w - 12, cy = top + r.H / 2f;
+                    g.DrawLines(pen, new[] { new PointF(cx - 4, cy - 6), new PointF(cx + 2, cy), new PointF(cx - 4, cy + 6) });
+                }
+
+                float x = 56, right = w - 34;
+                string size = c.Blocked ? "size after cleaning" : !c.Scanned ? "..." : c.Kind == Kind.RunHistory ? c.Files + (c.Files == 1 ? " entry" : " entries") : Engine.Fmt(c.Bytes);
+                string files = !small && !c.Blocked && c.Scanned && c.Kind != Kind.RunHistory ? c.Files.ToString("N0") + (c.Files == 1 ? " file" : " files") : "";
+                var sizeFont = c.Blocked ? fLine : fSize;
+                var sz = g.MeasureString(size, sizeFont); var fz = g.MeasureString(files, fFiles);
+                using (var br = new SolidBrush(empty || c.Blocked ? Theme.Soft : Theme.Ink)) g.DrawString(size, sizeFont, br, right - sz.Width, top + (c.Blocked ? 18 : small ? 9 : 9));
+                using (var br = new SolidBrush(Theme.Soft)) g.DrawString(files, fFiles, br, right - fz.Width, top + 30);
+
+                float tw = right - Math.Max(sz.Width, fz.Width) - 18 - x;
+                var nameFont = c == Selected ? fNameSel : fName;
+                if (small)
+                {
+                    using (var br = new SolidBrush(Theme.Soft)) g.DrawString(c.Name, fLine, br, new RectangleF(x, top + 10, tw, 20), nowrap);
+                    continue;
+                }
+                using (var br = new SolidBrush(Theme.Ink)) g.DrawString(c.Name, nameFont, br, new RectangleF(x, top + 8, tw, 22), nowrap);
+                string sub = c.Blocked ? "A Windows system folder" :
+                             c.Short + (c.Kind == Kind.Contents || c.Kind == Kind.Subfolders ? (c.AgeMinutes > 0 ? "  ·  older than " + Engine.FmtAge(c.AgeMinutes) : "  ·  everything") : "");
+                using (var br = new SolidBrush(Theme.Soft)) g.DrawString(sub, fLine, br, new RectangleF(x, top + 30, tw, 18), nowrap);
+            }
+            var th = Thumb();
+            if (!th.IsEmpty) using (var p = Theme.Round(th, 2)) using (var br = new SolidBrush(Color.FromArgb(120, Theme.Ink))) g.FillPath(br, p);
+        }
+    }
+
+    // The panel for one item: what to clean (older-than or everything), the notes, and its folders with a keep switch.
+    // How things are cleaned (delete or Recycle Bin) is chosen once, in the confirm window.
+    class DetailPanel : Panel, IMessageFilter
+    {
+        public event EventHandler AgeChanged, KeepChanged, CloseRequested, RemoveFromHome;
+        Category cat;
+        readonly Panel clip = new Panel(), thumb = new Panel();
+        readonly FlowLayoutPanel flow = new FlowLayoutPanel();
+        Label tag, title, stats, what, deletes, safe, after, ageHint, ageValue, foldersHead, whatHead;
+        Key olderKey, allKey, minus, plus, uMin, uHrs, uDays, closeKey, removeKey;
+        FlowLayoutPanel modeRow, ageRow, folders, removeRow;
+        int value = 14, unit = 2;   // unit: 0 minutes, 1 hours, 2 days
+        bool loading;
+
+        public DetailPanel()
+        {
+            BackColor = Theme.Pane; DoubleBuffered = true;
+            clip.Dock = DockStyle.Fill; clip.BackColor = Theme.Pane; Controls.Add(clip);
+            flow.FlowDirection = FlowDirection.TopDown; flow.WrapContents = false;
+            flow.AutoScroll = false; flow.AutoSize = true; flow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            flow.Padding = Theme.Pad(28, 22, 24, 30); flow.BackColor = Theme.Pane; flow.Location = Point.Empty;
+            clip.Controls.Add(flow);
+            // no stock scrollbar: the wheel moves the content, and a thin bar shows where you are
+            thumb.BackColor = Theme.Disabled; thumb.Width = Theme.D(4); thumb.Visible = false;
+            clip.Controls.Add(thumb); thumb.BringToFront();
+            clip.Resize += (s, e) => { flow.MinimumSize = new Size(clip.ClientSize.Width, 0); flow.MaximumSize = new Size(clip.ClientSize.Width, 0); FitWidths(); ScrollBy(0); };
+            flow.SizeChanged += (s, e) => ScrollBy(0);
+            Application.AddMessageFilter(this);
+            Disposed += (s, e) => Application.RemoveMessageFilter(this);
+
+            closeKey = new Key("close") { Height = Theme.D(30) };
+            closeKey.Click += (s, e) => { if (CloseRequested != null) CloseRequested(this, EventArgs.Empty); };
+            Controls.Add(closeKey); closeKey.BringToFront();
+            Resize += (s, e) => closeKey.Location = new Point(Width - closeKey.Width - Theme.D(22), Theme.D(18));
+
+            tag = L(Theme.Semi(9.5f), Theme.Muted, 2);
+            title = L(Theme.Bold(14f), Theme.Ink, 2); title.AutoSize = false; title.AutoEllipsis = true; title.Height = Theme.D(30);
+            stats = L(Theme.Sans(10.5f), Theme.Ink, 14);
+
+            whatHead = Head("What to clean");
+            modeRow = Row(6);
+            olderKey = new Key("only older than"); allKey = new Key("everything");
+            olderKey.Margin = Theme.Pad(0, 0, 4, 0); allKey.Margin = new Padding(0);
+            modeRow.Controls.AddRange(new Control[] { olderKey, allKey });
+            ageRow = Row(4);
+            minus = new Key("−") { Width = Theme.D(34) }; plus = new Key("+") { Width = Theme.D(34) };
+            ageValue = new Label { AutoSize = false, Width = Theme.D(48), Height = Theme.D(34), TextAlign = ContentAlignment.MiddleCenter, Font = Theme.Semi(13f), ForeColor = Theme.Ink, BackColor = Theme.Pane };
+            uMin = new Key("min"); uHrs = new Key("hours"); uDays = new Key("days");
+            minus.Margin = new Padding(0); plus.Margin = Theme.Pad(0, 0, 10, 0);
+            foreach (var k in new[] { uMin, uHrs, uDays }) k.Margin = Theme.Pad(0, 0, 4, 0);
+            ageRow.Controls.AddRange(new Control[] { minus, ageValue, plus, uMin, uHrs, uDays });
+            ageHint = L(Theme.Sans(9.25f), Theme.Soft, 18);
+
+            olderKey.Click += (s, e) => { if (cat != null && cat.AgeMinutes == 0) SetAge(cat.LastAge > 0 ? cat.LastAge : 14 * Engine.Day); };
+            allKey.Click += (s, e) => { if (cat != null && cat.AgeMinutes > 0) { cat.LastAge = cat.AgeMinutes; SetAge(0); } };
+            minus.Click += (s, e) => { if (value > 1) { value--; AgeFromKeys(); } };
+            plus.Click += (s, e) => { if (value < 999) { value++; AgeFromKeys(); } };
+            uMin.Click += (s, e) => { unit = 0; AgeFromKeys(); };
+            uHrs.Click += (s, e) => { unit = 1; AgeFromKeys(); };
+            uDays.Click += (s, e) => { unit = 2; AgeFromKeys(); };
+
+            what = Section("What is it?");
+            deletes = Section("What gets cleaned");
+            safe = Section("Is it safe?");
+            after = Section("What happens after");
+            foldersHead = Head("Folders  ·  keep one to never clean it");
+            folders = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Theme.Pad(0, 4, 0, 8), BackColor = Theme.Pane };
+            flow.Controls.Add(folders);
+            removeRow = Row(8);
+            removeKey = new Key("remove from cleanup list");
+            removeKey.Click += (s, e) => { if (RemoveFromHome != null && cat != null) RemoveFromHome(cat, EventArgs.Empty); };
+            removeRow.Controls.Add(removeKey);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            using (var p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 0, 0, 0, Height);
+        }
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg != 0x020A || !Visible || !IsHandleCreated || Width < 50) return false;   // WM_MOUSEWHEEL over this panel
+            if (!RectangleToScreen(ClientRectangle).Contains(Cursor.Position)) return false;
+            int delta = (short)(((long)m.WParam >> 16) & 0xFFFF);
+            ScrollBy(delta / 120 * Theme.D(64));
+            return true;
+        }
+
+        void ScrollBy(int d)
+        {
+            int min = Math.Min(0, clip.ClientSize.Height - flow.Height);
+            flow.Top = Math.Max(min, Math.Min(0, flow.Top + d));
+            thumb.Visible = min < 0;
+            if (min < 0)
+            {
+                int h = Math.Max(Theme.D(30), clip.ClientSize.Height * clip.ClientSize.Height / flow.Height);
+                thumb.SetBounds(clip.ClientSize.Width - Theme.D(8), (int)((clip.ClientSize.Height - h) * (double)flow.Top / min), Theme.D(4), h);
+            }
+        }
+
+        FlowLayoutPanel Row(int bottom)
+        {
+            var r = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Theme.Pad(0, 4, 0, bottom), BackColor = Theme.Pane };
+            flow.Controls.Add(r); return r;
+        }
+        Label L(Font f, Color col, int bottom)
+        {
+            var l = new Label { AutoSize = true, Font = f, ForeColor = col, Margin = Theme.Pad(0, 0, 0, bottom), BackColor = Theme.Pane, UseMnemonic = false };
+            flow.Controls.Add(l); return l;
+        }
+        Label Head(string t) { var h = L(Theme.Semi(10f), Theme.Muted, 2); h.Text = t; return h; }
+        Label Section(string heading) { Head(heading); return L(Theme.Sans(10.25f), Theme.Ink, 14); }
+
+        void FitWidths()
+        {
+            int w = Math.Max(Theme.D(200), clip.ClientSize.Width - flow.Padding.Horizontal - Theme.D(4));
+            foreach (Control c in flow.Controls) if (c is Label && c != title) c.MaximumSize = new Size(w, 0);
+            title.Width = w; tag.MaximumSize = new Size(w - closeKey.Width - Theme.D(8), 0);
+        }
+
+        public Category Current { get { return cat; } }
+
+        public void ShowCategory(Category c)
+        {
+            loading = true; cat = c;
+            tag.Text = Theme.TierName(c.Level) + (c.Level == Level.Caution ? "  !" : "");
+            title.Text = c.Name;
+            stats.Text = !c.Scanned ? "Scanning..." : c.Kind == Kind.RunHistory ? c.Files + " entries" :
+                         Engine.Fmt(c.Bytes) + "   ·   " + c.Files.ToString("N0") + " files";
+            what.Text = c.What; deletes.Text = c.Deletes; safe.Text = c.SafeText; after.Text = c.After;
+
+            bool files = c.Kind == Kind.Contents || c.Kind == Kind.Subfolders;
+            whatHead.Visible = modeRow.Visible = ageRow.Visible = ageHint.Visible = files;
+            removeRow.Visible = c.IsCustom;
+            ShowAge();
+
+            folders.Controls.Clear();
+            var list = FolderList(c);
+            foldersHead.Visible = folders.Visible = list.Count > 0;
+            foreach (var path in list.Take(14))
+            {
+                var p = path;
+                bool kept = Keep.IsKept(p);
+                var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Theme.Pad(0, 2, 0, 2), BackColor = Theme.Pane };
+                var k = new Key(kept ? "kept" : "keep") { Height = Theme.D(28), Toggled = kept };
+                k.Font = Theme.Semi(8.5f);
+                k.Click += (s, e) => { if (Keep.IsKept(p)) Keep.Remove(p); else Keep.Add(p); if (KeepChanged != null) KeepChanged(cat, EventArgs.Empty); ShowCategory(cat); };
+                var ll = new LinkLabel { Text = Theme.MidPath(p, 44), AutoSize = true, Font = Theme.Sans(9.5f), LinkColor = kept ? Theme.Soft : Theme.Ink, ActiveLinkColor = Theme.OrangeDeep, VisitedLinkColor = Theme.Ink, Margin = Theme.Pad(8, 6, 0, 0), LinkBehavior = LinkBehavior.HoverUnderline, UseMnemonic = false };
+                ll.LinkClicked += (s, e) => { try { Process.Start("explorer.exe", "\"" + p + "\""); } catch { } };
+                row.Controls.Add(k); row.Controls.Add(ll);
+                folders.Controls.Add(row);
+            }
+            if (list.Count > 14) folders.Controls.Add(new Label { Text = "+ " + (list.Count - 14) + " more", AutoSize = true, ForeColor = Theme.Soft, Font = Theme.Sans(9f) });
+            FitWidths();
+            flow.Top = 0; ScrollBy(0);
+            loading = false;
+        }
+
+        // The folders an item works on. For folder-per-session items, the sessions themselves (so one can be kept).
+        static List<string> FolderList(Category c)
+        {
+            var roots = Engine.ExistingRoots(c).ToList();
+            if (c.Kind != Kind.Subfolders) return roots;
+            var subs = new List<string>();
+            foreach (var r in roots)
+                try { subs.AddRange(Directory.GetDirectories(r).OrderByDescending(d => { try { return new DirectoryInfo(d).LastWriteTime; } catch { return DateTime.MinValue; } })); } catch { }
+            return subs;
+        }
+
+        void ShowAge()
+        {
+            bool older = cat.AgeMinutes > 0;
+            olderKey.Toggled = older; allKey.Toggled = !older;
+            int m = older ? cat.AgeMinutes : (cat.LastAge > 0 ? cat.LastAge : 14 * Engine.Day);
+            if (m % Engine.Day == 0) { unit = 2; value = m / Engine.Day; }
+            else if (m % Engine.Hour == 0) { unit = 1; value = m / Engine.Hour; }
+            else { unit = 0; value = m; }
+            ageValue.Text = value.ToString();
+            ageValue.ForeColor = older ? Theme.Ink : Theme.Disabled;
+            foreach (var k in new[] { minus, plus, uMin, uHrs, uDays }) k.Enabled = older;
+            uMin.Toggled = older && unit == 0; uHrs.Toggled = older && unit == 1; uDays.Toggled = older && unit == 2;
+            ageHint.Text = (older ? "Files untouched for " + Engine.FmtAge(cat.AgeMinutes) + " or more." : "Every file, whatever its age.") +
+                           " Open files are always skipped. Delete or Recycle Bin is chosen when you press Clean.";
+            foreach (var k in new Key[] { olderKey, allKey, uMin, uHrs, uDays }) k.Invalidate();
+        }
+
+        void SetAge(int minutes)
+        {
+            cat.AgeMinutes = minutes; if (minutes > 0) cat.LastAge = minutes;
+            ShowAge();
+            if (!loading && AgeChanged != null) AgeChanged(cat, EventArgs.Empty);
+        }
+
+        void AgeFromKeys()
+        {
+            int mult = unit == 2 ? Engine.Day : unit == 1 ? Engine.Hour : 1;
+            SetAge(Math.Max(1, value) * mult);
+        }
+
+        public void RefreshStats(Category c) { if (c == cat) ShowCategory(c); }
+    }
+
+    // The item panel docks at the right and pushes the list over, so nothing gets covered.
+    // It glides open (ease-out, 260 ms) and closed (200 ms); the form is composited, so frames don't tear.
+    class Drawer
+    {
+        readonly Control host; readonly Panel slot; public readonly DetailPanel Panel;
+        readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer { Interval = 10 };
+        readonly Stopwatch clock = new Stopwatch();
+        bool opening; public bool IsOpen;
+        public static int W { get { return Theme.D(460); } }
+
+        public Drawer(Control host)
+        {
+            this.host = host;
+            slot = new DoubleBufferedPanel { Dock = DockStyle.Right, Width = 0, BackColor = Theme.Pane };
+            Panel = new DetailPanel();
+            slot.Controls.Add(Panel);
+            host.Controls.Add(slot);   // added after the list, so it docks first and the list fills what's left
+            slot.Resize += (s, e) => Panel.SetBounds(slot.Width - W, 0, W, slot.Height);
+            anim.Tick += (s, e) =>
+            {
+                double t = Math.Min(1, clock.ElapsedMilliseconds / (opening ? 260.0 : 200.0));
+                double k = opening ? 1 - Math.Pow(1 - t, 3) : t * t * t;   // decelerate in, accelerate out
+                slot.Width = (int)Math.Round(opening ? W * k : W * (1 - k));
+                host.Update();
+                if (t >= 1) { anim.Stop(); if (!opening) slot.Width = 0; }
+            };
+        }
+
+        public void Open(Category c, bool instant = false)
+        {
+            Panel.ShowCategory(c);
+            if (IsOpen) return;
+            IsOpen = true; opening = true;
+            if (instant) { slot.Width = W; return; }
+            clock.Restart(); anim.Start();
+        }
+
+        public void Close()
+        {
+            if (!IsOpen) return;
+            IsOpen = false; opening = false;
+            clock.Restart(); anim.Start();
+        }
+    }
+
+    class MainForm : Form
+    {
+        List<Category> cats;
+        CategoryList list; TierBar tiers; DisplayPanel disp; Drawer drawer; Panel body;
+        Key scanKey, cleanKey, finderKey, protectKey, resetKey; Label status;
+        readonly object qLock = new object();
+        readonly Queue<Category> scanQueue = new Queue<Category>();
+        bool workerRunning;
+        readonly System.Windows.Forms.Timer ageDebounce = new System.Windows.Forms.Timer { Interval = 600 };
+        Category pendingAge;
+        public string SnapshotPath, OpenPanelFor, FramesDir;
+
+        // Composited painting: the whole window is drawn off-screen first, so the sliding panel never tears.
+        protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= 0x02000000; return cp; } }
+
+        public MainForm()
+        {
+            Theme.Window(this, "Space Hunter", 1200, 820);
+            MinimumSize = SizeFromClientSize(Theme.Fit(940, 600));
+            StartPosition = FormStartPosition.CenterScreen; KeyPreview = true;
+
+            disp = new DisplayPanel();
+            disp.Compact = ClientSize.Height / Theme.S < 760;   // short screens (e.g. 150% on a laptop): a slimmer display
+            disp.Dock = DockStyle.Top; disp.Height = Theme.D(disp.DesignHeight);
+            var top = new Panel { Dock = DockStyle.Top, Height = Theme.D(disp.DesignHeight + 18 + 64), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
+            var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
+            scanKey = new Key("scan again"); finderKey = new Key("find big folders"); protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
+            cleanKey = new Key("clean", true);
+            cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
+            keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
+            keys.Resize += (s, e) => PlaceKeys(keys);
+            top.Controls.Add(keys); top.Controls.Add(disp);
+
+            body = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Chassis };
+            tiers = new TierBar { Dock = DockStyle.Top, Height = Theme.D(disp.Compact ? 88 : 100) };
+            list = new CategoryList { Dock = DockStyle.Fill };
+            var listHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Chassis };
+            listHost.Controls.Add(list);
+            body.Controls.Add(listHost); body.Controls.Add(tiers);
+            drawer = new Drawer(listHost);
+
+            status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(22, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
+            var divider = new Panel { Dock = DockStyle.Bottom, Height = Math.Max(1, Theme.D(1)), BackColor = Theme.Line };
+            Controls.Add(body); Controls.Add(top); Controls.Add(divider); Controls.Add(status);
+
+            Load_();
+            tiers.Changed += (s, e) => { list.Tier = tiers.Current; list.Relayout(); if (drawer.IsOpen && list.Selected != null) drawer.Open(list.Selected); else drawer.Close(); list.OpenItem = drawer.IsOpen ? drawer.Panel.Current : null; };
+            list.SelectionChanged += (s, e) => { if (drawer.IsOpen && list.Selected != null) { drawer.Open(list.Selected); list.OpenItem = list.Selected; } };
+            list.PanelRequested += (s, e) => { var c = (Category)s; if (drawer.IsOpen && drawer.Panel.Current == c) drawer.Close(); else drawer.Open(c); list.OpenItem = drawer.IsOpen ? drawer.Panel.Current : null; list.Invalidate(); };
+            list.CheckedChanged += (s, e) => { Settings.Save(cats); Refresh_(); };
+            drawer.Panel.CloseRequested += (s, e) => { drawer.Close(); list.OpenItem = null; list.Invalidate(); };
+            drawer.Panel.AgeChanged += (s, e) => { pendingAge = (Category)s; Settings.Save(cats); list.Invalidate(); ageDebounce.Stop(); ageDebounce.Start(); };
+            drawer.Panel.KeepChanged += (s, e) => Enqueue(new[] { (Category)s });
+            drawer.Panel.RemoveFromHome += (s, e) => { var c = (Category)s; foreach (var r in c.Roots) Custom.Remove(r); drawer.Close(); list.OpenItem = null; Load_(); Enqueue(cats); status.Text = "Removed from the cleanup list: " + c.Name; };
+            ageDebounce.Tick += (s, e) => { ageDebounce.Stop(); if (pendingAge != null) Enqueue(new[] { pendingAge }); };
+            scanKey.Click += (s, e) => Enqueue(cats);
+            cleanKey.Click += (s, e) => Clean();
+            finderKey.Click += (s, e) =>
+            {
+                using (var f = new FinderForm(cats))
+                {
+                    f.ShowDialog(this);
+                    if (f.Added) { drawer.Close(); list.OpenItem = null; Load_(); tiers.Current = Level.Caution; list.Tier = Level.Caution; list.Relayout(); Enqueue(cats); status.Text = "Added to the cleanup list: your folders are in the Caution section, unticked."; }
+                }
+            };
+            protectKey.Click += (s, e) =>
+            {
+                using (var pf = new ProtectForm())
+                {
+                    pf.ShowDialog(this);
+                    if (pf.Changed) { if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current); Enqueue(cats); }
+                }
+            };
+            resetKey.Click += (s, e) => ResetAll();
+            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); e.Handled = true; } };
+            Shown += (s, e) => { list.Focus(); Enqueue(cats); };
+            ReadDisk();
+        }
+
+        // (Re)build the item list, e.g. after a folder is added to or removed from the cleanup list.
+        void Load_()
+        {
+            cats = Engine.Build();
+            tiers.Cats = cats;
+            list.Tier = tiers.Current;
+            list.SetItems(cats);
+        }
+
+        // Back to the defaults: only "Safe to delete" ticked, default ages. Protected folders stay protected.
+        void ResetAll()
+        {
+            foreach (var c in cats) c.ResetToDefault();
+            Settings.Save(cats);
+            if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current);
+            Enqueue(cats);
+            status.Text = "Back to default: safe-to-delete items ticked, default ages. Protected folders stay protected.";
+        }
+
+        void PlaceKeys(Control keys)
+        {
+            // Clean is the one big key, under the display's right edge; the quiet keys sit at the left.
+            cleanKey.Location = new Point(keys.Width - cleanKey.Width - Theme.D(18), Theme.D(10));
+            int x = Theme.D(18), y = Theme.D(14);
+            foreach (var k in new[] { scanKey, finderKey, protectKey, resetKey }) { k.Location = new Point(x, y); x = k.Right + Theme.D(8); }
+        }
+
+        void ReadDisk()
+        {
+            try { var d = new DriveInfo(Path.GetPathRoot(Engine.W)); disp.Free = d.AvailableFreeSpace; disp.Total = d.TotalSize; } catch { }
+            int cl; disp.FreedAll = History.FreedAllTime(out cl); disp.Cleans = cl;
+            disp.History = History.Read();
+        }
+
+        void Refresh_()
+        {
+            bool busy; lock (qLock) busy = workerRunning;
+            disp.Selected = cats.Where(c => c.Checked).Sum(c => c.Bytes);
+            disp.ReviewUnticked = cats.Where(c => !c.Checked && !c.Safe && c.Kind != Kind.RecycleBin).Sum(c => c.Bytes);
+            disp.Scanning = busy;
+            disp.Invalidate(); tiers.Invalidate(); list.Invalidate();
+            cleanKey.Text = "clean " + Engine.Fmt(disp.Selected);
+            cleanKey.Enabled = !busy && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)));
+            scanKey.Enabled = !busy;
+            PlaceKeys(cleanKey.Parent);
+        }
+
+        void Enqueue(IEnumerable<Category> items)
+        {
+            // Safe-to-delete items first, so the ticked total and the CLEAN key are ready first;
+            // a few items are measured at once (an SSD answers several folder reads in parallel)
+            int start;
+            lock (qLock)
+            {
+                foreach (var c in items.OrderBy(x => x.Level)) if (!scanQueue.Contains(c)) { c.Scanned = false; scanQueue.Enqueue(c); }
+                start = Math.Min(ScanWorkers - workers, scanQueue.Count);
+                if (start <= 0) { list.Invalidate(); return; }
+                workers += start; workerRunning = true;
+            }
+            Refresh_();
+            for (int w = 0; w < start; w++) StartScanWorker();
+        }
+
+        const int ScanWorkers = 4;
+        int workers;
+
+        void StartScanWorker()
+        {
+            var t = new Thread(() =>
+            {
+                while (true)
+                {
+                    Category c;
+                    lock (qLock) { if (scanQueue.Count == 0) { workers--; break; } c = scanQueue.Dequeue(); }
+                    BeginInvoke((Action)(() => status.Text = "Scanning  " + c.Name + " ..."));
+                    var cnt = new Counter();
+                    Engine.Process(c, false, cnt);
+                    c.Files = cnt.Files; c.Bytes = cnt.Bytes; c.Scanned = true;
+                    BeginInvoke((Action)(() => { drawer.Panel.RefreshStats(c); Refresh_(); }));
+                }
+                lock (qLock) { if (workers > 0) return; workerRunning = false; }   // the last worker out finishes the scan
+                BeginInvoke((Action)(() =>
+                {
+                    ReadDisk(); History.Record(disp.Free); disp.History = History.Read();
+                    list.Relayout(); Refresh_();
+                    status.Text = "Scan done.  Pick a section above.  Click a row to read about it and change its settings.  Only the box ticks it.";
+                    if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; } OpenPanelFor = null; }
+                    if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
+                }));
+            });
+            t.IsBackground = true; t.Start();
+        }
+
+        void Clean()
+        {
+            // the Recycle Bin item always runs first, so files moved to the bin in this clean are never emptied by it
+            var sel = cats.Where(c => c.Checked && (c.Blocked || c.Bytes > 0 || c.Files > 0)).OrderBy(c => c.Kind == Kind.RecycleBin ? 0 : 1).ToList();
+            if (sel.Count == 0) return;
+            long total = sel.Sum(c => c.Bytes);
+            bool recycle;
+            using (var cf = new ConfirmForm(sel))
+            {
+                if (cf.ShowDialog(this) != DialogResult.OK) return;
+                recycle = cf.Recycle;
+            }
+            foreach (var c in sel) c.Recycle = recycle;   // the confirm window's choice, for this clean
+            try { using (var p = new ProgressForm(sel, total)) p.ShowDialog(this); }
+            finally { foreach (var c in sel) c.Recycle = false; }
+            ReadDisk(); Enqueue(cats);
+        }
+    }
+}

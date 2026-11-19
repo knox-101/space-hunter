@@ -1,0 +1,774 @@
+{
+  "about": "Space Hunter's cleanup items for Windows. Each item is one row in the app. See CONTRIBUTING.md for every field.",
+  "items": [
+    {
+      "id": "temp",
+      "name": "Your Temp folder",
+      "level": "safe",
+      "age": "1h",
+      "paths": [
+        "%TEMP%"
+      ],
+      "note": "Apps' scratch files",
+      "short": "Apps recreate what they need",
+      "what": "Scratch files that apps write while they work: installers unpacking, browsers, Office, and AI agents such as Claude Code or Codex, which write a lot of temporary output.",
+      "deletes": "Files in your Temp folder not changed within the age you set. Files still open are skipped without any dialog.",
+      "safe": "Yes. Windows' own Disk Cleanup empties this folder too. The age rule protects files from tools running right now.",
+      "after": "Apps recreate what they need. Nothing you saved lives here."
+    },
+    {
+      "id": "wintemp",
+      "name": "Windows Temp",
+      "level": "safe",
+      "age": "1h",
+      "admin": true,
+      "paths": [
+        "%WINDIR%\\Temp"
+      ],
+      "note": "System scratch files",
+      "short": "Apps recreate what they need",
+      "what": "The same idea as your Temp folder, but used by Windows services and installers running as the system.",
+      "deletes": "Files in C:\\Windows\\Temp older than the age you set. In-use files are skipped.",
+      "safe": "Yes. Windows' Disk Cleanup does the same.",
+      "after": "Nothing visible changes."
+    },
+    {
+      "id": "run",
+      "name": "Run box (Win+R) history",
+      "level": "safe",
+      "kind": "run-history",
+      "age": "0",
+      "note": "Privacy, not space",
+      "short": "Clears Win+R suggestions, frees no space",
+      "what": "The list of commands you've typed into the Win+R box, stored in the registry.",
+      "deletes": "That list.",
+      "safe": "Yes. It frees no space; it only clears the history.",
+      "after": "The Win+R box no longer suggests past commands."
+    },
+    {
+      "id": "wu",
+      "name": "Windows Update downloads",
+      "level": "safe",
+      "age": "1h",
+      "admin": true,
+      "paths": [
+        "%WINDIR%\\SoftwareDistribution\\Download"
+      ],
+      "note": "Downloaded updates",
+      "short": "Re-downloads only if an update was pending",
+      "what": "Update packages Windows downloaded. After they install, they're just leftovers.",
+      "deletes": "Files in C:\\Windows\\SoftwareDistribution\\Download older than the age you set.",
+      "safe": "Yes, unless an update is installing right now; files in use are skipped either way.",
+      "after": "If an update was still pending, Windows downloads it again."
+    },
+    {
+      "id": "delivery",
+      "name": "Delivery Optimization files",
+      "level": "safe",
+      "age": "1h",
+      "admin": true,
+      "paths": [
+        "%WINDIR%\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache",
+        "%WINDIR%\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Logs"
+      ],
+      "note": "Update sharing cache",
+      "short": "Windows stops sharing old update copies",
+      "what": "Windows keeps copies of updates and Store apps it downloaded so it can share them with other PCs (Delivery Optimization).",
+      "deletes": "The Delivery Optimization cache and its logs.",
+      "safe": "Yes. Windows' Disk Cleanup offers the same.",
+      "after": "Windows simply stops sharing those old copies."
+    },
+    {
+      "id": "winlogs",
+      "name": "Windows log files",
+      "level": "safe",
+      "age": "1d",
+      "admin": true,
+      "paths": [
+        "%WINDIR%\\Logs\\CBS",
+        "%WINDIR%\\Logs\\DISM",
+        "%WINDIR%\\Logs\\MoSetup",
+        "%WINDIR%\\Panther"
+      ],
+      "note": "Windows' own logs",
+      "short": "Windows starts fresh logs",
+      "what": "Logs written by Windows Update, component servicing and upgrades. CBS logs alone can grow to several GB.",
+      "deletes": "Log files in C:\\Windows\\Logs (CBS, DISM, setup) and C:\\Windows\\Panther older than the age you set.",
+      "safe": "Yes, unless you're troubleshooting a failed update with someone.",
+      "after": "Windows starts fresh logs."
+    },
+    {
+      "id": "dumps",
+      "name": "Crash dumps & error reports",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\CrashDumps",
+        "%LOCALAPPDATA%\\Microsoft\\Windows\\WER",
+        "%PROGRAMDATA%\\Microsoft\\Windows\\WER\\ReportArchive",
+        "%PROGRAMDATA%\\Microsoft\\Windows\\WER\\ReportQueue",
+        "%WINDIR%\\LiveKernelReports",
+        "%WINDIR%\\Minidump"
+      ],
+      "note": "Crash leftovers",
+      "short": "Old crash reports are gone",
+      "what": "Memory dumps and error reports saved when an app or Windows crashed. Only useful to send to a developer.",
+      "deletes": "Dump files and queued or archived error reports.",
+      "safe": "Yes.",
+      "after": "You can't send those old crash reports anymore."
+    },
+    {
+      "id": "thumbs",
+      "name": "Thumbnail & icon cache",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer"
+      ],
+      "note": "Picture previews",
+      "short": "Previews redraw once",
+      "what": "The thumbnails and icons Explorer remembers so folders open fast.",
+      "deletes": "Explorer's thumbnail and icon cache files. The ones in use right now are skipped.",
+      "safe": "Yes. Windows' Disk Cleanup offers the same.",
+      "after": "Folders full of pictures show previews a little slower the first time."
+    },
+    {
+      "id": "shaders",
+      "name": "Graphics shader caches",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\NVIDIA\\DXCache",
+        "%LOCALAPPDATA%\\NVIDIA\\GLCache",
+        "%LOCALAPPDATA%\\AMD\\DxCache",
+        "%LOCALAPPDATA%\\AMD\\GLCache",
+        "%LOCALAPPDATA%\\D3DSCache",
+        "%LOCALAPPDATA%\\NVIDIA Corporation\\NV_Cache",
+        "%PROGRAMFILES(X86)%\\Steam\\steamapps\\shadercache"
+      ],
+      "note": "Compiled graphics",
+      "short": "A game may stutter once while rebuilding",
+      "what": "Shaders your graphics driver and Steam compiled for games and apps, kept so they don't compile again. Steam's can grow to several GB.",
+      "deletes": "The NVIDIA, AMD, DirectX and Steam shader caches.",
+      "safe": "Yes; drivers and Steam rebuild them automatically.",
+      "after": "A game's first launch, or its first few minutes, may load slower or stutter briefly."
+    },
+    {
+      "id": "gpuinstallers",
+      "name": "Graphics driver installer leftovers",
+      "level": "safe",
+      "age": "1d",
+      "admin": true,
+      "paths": [
+        "%SYSTEMDRIVE%\\NVIDIA",
+        "%SYSTEMDRIVE%\\AMD",
+        "%PROGRAMDATA%\\NVIDIA Corporation\\Downloader"
+      ],
+      "note": "Unpacked driver installers",
+      "short": "The driver stays; only its setup files go",
+      "what": "NVIDIA and AMD unpack every driver installer into C:\\NVIDIA or C:\\AMD and leave it there; the NVIDIA app also keeps downloaded drivers. Each one is 0.5-1 GB.",
+      "deletes": "Everything in those folders older than the age you set. The installed driver is not touched.",
+      "safe": "Yes. The driver keeps working; these are only the setup files.",
+      "after": "To reinstall that exact driver you'd download it again."
+    },
+    {
+      "id": "browsers",
+      "name": "Browser caches",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\GPUCache",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\GPUCache",
+        "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\*\\GPUCache",
+        "%LOCALAPPDATA%\\Vivaldi\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Vivaldi\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Vivaldi\\User Data\\*\\GPUCache",
+        "%LOCALAPPDATA%\\Opera Software\\Opera Stable\\Cache",
+        "%LOCALAPPDATA%\\Opera Software\\Opera Stable\\Code Cache",
+        "%LOCALAPPDATA%\\Opera Software\\Opera Stable\\GPUCache",
+        "%LOCALAPPDATA%\\Opera Software\\Opera GX Stable\\Cache",
+        "%LOCALAPPDATA%\\Opera Software\\Opera GX Stable\\Code Cache",
+        "%LOCALAPPDATA%\\Opera Software\\Opera GX Stable\\GPUCache",
+        "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2",
+        "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\startupCache"
+      ],
+      "note": "Website copies",
+      "short": "Sites load slower once; logins kept",
+      "what": "Images, scripts and compiled code that Chrome, Edge, Brave, Vivaldi, Opera and Firefox keep so sites load faster.",
+      "deletes": "Each browser profile's cache folders.",
+      "safe": "Yes. Passwords, cookies, logins, history, bookmarks and extensions are NOT touched.",
+      "after": "Sites load a little slower the first time. Close the browsers first for a full clean; open ones keep some files locked."
+    },
+    {
+      "id": "chat",
+      "name": "Chat app caches",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%APPDATA%\\discord\\Cache",
+        "%APPDATA%\\discord\\Code Cache",
+        "%APPDATA%\\discord\\GPUCache",
+        "%APPDATA%\\Slack\\Cache",
+        "%APPDATA%\\Slack\\Code Cache",
+        "%APPDATA%\\Microsoft\\Teams\\Cache",
+        "%APPDATA%\\Microsoft\\Teams\\Code Cache"
+      ],
+      "note": "Chat app caches",
+      "short": "Images re-download as you scroll",
+      "what": "Discord, Slack and Teams keep copies of images, emoji and compiled code.",
+      "deletes": "Their cache folders.",
+      "safe": "Yes. Messages and logins are kept.",
+      "after": "Images re-download as you scroll."
+    },
+    {
+      "id": "applogs",
+      "name": "App logs (e.g. OneDrive, Zoom)",
+      "level": "safe",
+      "age": "1d",
+      "paths": [
+        "%LOCALAPPDATA%\\Microsoft\\OneDrive\\logs",
+        "%APPDATA%\\Zoom\\logs",
+        "%LOCALAPPDATA%\\Zoom\\logs"
+      ],
+      "note": "Apps' own logs",
+      "short": "Apps start fresh logs",
+      "what": "Diagnostic logs that apps such as OneDrive and Zoom write all the time. OneDrive's can reach hundreds of MB.",
+      "deletes": "Log files older than the age you set. Your files, meetings and settings are not touched.",
+      "safe": "Yes. Only useful when a support team asks for them.",
+      "after": "The apps start fresh logs."
+    },
+    {
+      "id": "launchers",
+      "name": "Game launcher caches (e.g. Epic, Battle.net)",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\webcache*",
+        "%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\Logs",
+        "%LOCALAPPDATA%\\Battle.net\\Cache",
+        "%LOCALAPPDATA%\\Battle.net\\BrowserCache"
+      ],
+      "note": "Game store caches",
+      "short": "Store pages load slower once; games kept",
+      "what": "Game launchers such as the Epic Games Launcher and Battle.net keep a web cache of their store pages, plus logs.",
+      "deletes": "Those cache and log folders. Your games, saves and logins are not touched.",
+      "safe": "Yes. Quit the launcher first for a full clean.",
+      "after": "The store pages load slower once."
+    },
+    {
+      "id": "adobe",
+      "name": "Adobe media cache",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%APPDATA%\\Adobe\\Common\\Media Cache Files",
+        "%APPDATA%\\Adobe\\Common\\Media Cache"
+      ],
+      "note": "Video and audio previews",
+      "short": "Previews rebuild when projects open",
+      "what": "Premiere Pro, After Effects and Audition build preview and audio cache files for every clip you import. It grows quietly into many GB.",
+      "deletes": "The Adobe media cache folders.",
+      "safe": "Yes; Adobe rebuilds them. Close Adobe apps first.",
+      "after": "Projects take a little longer to open the first time while previews rebuild."
+    },
+    {
+      "id": "claudecache",
+      "name": "AI app caches & logs (e.g. Claude)",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\Cache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\Code Cache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\GPUCache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\GrShaderCache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\DawnGraphiteCache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\DawnWebGPUCache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\ShaderCache",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\logs",
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\Crashpad\\reports",
+        "%APPDATA%\\Claude\\Cache",
+        "%APPDATA%\\Claude\\Code Cache",
+        "%APPDATA%\\Claude\\GPUCache",
+        "%APPDATA%\\Claude\\GrShaderCache",
+        "%APPDATA%\\Claude\\DawnGraphiteCache",
+        "%APPDATA%\\Claude\\DawnWebGPUCache",
+        "%APPDATA%\\Claude\\ShaderCache",
+        "%APPDATA%\\Claude\\logs",
+        "%APPDATA%\\Claude\\Crashpad\\reports"
+      ],
+      "note": "AI desktop apps' web cache",
+      "short": "Apps open slower once; chats kept",
+      "what": "AI desktop apps such as Claude keep a web cache, GPU and shader caches, logs and crash reports, like a browser does.",
+      "deletes": "Those cache and log folders only. Not your chats, agent sessions or settings.",
+      "safe": "Yes.",
+      "after": "The app may open a little slower once. Quit it first for a full clean."
+    },
+    {
+      "id": "vscode",
+      "name": "Code editor caches & logs",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%APPDATA%\\Code\\Cache",
+        "%APPDATA%\\Code\\CachedData",
+        "%APPDATA%\\Code\\Code Cache",
+        "%APPDATA%\\Code\\GPUCache",
+        "%APPDATA%\\Code\\logs",
+        "%APPDATA%\\Cursor\\Cache",
+        "%APPDATA%\\Cursor\\logs",
+        "%APPDATA%\\Windsurf\\Cache",
+        "%APPDATA%\\Windsurf\\logs"
+      ],
+      "note": "Editor caches",
+      "short": "Rebuilt on next start",
+      "what": "VS Code, Cursor and Windsurf keep a web cache, compiled-code cache and logs.",
+      "deletes": "Cache, CachedData, Code Cache, GPUCache and logs.",
+      "safe": "Yes. Extensions, settings and your projects are untouched.",
+      "after": "The editor rebuilds its caches on the next start."
+    },
+    {
+      "id": "ide",
+      "name": "IDE caches & logs (e.g. JetBrains)",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\JetBrains\\*\\caches",
+        "%LOCALAPPDATA%\\JetBrains\\*\\index",
+        "%LOCALAPPDATA%\\JetBrains\\*\\log",
+        "%LOCALAPPDATA%\\JetBrains\\*\\tmp",
+        "%LOCALAPPDATA%\\Google\\AndroidStudio*\\caches",
+        "%LOCALAPPDATA%\\Google\\AndroidStudio*\\index",
+        "%LOCALAPPDATA%\\Google\\AndroidStudio*\\log",
+        "%LOCALAPPDATA%\\Google\\AndroidStudio*\\tmp"
+      ],
+      "note": "IDE indexes and logs",
+      "short": "Re-indexes projects on next open",
+      "what": "IntelliJ IDEA, PyCharm, Android Studio and other JetBrains-based IDEs keep caches, a search index of your projects, temporary files and logs. Old IDE versions leave theirs behind.",
+      "deletes": "The caches, index, tmp and log folders. Settings, plugins and your projects are untouched.",
+      "safe": "Yes. Close the IDE first.",
+      "after": "The IDE re-indexes your projects the next time you open them, which takes a few minutes."
+    },
+    {
+      "id": "npm",
+      "name": "npm download cache",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\npm-cache\\_cacache",
+        "%APPDATA%\\npm-cache\\_cacache"
+      ],
+      "note": "Package downloads",
+      "short": "Packages re-download on next install",
+      "what": "npm's download cache: copies of every package you or an AI agent installed.",
+      "deletes": "The _cacache folder. Same as running 'npm cache clean --force'.",
+      "safe": "Yes. Your projects' node_modules folders are not touched.",
+      "after": "The next npm install downloads packages again."
+    },
+    {
+      "id": "yarn",
+      "name": "Yarn download cache",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Yarn\\Cache"
+      ],
+      "note": "Package downloads",
+      "short": "Packages re-download on next install",
+      "what": "Yarn's download cache of JavaScript packages.",
+      "deletes": "The Yarn cache folder. Same as 'yarn cache clean'.",
+      "safe": "Yes. Projects are untouched.",
+      "after": "The next yarn install downloads again."
+    },
+    {
+      "id": "pip",
+      "name": "pip / uv download cache",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\pip\\cache",
+        "%LOCALAPPDATA%\\uv\\cache"
+      ],
+      "note": "Python package downloads",
+      "short": "Python packages re-download on next install",
+      "what": "pip's and uv's download caches.",
+      "deletes": "Cached wheels and downloads. Same as 'pip cache purge'.",
+      "safe": "Yes. Installed packages keep working.",
+      "after": "Future installs download again."
+    },
+    {
+      "id": "gobuild",
+      "name": "Go build cache",
+      "level": "safe",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\go-build"
+      ],
+      "note": "Compiled Go code",
+      "short": "The next build compiles from scratch",
+      "what": "Go keeps compiled packages so builds and tests run faster.",
+      "deletes": "The go-build folder. Same as 'go clean -cache'.",
+      "safe": "Yes. Your code and downloaded modules are untouched.",
+      "after": "The next build compiles everything again."
+    },
+    {
+      "id": "windowsold",
+      "name": "Previous Windows installation",
+      "level": "review",
+      "kind": "windows-old",
+      "age": "0",
+      "admin": true,
+      "paths": [
+        "%SYSTEMDRIVE%\\Windows.old",
+        "%SYSTEMDRIVE%\\$Windows.~BT",
+        "%SYSTEMDRIVE%\\$Windows.~WS"
+      ],
+      "note": "The old Windows, kept for rollback",
+      "short": "You can't roll back to the old Windows",
+      "what": "After a big Windows update, Windows keeps the previous version in C:\\Windows.old for about 10 days so you can go back. Upgrade setup files may sit next to it. Together often 10-30 GB.",
+      "deletes": "Windows.old and the leftover upgrade files. Space Hunter asks Windows' own Disk Cleanup to remove them, because Windows protects these folders.",
+      "safe": "Yes, once the new version is working well for you. Windows deletes it by itself after about 10 days anyway.",
+      "after": "You can no longer go back to the previous version of Windows. A small Disk Cleanup window may show while it works."
+    },
+    {
+      "id": "prefetch",
+      "name": "Prefetch",
+      "level": "review",
+      "age": "0",
+      "admin": true,
+      "paths": [
+        "%WINDIR%\\Prefetch"
+      ],
+      "note": "App-startup notes",
+      "short": "Next boot or two slightly slower",
+      "what": "Small files where Windows notes which parts of each app load at startup, so it can preload them next time.",
+      "deletes": "All files in C:\\Windows\\Prefetch.",
+      "safe": "Yes, nothing breaks. Clearing it does not speed Windows up; that's a myth.",
+      "after": "The first launch of each app, and the next boot or two, can be slightly slower while Windows relearns."
+    },
+    {
+      "id": "media",
+      "name": "Steam & Spotify caches",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Steam\\htmlcache",
+        "%LOCALAPPDATA%\\Spotify\\Data",
+        "%LOCALAPPDATA%\\Packages\\SpotifyAB.SpotifyMusic_*\\LocalCache\\Spotify\\Data"
+      ],
+      "note": "Game store and music caches",
+      "short": "Streams again; offline songs may re-download",
+      "what": "Steam's built-in browser cache and Spotify's streaming cache. Spotify's can grow to several GB.",
+      "deletes": "Those cache folders. Songs you downloaded for offline listening may need downloading again.",
+      "safe": "Yes.",
+      "after": "Spotify streams again; offline downloads may need re-downloading. Steam's store pages load slower once."
+    },
+    {
+      "id": "vm",
+      "name": "AI agent VM images (e.g. Claude Cowork)",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\vm_bundles",
+        "%APPDATA%\\Claude\\vm_bundles"
+      ],
+      "note": "Agents' virtual machine",
+      "short": "Re-downloads (~10 GB) when next needed",
+      "what": "Some AI desktop apps run agent tasks inside a Linux virtual machine (for example Claude's Cowork). Its disk image can be around 10 GB.",
+      "deletes": "The virtual-machine image folders.",
+      "safe": "Safe to delete, but costly: the app downloads it again the next time it needs it. Quit the app first; while it runs, the image is locked and skipped.",
+      "after": "The first agent task afterwards waits for the download."
+    },
+    {
+      "id": "hf",
+      "name": "Downloaded AI models",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.cache\\huggingface",
+        "%USERPROFILE%\\.cache\\torch"
+      ],
+      "note": "Downloaded AI models",
+      "short": "Models re-download when used",
+      "what": "AI models and datasets downloaded by Python tools (Hugging Face, PyTorch). Some are many GB each.",
+      "deletes": "Everything in those model caches.",
+      "safe": "Only if you don't need those models offline.",
+      "after": "Scripts that use them download them again."
+    },
+    {
+      "id": "codex",
+      "name": "AI tool runtimes (e.g. Codex)",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.cache\\codex-runtimes"
+      ],
+      "note": "Runtimes for AI tools",
+      "short": "Tools re-download when needed",
+      "what": "Runtime environments that command-line AI tools such as Codex download for themselves.",
+      "deletes": "Everything in those runtime caches.",
+      "safe": "Yes; the tools fetch them again when needed.",
+      "after": "The tool's next run is slower."
+    },
+    {
+      "id": "npx",
+      "name": "npx packages (MCP servers, tools)",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\npm-cache\\_npx",
+        "%APPDATA%\\npm-cache\\_npx"
+      ],
+      "note": "Tools run with npx",
+      "short": "Tools re-download on next start",
+      "what": "Packages fetched by 'npx', including MCP servers that AI agents such as Claude or Codex start this way.",
+      "deletes": "The _npx folder.",
+      "safe": "Yes, if those tools aren't running. A running one can break, so quit your AI tools first.",
+      "after": "Each tool downloads itself again the next time it starts."
+    },
+    {
+      "id": "playwright",
+      "name": "Browser-automation browsers",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\ms-playwright"
+      ],
+      "note": "Automation browsers",
+      "short": "Browsers re-download when needed",
+      "what": "Chromium, Firefox and WebKit builds downloaded for browser-automation tools, which AI agents often use.",
+      "deletes": "Everything in ms-playwright.",
+      "safe": "Yes, if no browser automation is running right now.",
+      "after": "Tools download the browsers again when they next need them."
+    },
+    {
+      "id": "pnpm",
+      "name": "pnpm package store",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\pnpm\\store"
+      ],
+      "note": "Shared JavaScript packages",
+      "short": "Packages re-download on next install",
+      "what": "pnpm keeps one shared copy of every package your projects use and links projects to it.",
+      "deletes": "The whole store. Projects you already installed keep working, because their files are linked, not copied.",
+      "safe": "Yes, but 'pnpm store prune' is gentler: it only removes packages no project uses.",
+      "after": "The next pnpm install downloads packages again."
+    },
+    {
+      "id": "gradle",
+      "name": "Gradle caches",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.gradle\\caches"
+      ],
+      "note": "Android/Java build downloads",
+      "short": "Next build is slow and needs internet",
+      "what": "Libraries and build outputs that Gradle downloaded for Android or Java projects.",
+      "deletes": "Everything in ~/.gradle/caches.",
+      "safe": "Yes; Gradle rebuilds it.",
+      "after": "The next build takes a while and needs internet."
+    },
+    {
+      "id": "maven",
+      "name": "Maven packages",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.m2\\repository"
+      ],
+      "note": "Java library downloads",
+      "short": "Next build re-downloads libraries",
+      "what": "Maven's local repository: every Java library your builds downloaded.",
+      "deletes": "Everything in ~/.m2/repository. Your settings file is kept.",
+      "safe": "Yes, unless you installed your own libraries there with 'mvn install'.",
+      "after": "The next build downloads libraries again and needs internet."
+    },
+    {
+      "id": "nuget",
+      "name": "NuGet packages",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.nuget\\packages"
+      ],
+      "note": ".NET package downloads",
+      "short": "Packages restore on next build",
+      "what": "Packages NuGet downloaded for .NET projects.",
+      "deletes": "Everything in ~/.nuget/packages. Same as 'dotnet nuget locals all --clear'.",
+      "safe": "Yes; packages restore on the next build.",
+      "after": "The next build restores packages and needs internet."
+    },
+    {
+      "id": "cargo",
+      "name": "Rust (Cargo) downloads",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.cargo\\registry\\cache",
+        "%USERPROFILE%\\.cargo\\registry\\src",
+        "%USERPROFILE%\\.cargo\\git\\checkouts"
+      ],
+      "note": "Rust crate downloads",
+      "short": "Next build re-downloads crates",
+      "what": "Cargo keeps every crate it downloaded, both packed and unpacked.",
+      "deletes": "The registry cache, unpacked sources and git checkouts. Installed tools in ~/.cargo/bin are kept.",
+      "safe": "Yes.",
+      "after": "The next build downloads crates again and needs internet."
+    },
+    {
+      "id": "gomod",
+      "name": "Go module downloads",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\go\\pkg\\mod"
+      ],
+      "note": "Go module downloads",
+      "short": "Next build re-downloads modules",
+      "what": "Every Go module your builds downloaded.",
+      "deletes": "Everything in ~/go/pkg/mod. Same as 'go clean -modcache'.",
+      "safe": "Yes.",
+      "after": "The next build downloads modules again and needs internet."
+    },
+    {
+      "id": "conda",
+      "name": "conda package cache",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\miniconda3\\pkgs",
+        "%USERPROFILE%\\anaconda3\\pkgs",
+        "%USERPROFILE%\\.conda\\pkgs",
+        "%PROGRAMDATA%\\miniconda3\\pkgs",
+        "%PROGRAMDATA%\\anaconda3\\pkgs"
+      ],
+      "note": "Python package downloads (conda)",
+      "short": "New environments re-download packages",
+      "what": "conda keeps every package it downloaded, packed and unpacked, in a pkgs folder.",
+      "deletes": "Everything in the pkgs folders. Your environments keep working: on Windows their files are linked, not copied.",
+      "safe": "Yes, but 'conda clean --all' is gentler if you have conda open.",
+      "after": "Creating a new environment downloads packages again."
+    },
+    {
+      "id": "engines",
+      "name": "Game engine caches (e.g. Unity, Unreal)",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%LOCALAPPDATA%\\Unity\\cache",
+        "%APPDATA%\\Unity\\Asset Store-5.x",
+        "%LOCALAPPDATA%\\UnrealEngine\\Common\\DerivedDataCache"
+      ],
+      "note": "Game engine caches",
+      "short": "Projects open slower once while it rebuilds",
+      "what": "Unity keeps downloaded packages and Asset Store downloads; Unreal keeps a shared cache of compiled shaders and assets (DerivedDataCache), often many GB.",
+      "deletes": "Those cache folders. Your projects are untouched.",
+      "safe": "Yes. Close the editors first.",
+      "after": "Projects take longer to open once while the caches rebuild; Asset Store packages download again."
+    },
+    {
+      "id": "android",
+      "name": "Android emulator snapshots & caches",
+      "level": "review",
+      "age": "0",
+      "paths": [
+        "%USERPROFILE%\\.android\\avd\\*.avd\\snapshots",
+        "%USERPROFILE%\\.android\\cache"
+      ],
+      "note": "Emulator snapshots",
+      "short": "Virtual phones boot fully once",
+      "what": "The Android emulator saves a snapshot of each virtual phone so it starts fast. Each can be several GB.",
+      "deletes": "The snapshots and the emulator cache. The virtual phones themselves and their apps are kept.",
+      "safe": "Yes. Close the emulator first.",
+      "after": "Each virtual phone does a full boot the next time, which is slower."
+    },
+    {
+      "id": "recycle",
+      "name": "Recycle Bin",
+      "level": "review",
+      "kind": "recycle-bin",
+      "age": "0",
+      "note": "Deleted files",
+      "short": "Nothing can be restored",
+      "what": "Files you deleted that Windows is holding in case you change your mind.",
+      "deletes": "Everything in the Recycle Bin on all drives.",
+      "safe": "Only if you're sure; this is permanent.",
+      "after": "Nothing can be restored from the bin."
+    },
+    {
+      "id": "transcripts",
+      "name": "Old AI agent chat history (Claude Code, Codex)",
+      "level": "caution",
+      "age": "14d",
+      "paths": [
+        "%USERPROFILE%\\.claude\\projects",
+        "%USERPROFILE%\\.claude\\file-history",
+        "%USERPROFILE%\\.codex\\sessions"
+      ],
+      "exclude": [
+        "memory"
+      ],
+      "note": "Your AI agents' history",
+      "short": "Those chats can't be resumed; memory kept",
+      "what": "AI coding agents such as Claude Code (~/.claude) and Codex (~/.codex) save every conversation, their sub-tasks and big tool outputs as files, plus checkpoints for undo. Long runs make single files of 1-2 GB.",
+      "deletes": "Conversation and checkpoint files not changed within the age you set. Agents' memory folders (such as Claude's memory) are always skipped.",
+      "safe": "Only for conversations you'll never reopen. Recent ones are protected by the age rule.",
+      "after": "Those conversations can't be resumed or rewound. Many agents can also clean their own history; check their settings."
+    },
+    {
+      "id": "scratch",
+      "name": "Old AI agent workspaces (e.g. Claude 'No folder')",
+      "level": "caution",
+      "kind": "subfolders",
+      "age": "14d",
+      "paths": [
+        "%LOCALAPPDATA%\\Claude-Data\\claude_*\\scratch-workspaces\\*\\*",
+        "%APPDATA%\\Claude\\scratch-workspaces\\*\\*"
+      ],
+      "note": "Files from folder-less agent sessions",
+      "short": "Their files are gone for good",
+      "what": "When an AI agent session starts without a chosen folder (for example a Claude 'No folder' session), the app makes a private folder for it. Anything the agent built there lives only there.",
+      "deletes": "Whole session folders where nothing has changed within the age you set.",
+      "safe": "CAREFUL: these can hold real work. Open the folders below and check first, or keep the ones you want.",
+      "after": "That session's files are gone for good. Move anything you want into a real folder first."
+    },
+    {
+      "id": "downloads",
+      "name": "Old installers & archives in Downloads",
+      "level": "caution",
+      "age": "30d",
+      "paths": [
+        "%USERPROFILE%\\Downloads"
+      ],
+      "extensions": [
+        ".exe",
+        ".msi",
+        ".msix",
+        ".appx",
+        ".zip",
+        ".7z",
+        ".rar",
+        ".iso",
+        ".img",
+        ".tar",
+        ".gz",
+        ".tgz"
+      ],
+      "topLevelOnly": true,
+      "note": "Old installers in Downloads",
+      "short": "Installers and archives only, top level",
+      "what": "Setup files and archives that pile up in Downloads after you've installed or unpacked them.",
+      "deletes": "Only .exe, .msi, .zip, .7z, .rar, .iso and similar files sitting directly in Downloads, untouched for the age you set (30 days by default). Sub-folders and every other file type are never touched.",
+      "safe": "Usually. Check the folder first if you keep installers you can't download again.",
+      "after": "You'd need to download those installers again to reinstall."
+    }
+  ]
+}

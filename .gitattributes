@@ -1,0 +1,8 @@
+*.sh text eol=lf
+*.yml text eol=lf
+*.swift text eol=lf
+*.cs text
+*.cmd text eol=crlf
+*.ttf binary
+*.png binary
+*.ico binary
