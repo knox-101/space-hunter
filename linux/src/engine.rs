@@ -503,6 +503,11 @@ pub mod history {
         text.push_str(&format!("{}\t{}\t{}\n", now, bytes, trashed));
         let _ = fs::write(path(), text);
     }
+    // bytes sent to the Trash over all cleans
+    pub fn trashed() -> u64 {
+        fs::read_to_string(path()).unwrap_or_default().lines()
+            .filter_map(|l| l.split('\t').nth(2).and_then(|v| v.parse::<u64>().ok())).sum()
+    }
     // (bytes freed, number of cleans)
     pub fn total() -> (u64, u32) {
         let text = fs::read_to_string(path()).unwrap_or_default();

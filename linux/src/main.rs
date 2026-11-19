@@ -67,9 +67,9 @@ window, .chassis { background: #D8D5CE; }
 .hero { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 60pt; }
 .hero-unit { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 24pt; }
 .beside { color: #E9E6DF; font-weight: 600; font-size: 10.5pt; }
-.beside-muted { color: #8A8A86; font-weight: 600; font-size: 10.5pt; }
+.beside-muted { color: #A8A49C; font-weight: 600; font-size: 10.5pt; }
 .disk { color: #B4B1AA; font-size: 11pt; }
-.legend { color: #8A8A86; font-weight: 600; font-size: 10.5pt; }
+.legend { color: #A8A49C; font-weight: 600; font-size: 10.5pt; }
 button.key { background: #ECEAE5; background-image: none; color: #1B1B1A; border: none; border-radius: 4px;
              box-shadow: 0 2px 0 #A9A59C; font-weight: 600; font-size: 9.75pt; padding: 8px 14px; min-height: 0; }
 button.key:hover { background: #F3F1ED; }

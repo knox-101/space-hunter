@@ -109,6 +109,29 @@ fn map_icon() -> gtk::DrawingArea {
     d
 }
 
+// a 13px legend box drawn like the bar: 0 ticked (orange), 1 not ticked (hatched), 2 used (grey), 3 free (outlined)
+fn swatch(kind: u8) -> gtk::DrawingArea {
+    let d = gtk::DrawingArea::new();
+    d.set_content_width(13); d.set_content_height(13); d.set_valign(gtk::Align::Center);
+    d.set_draw_func(move |_, cr, w, h| {
+        let (w, h) = (w as f64, h as f64);
+        match kind {
+            0 => { cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill(); }
+            1 => hatch(cr, 0.0, 0.0, w, h),
+            2 => { cr.set_source_rgb(0.435, 0.424, 0.400); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill(); }
+            _ => { cr.set_source_rgb(0.227, 0.227, 0.220); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
+                   cr.set_source_rgb(0.541, 0.541, 0.525); cr.set_line_width(1.0); cr.rectangle(0.5, 0.5, w - 1.0, h - 1.0); let _ = cr.stroke(); }
+        }
+    });
+    d
+}
+
+fn legend_item(kind: u8, l: &gtk::Label) -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    b.append(&swatch(kind)); b.append(l);
+    b
+}
+
 fn hatch(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64) {
     if w <= 0.0 { return; }
     let _ = cr.save();
@@ -161,14 +184,14 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     top.append(&right);
     display.append(&top);
     let bar = gtk::DrawingArea::new();
-    bar.set_content_height(16); bar.set_margin_top(14);
+    bar.set_content_height(27); bar.set_margin_top(4);
     display.append(&bar);
     let legend = gtk::Box::new(gtk::Orientation::Horizontal, 26);
     legend.set_margin_top(10);
     let legend_ticked = label("", "legend-ink");
     let legend_not = label("", "legend-ink");
-    legend.append(&legend_ticked); legend.append(&legend_not);
-    legend.append(&label("\u{25A0} Used", "legend")); legend.append(&label("\u{25A1} Free", "legend"));
+    legend.append(&legend_item(0, &legend_ticked)); legend.append(&legend_item(1, &legend_not));
+    legend.append(&legend_item(2, &label("Used", "legend"))); legend.append(&legend_item(3, &label("Free", "legend")));
     display.append(&legend);
     root.append(&display);
 
@@ -207,7 +230,22 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         v.append(&line);
         v.append(&label(engine::tier_desc(lvl), "tile-desc"));
         let count = label("", "tile-count");
-        v.append(&count);
+        let cl = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+        let mark = gtk::DrawingArea::new();
+        mark.set_content_width(11); mark.set_content_height(11); mark.set_valign(gtk::Align::Center);
+        let cc = count.clone();
+        mark.set_draw_func(move |_, cr, w, h| {   // filled orange with a tick when anything is ticked, else an outline
+            let (w, h) = (w as f64, h as f64);
+            if cc.has_css_class("some") {
+                cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
+                cr.set_source_rgb(0.106, 0.106, 0.102); cr.set_line_width(1.6);
+                cr.move_to(2.5, 5.5); cr.line_to(4.8, 8.0); cr.line_to(8.8, 3.0); let _ = cr.stroke();
+            } else if cc.has_css_class("none") {
+                cr.set_source_rgb(0.49, 0.475, 0.447); cr.set_line_width(1.3); cr.rectangle(0.5, 0.5, w - 1.0, h - 1.0); let _ = cr.stroke();
+            }
+        });
+        cl.append(&mark); cl.append(&count);
+        v.append(&cl);
         b.set_child(Some(&v));
         tile_box.append(&b);
         tiles.push((b, size, count));
@@ -259,21 +297,28 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     {
         let u = ui.clone();
         ui.bar.set_draw_func(move |_, cr, w, h| {
-            let (w, h) = (w as f64, h as f64);
+            let w = w as f64;
+            let (y, h) = (11.0, (h as f64 - 11.0).max(1.0));   // room for the caret above the bar
             let (other, sel, rev) = u.bar_vals.get();
             cr.set_source_rgb(0.227, 0.227, 0.220);
-            cr.rectangle(0.0, 0.0, w, h);
+            cr.rectangle(0.0, y, w, h);
             let _ = cr.fill();
-            let (w0, mut w1, mut w2) = (w * other, w * sel, w * rev);
-            if sel > 0.0 && w1 < 4.0 { w1 = 4.0; }
-            if rev > 0.0 && w2 < 4.0 { w2 = 4.0; }
+            let (mut w0, mut w1, mut w2) = (w * other, w * sel, w * rev);
+            if sel > 0.0 && w1 < 4.0 { w1 = 4.0; w0 = (w0 - 4.0).max(0.0); }
+            if rev > 0.0 && w2 < 4.0 { w2 = 4.0; w0 = (w0 - 4.0).max(0.0); }
             cr.set_source_rgb(0.435, 0.424, 0.400);
-            cr.rectangle(0.0, 0.0, w0, h);
+            cr.rectangle(0.0, y, w0, h);
             let _ = cr.fill();
             cr.set_source_rgb(1.0, 0.357, 0.122);
-            cr.rectangle(w0, 0.0, w1, h);
+            cr.rectangle(w0, y, w1, h);
             let _ = cr.fill();
-            hatch(cr, w0 + w1, 0.0, w2, h);
+            hatch(cr, w0 + w1, y, w2, h);
+            if sel > 0.0 {   // a caret marks the part you get back, even when it's thin
+                let cx = w0 + w1 / 2.0;
+                cr.set_source_rgb(1.0, 0.357, 0.122);
+                cr.move_to(cx - 6.0, 0.0); cr.line_to(cx + 6.0, 0.0); cr.line_to(cx, 8.0); cr.close_path();
+                let _ = cr.fill();
+            }
         });
     }
     for (i, (b, _, _)) in ui.tiles.iter().enumerate() {
@@ -380,7 +425,8 @@ fn refresh_top(u: &Rc<Ui>) {
     u.beside2.set_text(&if not_ticked > 0 { format!("+ {} more you can check yourself", fmt(not_ticked)) } else { String::new() });
     let (free, total) = crate::disk("/");
     u.disk_text.set_text(&format!("{} free of {}", fmt(free), fmt(total)));
-    u.freed_text.set_text(&if freed.1 > 0 { format!("Freed so far: {} in {} clean{}", fmt(freed.0), freed.1, if freed.1 == 1 { "" } else { "s" }) } else { String::new() });
+    let binned = engine::history::trashed();
+    u.freed_text.set_text(&if freed.1 > 0 { format!("Freed so far: {}{} in {} clean{}", fmt(freed.0), if binned > 0 { format!(" + {} to the Trash", fmt(binned)) } else { String::new() }, freed.1, if freed.1 == 1 { "" } else { "s" }) } else { String::new() });
     if total > 0 {
         let t = total as f64;
         let used = (total - free) as f64 / t;
@@ -389,8 +435,8 @@ fn refresh_top(u: &Rc<Ui>) {
         u.bar_vals.set(((used - sel - rev).max(0.0), sel, rev));
         u.bar.queue_draw();
     }
-    u.legend_ticked.set_text(&format!("\u{25A0} Ticked: {}", fmt(selected)));
-    u.legend_not.set_text(&format!("\u{25A8} Not ticked: {}", fmt(not_ticked)));
+    u.legend_ticked.set_text(&format!("Ticked: {}", fmt(selected)));
+    u.legend_not.set_text(&format!("Not ticked: {}", fmt(not_ticked)));
     let can_clean = st.pending == 0 && st.cats.iter().any(|c| c.checked && (c.bytes > 0 || c.files > 0));
     u.clean.set_label(&if st.cleaning { "SHOW CLEANING".to_string() } else { format!("CLEAN {}", fmt(selected)) });
     u.clean.set_sensitive(st.cleaning || can_clean);
@@ -404,8 +450,11 @@ fn refresh_top(u: &Rc<Ui>) {
         let n_ticked = items.iter().filter(|c| c.checked && (c.bytes > 0 || c.files > 0)).count();
         size.set_text(&format!("{} found", fmt(found)));
         count.set_text(&if n_items == 0 { "Nothing to clean here right now".to_string() }
-                        else if n_ticked == 0 { format!("\u{2610} None of {} ticked", n_items) }
-                        else { format!("\u{2611} {} of {} ticked{}", n_ticked, n_items, if ticked > 0 { format!("  \u{00B7}  {}", fmt(ticked)) } else { String::new() }) });
+                        else if n_ticked == 0 { format!("None of {} ticked", n_items) }
+                        else { format!("{} of {} ticked{}", n_ticked, n_items, if ticked > 0 { format!("  \u{00B7}  {}", fmt(ticked)) } else { String::new() }) });
+        count.remove_css_class("some"); count.remove_css_class("none");
+        if n_items > 0 { count.add_css_class(if n_ticked > 0 { "some" } else { "none" }); }
+        if let Some(m) = count.prev_sibling() { m.queue_draw(); }
         if st.tier == lvl { b.add_css_class("on"); } else { b.remove_css_class("on"); }
     }
     u.title.set_text(&engine::tier_name(st.tier).to_uppercase());
@@ -454,6 +503,7 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     let inner = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let names = gtk::Box::new(gtk::Orientation::Vertical, 3);
     names.set_hexpand(true);
+    names.set_valign(gtk::Align::Center);
     let name = label(&c.name, if empty { "row-name-dim" } else { "row-name" });
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     names.append(&name);
@@ -807,7 +857,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     v.append(&disp);
     let tv = gtk::TextView::new();
     tv.set_editable(false); tv.set_cursor_visible(false); tv.add_css_class("log");
-    tv.set_left_margin(12); tv.set_top_margin(10);
+    tv.set_left_margin(12); tv.set_top_margin(12);
     let lsw = gtk::ScrolledWindow::builder().child(&tv).vexpand(true).build();
     v.append(&lsw);
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -846,7 +896,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             let t2 = tx.clone();
             let mut cnt = Counter { cancel: Some(c3.clone()), ..Default::default() };
             cnt.on_item = Some(Box::new(move |p: &std::path::Path, size: u64, ok: bool, bin: bool| {
-                let head = if !ok { "skip".to_string() } else if bin { format!("bin  {:>8}", fmt(size)) } else { format!("del  {:>8}", fmt(size)) };
+                let head = if !ok { "skip".to_string() } else if bin { format!("trash {:>8}", fmt(size)) } else { format!("del  {:>8}", fmt(size)) };
                 let _ = t2.send(Msg::Line(format!("{}  {}", head, home_short(p))));
             }));
             engine::process(c, true, to_trash, &mut cnt);
