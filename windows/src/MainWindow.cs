@@ -673,6 +673,7 @@ namespace SpaceHunter
         CategoryList list; TierBar tiers; DisplayPanel disp; Drawer drawer; Panel body;
         Key scanKey, cleanKey, finderKey, protectKey, resetKey; Label status;
         bool cleaning;   // a clean is running in its window
+        ProgressForm running;
         readonly object qLock = new object();
         readonly Queue<Category> scanQueue = new Queue<Category>();
         bool workerRunning;
@@ -725,7 +726,11 @@ namespace SpaceHunter
             drawer.Panel.RemoveFromHome += (s, e) => { var c = (Category)s; foreach (var r in c.Roots) Custom.Remove(r); drawer.Close(); list.OpenItem = null; Load_(); Enqueue(cats); status.Text = "Removed from the cleanup list: " + c.Name; };
             ageDebounce.Tick += (s, e) => { ageDebounce.Stop(); if (pendingAge != null) Enqueue(new[] { pendingAge }); };
             scanKey.Click += (s, e) => Enqueue(cats);
-            cleanKey.Click += (s, e) => Clean();
+            cleanKey.Click += (s, e) =>
+            {
+                if (running != null) { if (running.WindowState == FormWindowState.Minimized) running.WindowState = FormWindowState.Normal; running.Activate(); return; }
+                Clean();
+            };
             finderKey.Click += (s, e) =>
             {
                 using (var f = new FinderForm(cats))
@@ -805,8 +810,8 @@ namespace SpaceHunter
             disp.ReviewUnticked = cats.Where(c => !c.Checked && !c.Safe && c.Kind != Kind.RecycleBin).Sum(c => c.Bytes);
             disp.Scanning = busy;
             disp.Invalidate(); tiers.Invalidate(); list.Invalidate();
-            cleanKey.Text = "clean " + Engine.Fmt(disp.Selected);
-            cleanKey.Enabled = !busy && !cleaning && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)));
+            cleanKey.Text = cleaning ? "show cleaning" : "clean " + Engine.Fmt(disp.Selected);
+            cleanKey.Enabled = cleaning || !busy && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)));
             scanKey.Enabled = !busy && !cleaning;
             PlaceKeys(cleanKey.Parent);
         }
@@ -938,10 +943,20 @@ namespace SpaceHunter
             cleaning = true; Refresh_();
             var pf = new ProgressForm(sel, total) { StartPosition = FormStartPosition.Manual };
             pf.Location = new Point(Left + (Width - pf.Width) / 2, Top + (Height - pf.Height) / 2);
+            running = pf;
+            var watch = new System.Windows.Forms.Timer { Interval = 400 };   // live progress here, even with the cleaning window minimised
+            watch.Tick += (s, e) =>
+            {
+                if (running == null) { watch.Stop(); return; }
+                status.Text = running.Done ? "Cleaning finished. Close its window to measure again."
+                            : "Cleaning  ·  item " + running.ItemNow + " of " + running.ItemCount + "  ·  " + Engine.Fmt(running.FreedSoFar) + " freed" +
+                              (running.BinnedSoFar > 0 ? " + " + Engine.Fmt(running.BinnedSoFar) + " to the Recycle Bin" : "") + " so far.  You can keep looking around.";
+            };
+            watch.Start();
             pf.FormClosed += (s, e) =>
             {
                 foreach (var c in sel) c.Recycle = false;
-                cleaning = false; pf.Dispose();
+                cleaning = false; running = null; watch.Stop(); pf.Dispose();
                 ReadDisk(); Enqueue(cats);
                 status.Text = "Cleaning finished. The list is being measured again.";
             };

@@ -604,6 +604,8 @@ final class AppState: ObservableObject {
             self.log.append(contentsOf: batch)
             if self.log.count > 3000 { self.log.removeFirst(self.log.count - 3000) }
             self.freed = b; self.trashed = t; self.cleanedFiles = f; self.skipped = s
+            // live progress in the main window too, even with the cleaning window minimised
+            if self.cleanRunning { self.status = "Cleaning  ·  \(Engine.fmt(b)) freed" + (t > 0 ? " + \(Engine.fmt(t)) to the Trash" : "") + " so far.  You can keep looking around." }
         }
         DispatchQueue.global(qos: .userInitiated).async {
             var summary: [String] = []
@@ -801,7 +803,7 @@ struct MainView: View {
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
                 Button("Reset to default") { state.resetAll() }.buttonStyle(KeyStyle())
                     .padding(.trailing, 4)
-                Button(state.cleanRunning ? "Cleaning…" : "Clean \(Engine.fmt(state.selectedBytes))") {
+                Button(state.cleanRunning ? "Show cleaning" : "Clean \(Engine.fmt(state.selectedBytes))") {
                     if state.cleaning { openWindow(id: "cleaning") } else { confirm = true }
                 }
                 .buttonStyle(KeyStyle(primary: true, big: true))
@@ -1314,6 +1316,7 @@ struct ProgressSheet: View {
             HStack {
                 if state.cleanDone { Button("Open log") { NSWorkspace.shared.open(Engine.logURL) }.buttonStyle(KeyStyle()) }
                 Spacer()
+                if !state.cleanDone { Button("Minimise") { NSApp.keyWindow?.miniaturize(nil) }.buttonStyle(KeyStyle()) }
                 Button(state.cleanDone ? "Close" : "Stop") { if state.cleanDone { state.finishCleaning(); dismiss() } else { state.stop() } }.buttonStyle(KeyStyle())
             }
         }
