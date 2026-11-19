@@ -1,11 +1,12 @@
 # Space Hunter
 
 **Finds the folders silently filling your disk, explains each one, and clears the ones you pick after one
-confirmation.** Free for Windows 10/11 and macOS 13+. No account, no tracking, under 1 MB.
+confirmation.** Free for Windows 10/11, macOS 13+ and Linux. No account, no tracking, a few MB at most.
 
 ### [⬇ Download the latest version](https://github.com/knox-101/space-hunter/releases/latest)
 
-Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · first-run steps are on the download page.
+Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-x86_64.AppImage` (or
+`nix run github:knox-101/space-hunter`) · first-run steps are on the download page.
 
 ![Space Hunter on Windows](docs/screenshots/windows-main.png)
 
@@ -19,7 +20,9 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · first-run steps are 
   history; check before cleaning).
 - **Explains each one**: click a row to see what it is, what gets deleted, whether it's safe and what happens after,
   and choose "only files older than N days" or "everything".
-- **Asks before cleaning**, with a choice of **Delete** or **Recycle Bin / Trash**, and shows each file as it goes.
+- **Asks before cleaning**, with a choice of **Permanently delete** or **Recycle Bin / Trash**, and shows each file as it
+  goes. Cleaning runs in its own window, so you can keep looking around. On Linux, system folders such as downloaded
+  updates ask for your password once.
 - **Storage map**: see how your whole disk is split up, folder by folder, on any drive (about 10 seconds for a full
   Windows drive), and add a cache folder to the cleanup list from there.
 
