@@ -4,6 +4,7 @@
 
 mod engine;
 mod storage;
+mod updater;
 mod ui;
 
 use gtk::prelude::*;
@@ -142,6 +143,10 @@ button.crumb-now { background: none; border: none; box-shadow: none; padding: 4p
 .chart-caption { color: #5F5C56; font-size: 8.75pt; }
 .included { color: #E9E6DF; background: #1B1B1A; font-weight: 600; font-size: 8.25pt; padding: 6px 12px; border-radius: 4px; }
 button.key.primary-small { background: #FF5B1F; box-shadow: 0 2px 0 #B5400F; }
+.update-card { background: #121212; border-radius: 7px; padding: 12px 18px; margin: 8px 18px 10px 18px; }
+.update-title { color: #E9E6DF; font-weight: 600; font-size: 11pt; }
+.update-sub { color: #A8A49C; font-size: 9pt; }
+.update-dot { color: #FF5B1F; font-size: 14pt; }
 textview.log, textview.log text { background: #E4E1DA; color: #1B1B1A; font-family: "IBM Plex Mono"; font-size: 8.5pt; }
 "#;
 
@@ -150,6 +155,12 @@ fn main() -> glib::ExitCode {
     if args.iter().any(|a| a == "--version") {
         println!("Space Hunter {}", VERSION.trim());
         return glib::ExitCode::SUCCESS;
+    }
+    // test hook for CI: check a signature with a given public key
+    if let Some(i) = args.iter().position(|a| a == "--test-verify") {
+        let ok = updater::test_verify(args.get(i + 1).map(|s| s.as_str()).unwrap_or(""), args.get(i + 2).map(|s| s.as_str()).unwrap_or(""), args.get(i + 3).map(|s| s.as_str()).unwrap_or(""));
+        println!("{}", if ok { "SIGNATURE OK" } else { "SIGNATURE BAD" });
+        return glib::ExitCode::from(if ok { 0 } else { 1 });
     }
     // the password helper (started by pkexec as root): cleans the named system items, then exits
     if let Some(i) = args.iter().position(|a| a == "--clean-system") {

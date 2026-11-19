@@ -59,6 +59,7 @@ pub struct Ui {
     status: gtk::Label,
     prog_win: RefCell<Option<gtk::Window>>,
     opts: Opts,
+    bottom: gtk::Box,
     inside_here: RefCell<Option<(String, PathBuf)>>,                       // a folder you added: where its panel list is looking
     described: RefCell<std::collections::HashMap<String, String>>,       // what's inside folders you added, worked out once
 }
@@ -289,7 +290,9 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     root.append(&body);
 
     let status = label("", "status");
-    root.append(&status);
+    let bottom = gtk::Box::new(gtk::Orientation::Vertical, 0);   // the status line, or the update card in its place
+    bottom.append(&status);
+    root.append(&bottom);
     win.set_child(Some(&root));
 
     let ui = Rc::new(Ui {
@@ -297,7 +300,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
         legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel, status,
         prog_win: RefCell::new(None), opts,
-        inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
+        bottom, inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
     });
 
     {
@@ -382,6 +385,8 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     }
     refresh(&ui);
     ui.win.present();
+    let hooks = ui.opts.open.is_some() || ui.opts.confirm || ui.opts.progress_dir.is_some() || ui.opts.storage.is_some() || ui.opts.protect;
+    if !hooks { check_update(&ui); }
     if let Some(p) = ui.opts.storage.clone() { let d = ui.opts.drill; open_storage(&ui, Some(PathBuf::from(p)), d); }
     if ui.opts.protect { let u2 = ui.clone(); crate::storage::open_protect(&ui.win, Rc::new(move || reload(&u2))); }
     if let Some(dir) = ui.opts.progress_dir.clone() {
@@ -411,6 +416,70 @@ fn reload(u: &Rc<Ui>) {
     }
     u.panel_rev.set_reveal_child(false);
     scan(u, None);
+}
+
+// One quiet check for a newer version; offline or up to date, nothing happens.
+fn check_update(u: &Rc<Ui>) {
+    let (tx, rx) = mpsc::channel::<crate::updater::Release>();
+    std::thread::spawn(move || { if let Some(r) = crate::updater::check() { let _ = tx.send(r); } });
+    let uu = u.clone();
+    glib::timeout_add_local(Duration::from_millis(500), move || match rx.try_recv() {
+        Ok(r) => { show_update(&uu, Rc::new(r)); glib::ControlFlow::Break }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(_) => glib::ControlFlow::Break,
+    });
+}
+
+// The update card: at the bottom, in place of the status line.
+fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
+    let can_install = crate::updater::self_path().is_some();
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    card.add_css_class("update-card");
+    let dot = label("\u{25CF}", "update-dot"); dot.set_valign(gtk::Align::Center);
+    card.append(&dot);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2); text.set_valign(gtk::Align::Center);
+    text.append(&label(&format!("Space Hunter {} is ready", r.version), "update-title"));
+    let sub = label(&if can_install { format!("You have {}. Updating takes a few seconds and keeps your settings.", crate::updater::current()) }
+                    else { format!("You have {}. Update it the way you installed it (for example with Nix).", crate::updater::current()) }, "update-sub");
+    text.append(&sub);
+    card.append(&text);
+    card.append(&hspacer());
+    let news = key("what's new", &[]);
+    let later = key("later", &[]);
+    card.append(&news); card.append(&later);
+    let page = r.page.clone();
+    news.connect_clicked(move |_| { if let Some(p) = &page { let _ = gtk::gio::AppInfo::launch_default_for_uri(p, None::<&gtk::gio::AppLaunchContext>); } });
+    let (uu, c2) = (u.clone(), card.clone());
+    later.connect_clicked(move |_| { uu.bottom.remove(&c2); uu.status.set_visible(true); });
+    if can_install {
+        let go = key("update & relaunch", &["primary"]);
+        card.append(&go);
+        let (uu, r2, sub2, later2, news2) = (u.clone(), r.clone(), sub.clone(), later.clone(), news.clone());
+        go.connect_clicked(move |b| {
+            b.set_sensitive(false); later2.set_sensitive(false); news2.set_sensitive(false);
+            let (tx, rx) = mpsc::channel::<Result<String, String>>();
+            let r3 = r2.clone();
+            let rel = crate::updater::Release { version: r3.version.clone(), page: r3.page.clone(), url: r3.url.clone(), sig_url: r3.sig_url.clone() };
+            std::thread::spawn(move || {
+                let t2 = tx.clone();
+                let res = crate::updater::install(&rel, &move |m: &str| { let _ = t2.send(Ok(m.to_string())); });
+                let _ = tx.send(match res { Ok(()) => Err(String::new()), Err(why) => Err(why) });
+            });
+            let (uu2, sub3, b2, l3, n3) = (uu.clone(), sub2.clone(), b.clone(), later2.clone(), news2.clone());
+            glib::timeout_add_local(Duration::from_millis(100), move || {
+                while let Ok(m) = rx.try_recv() {
+                    match m {
+                        Ok(msg) => sub3.set_text(&msg),
+                        Err(why) if why.is_empty() => { uu2.win.close(); std::process::exit(0); }   // the new version is opening
+                        Err(why) => { sub3.set_text(&why); b2.set_label("TRY AGAIN"); b2.set_sensitive(true); l3.set_sensitive(true); n3.set_sensitive(true); return glib::ControlFlow::Break; }
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+        });
+    }
+    u.status.set_visible(false);
+    u.bottom.append(&card);
 }
 
 fn test_cat(dir: PathBuf) -> Cat {

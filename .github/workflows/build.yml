@@ -83,8 +83,9 @@ jobs:
           path: windows/SpaceHunter.exe
 
   linux:
-    name: Linux app (preview)
-    runs-on: ubuntu-24.04
+    name: Linux app
+    # built on the oldest supported Ubuntu, so the AppImage also runs on older systems (glibc and GTK 4.6+)
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
@@ -187,6 +188,34 @@ jobs:
           echo "$HOME/work/old-renders/keep this" > "$HOME/.config/space-hunter/your-folders-skip.txt"
           shot inside --open "custom:$HOME/work/old-renders"
           ls -l target/release/space-hunter screenshot-*.png
+      - name: Test the update signature check (throwaway key)
+        working-directory: linux
+        run: |
+          openssl genrsa -out t.pem 2048 2>/dev/null
+          openssl rsa -in t.pem -RSAPublicKey_out -outform DER -out t.der 2>/dev/null
+          cp target/release/space-hunter payload; openssl dgst -sha256 -sign t.pem -out payload.sig payload
+          ./target/release/space-hunter --test-verify payload payload.sig t.der
+          printf x >> payload
+          if ./target/release/space-hunter --test-verify payload payload.sig t.der; then echo "a tampered file was accepted"; exit 1; fi
+          rm -f t.pem t.der payload payload.sig
+      - name: Make the AppImage
+        working-directory: linux
+        run: |
+          set -eu
+          mkdir -p AppDir/usr/bin
+          cp target/release/space-hunter AppDir/usr/bin/
+          cp ../mac/assets/AppIcon.iconset/icon_256x256.png AppDir/space-hunter.png
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Space Hunter' 'Comment=Find what fills your disk and clean it safely' \
+            'Exec=space-hunter' 'Icon=space-hunter' 'Categories=System;Utility;' 'Terminal=false' > AppDir/space-hunter.desktop
+          ln -sf usr/bin/space-hunter AppDir/AppRun
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir SpaceHunter-x86_64.AppImage
+          ls -l SpaceHunter-x86_64.AppImage
+      - uses: actions/upload-artifact@v5
+        with:
+          name: SpaceHunter-linux
+          path: linux/SpaceHunter-x86_64.AppImage
       - uses: actions/upload-artifact@v5
         with:
           name: SpaceHunter-linux-preview
@@ -195,10 +224,20 @@ jobs:
             linux/screenshot-*.png
             linux/Cargo.lock
 
+  nix:
+    name: Nix build (flake.nix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@v16
+      - name: nix build
+        run: nix build -L .#default && ls -l result/bin
+
   release:
     name: Publish the release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [mac, windows]
+    needs: [mac, windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -211,6 +250,7 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           path: dist
+          pattern: SpaceHunter-{windows,mac,linux}
           merge-multiple: true
       - name: Sign both apps with the release key
         env:
@@ -223,7 +263,7 @@ jobs:
           openssl rsa -in key.pem -RSAPublicKey_out -outform DER 2>/dev/null | cmp -s - update-key/update-key.der \
             || { rm -f key.pem pub.pem; echo "RELEASE_SIGNING_KEY doesn't match update-key/update-key.der"; exit 1; }
           cd dist
-          for f in SpaceHunter.exe SpaceHunter-mac.zip; do
+          for f in SpaceHunter.exe SpaceHunter-mac.zip SpaceHunter-x86_64.AppImage; do
             openssl dgst -sha256 -sign ../key.pem -out "$f.sig" "$f"
             openssl dgst -sha256 -verify ../pub.pem -signature "$f.sig" "$f"
           done
@@ -239,4 +279,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "Space Hunter ${GITHUB_REF_NAME#v}" --notes-file notes.md \
-            dist/SpaceHunter.exe dist/SpaceHunter.exe.sig dist/SpaceHunter-mac.zip dist/SpaceHunter-mac.zip.sig
+            dist/SpaceHunter.exe dist/SpaceHunter.exe.sig dist/SpaceHunter-mac.zip dist/SpaceHunter-mac.zip.sig \
+            dist/SpaceHunter-x86_64.AppImage dist/SpaceHunter-x86_64.AppImage.sig
