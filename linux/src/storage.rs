@@ -187,9 +187,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
     pl.append(&place_lbl); pl.append(&label("\u{25BE}", "drive-text"));
     place_btn.set_child(Some(&pl)); place_btn.set_size_request(320, -1);
     keys.append(&place_btn);
-    keys.append(&hspacer());
-    let open_files = key("open in files", &[]);
-    keys.append(&open_files);
+    let open_files = key("open in files", &[]);   // sits in the path bar, beside the folder it opens
     v.append(&keys);
     let pop = gtk::Popover::new(); pop.set_parent(&place_btn); pop.set_has_arrow(false);
     let pop_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -200,7 +198,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
     let back = key("\u{2190}  back", &[]);
     let crumbs = gtk::Box::new(gtk::Orientation::Horizontal, 2); crumbs.set_hexpand(true);
     let add_here = key("+ add this folder", &[]);
-    pb.append(&back); pb.append(&crumbs); pb.append(&add_here);
+    pb.append(&back); pb.append(&crumbs); pb.append(&add_here); pb.append(&open_files);
     v.append(&pb);
     // the block chart
     let chart = gtk::DrawingArea::new(); chart.set_content_height(230);

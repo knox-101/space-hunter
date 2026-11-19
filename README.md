@@ -28,6 +28,10 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
 
 ![The Storage map](docs/screenshots/windows-space-map.png)
 
+The same app on Linux (and on Mac), with the same names, look and features:
+
+![Space Hunter on Linux](docs/screenshots/linux-main.png)
+
 ## Safe by design
 
 - Files in use, or changed more recently than an item's age setting, are skipped, never forced.

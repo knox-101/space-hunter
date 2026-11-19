@@ -47,17 +47,16 @@ namespace SpaceHunter
             headWrap.Controls.Add(head);
             var keys = new Panel { Dock = DockStyle.Top, Height = Theme.D(60), BackColor = Theme.Chassis };
             driveKey.Location = Theme.P(18, 12);
-            keys.Controls.Add(driveKey); keys.Controls.Add(openKey);   // going up lives in the path bar, right above the chart
-            keys.Resize += (s, e) => openKey.Location = new Point(keys.Width - openKey.Width - Theme.D(18), Theme.D(12));
+            keys.Controls.Add(driveKey);   // going up and "open in Explorer" live in the path bar, beside the folder they act on
             pathBar.Height = Theme.D(46);
             hint.Dock = DockStyle.Bottom; hint.Height = Theme.D(30); hint.Padding = Theme.Pad(20, 7, 0, 0); hint.Font = Theme.Sans(9f); hint.ForeColor = Theme.Muted; hint.UseMnemonic = false;
-            hint.Text = "“Add to cleanup list” puts a folder in Personal & work items, unticked. Nothing here deletes anything.";
+            hint.Text = "“Add to list” puts a folder or file in Personal & work items, unticked. Nothing here deletes anything.";
             list.Dock = DockStyle.Fill;
             Controls.Add(list); Controls.Add(map); Controls.Add(pathBar); Controls.Add(keys); Controls.Add(headWrap); Controls.Add(hint);
 
             driveKey.Click += (s, e) => OpenDrives();
             upKey.Click += (s, e) => { if (cur != null && cur.Parent != null) Go(cur.Parent); };
-            openKey.Click += (s, e) => { if (cur != null) try { Process.Start("explorer.exe", "\"" + cur.Path + "\""); } catch { } };
+            pathBar.OpenHere += (s, e) => { if (cur != null) try { Process.Start("explorer.exe", "\"" + cur.Path + "\""); } catch { } };
             list.Open += (s, e) => Go((FolderNode)s);
             map.Open += (s, e) => Go((FolderNode)s);
             pathBar.Navigate += (s, e) => Go((FolderNode)s);
@@ -524,9 +523,11 @@ namespace SpaceHunter
             Invalidate();
         }
         bool canAdd; public bool IsAdded;
-        public event EventHandler AddHere;
+        public event EventHandler AddHere, OpenHere;
+        // "Open in Explorer" at the right of the trail, for the folder you're looking at
+        RectangleF OpenKey() { return new RectangleF(LW - 18 - 158, 7, 158, 30); }
         // "+ Add this folder" at the right, for a folder you've opened (so you don't have to go back to add it)
-        RectangleF AddKey() { return new RectangleF(LW - 18 - 160, 7, 160, 30); }
+        RectangleF AddKey() { return new RectangleF(OpenKey().X - 8 - 160, 7, 160, 30); }
         bool ShowAdd { get { return node != null && (canAdd || IsAdded); } }
 
         RectangleF Back() { return new RectangleF(18, 7, 92, 30); }
@@ -537,6 +538,7 @@ namespace SpaceHunter
             float x = X(e), y = Y(e); int h = -1;
             if (CanGoBack && Back().Contains(x, y)) h = 0;
             else if (ShowAdd && AddKey().Contains(x, y)) h = 1000;
+            else if (node != null && OpenKey().Contains(x, y)) h = 1001;
             else for (int i = 0; i < hits.Count; i++) if (hits[i].Key.Contains(x, y)) h = i + 1;
             if (h != hover) { hover = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
         }
@@ -547,6 +549,7 @@ namespace SpaceHunter
             float x = X(e), y = Y(e);
             if (CanGoBack && Back().Contains(x, y)) { Navigate(node.Parent, EventArgs.Empty); return; }
             if (ShowAdd && AddKey().Contains(x, y)) { if (AddHere != null) AddHere(this, EventArgs.Empty); return; }
+            if (OpenKey().Contains(x, y)) { if (OpenHere != null) OpenHere(this, EventArgs.Empty); return; }
             foreach (var h in hits) if (h.Key.Contains(x, y)) { Navigate(h.Value, EventArgs.Empty); return; }
         }
 
@@ -571,7 +574,14 @@ namespace SpaceHunter
 
             // the trail: drive > folder > folder; a long trail keeps the drive and the last folders
             var chain = new List<FolderNode>(); for (var n = node; n != null; n = n.Parent) chain.Insert(0, n);
-            float x = b.Right + 16, maxX = LW - 18 - (ShowAdd ? 176 : 0), y = 13;
+            float x = b.Right + 16, maxX = OpenKey().X - 16 - (ShowAdd ? 168 : 0), y = 13;
+            {
+                var o = OpenKey();
+                using (var p = Theme.Round(new RectangleF(o.X, o.Y + 2, o.Width, o.Height), 4)) using (var br = new SolidBrush(Theme.KeyShadow)) g.FillPath(br, p);
+                using (var p = Theme.Round(o, 4)) using (var br = new SolidBrush(hover == 1001 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
+                using (var br = new SolidBrush(Theme.Ink)) using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                    g.DrawString("OPEN IN EXPLORER", fKey, br, o, sf);
+            }
             if (ShowAdd)
             {
                 var a = AddKey();

@@ -1597,7 +1597,6 @@ struct FinderView: View {
                 .disabled(scanner.running)
                 .anchorPreference(key: DriveKeyAnchor.self, value: .bounds) { $0 }
                 Spacer()
-                Button("Show in Finder") { if let c = current { NSWorkspace.shared.open(URL(fileURLWithPath: c.path)) } }.buttonStyle(KeyStyle()).disabled(current == nil)
             }
             if let c = current {
                 let isAdded = added.contains(c.path) || Custom.all.contains(c.path)
@@ -1622,7 +1621,7 @@ struct FinderView: View {
             } else {
                 Spacer()
             }
-            Text("\u{201C}Add to cleanup list\u{201D} puts a folder in Personal & work items, unticked. Nothing here deletes anything.")
+            Text("\u{201C}Add to list\u{201D} puts a folder or file in Personal & work items, unticked. Nothing here deletes anything.")
                 .font(Theme.sans(12)).foregroundColor(Theme.muted)
         }
         .padding(18).frame(minWidth: 760, minHeight: 520).background(Theme.chassis)
@@ -1735,6 +1734,8 @@ struct PathBar: View {
             if canAdd || isAdded {
                 Button(isAdded ? "Added  ·  remove" : "+ Add this folder") { toggle() }.buttonStyle(KeyStyle(toggled: isAdded))
             }
+            // open the folder you're looking at, beside its name in the trail
+            Button("Show in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: node.path)) }.buttonStyle(KeyStyle())
         }
     }
     func trail() -> [FolderNode] { var c: [FolderNode] = []; var n: FolderNode? = node; while let x = n { c.insert(x, at: 0); n = x.parent }; return c }
