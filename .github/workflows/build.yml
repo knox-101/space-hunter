@@ -85,12 +85,15 @@ jobs:
   linux:
     name: Linux app (preview)
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - name: Install GTK 4 and a virtual screen
         run: |
+          # skip the manual-page index rebuild, which can stall package installs on these machines for many minutes
+          sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -q
-          sudo apt-get install -y -q libgtk-4-dev xvfb imagemagick
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-dev xvfb xauth imagemagick
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: linux
