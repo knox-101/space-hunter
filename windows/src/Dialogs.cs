@@ -251,7 +251,9 @@ namespace SpaceHunter
                 {
                     index = sel.IndexOf(sys[0]);
                     cnt.Current = "Waiting for Windows to allow cleaning its system folders...";
-                    summary.Add(RunSystemHelper(sys));
+                    string sr = RunSystemHelper(sys);
+                    summary.Add(sr);
+                    lock (results) results.Add(sr);
                 }
                 Engine.Log((cnt.Cancel ? "STOPPED " : "CLEANED ") + Engine.Fmt(cnt.Bytes) + ", " + cnt.Files.ToString("N0") + " files; " +
                            (cnt.RecycledBytes > 0 ? Engine.Fmt(cnt.RecycledBytes) + " to Recycle Bin; " : "") + "skipped " +
@@ -304,16 +306,14 @@ namespace SpaceHunter
             }
             if (done && tick.Enabled && feed.IsEmpty)
             {
-                // the list becomes a plain summary; every single file is still in the log (Open log file)
+                // a plain summary on top; every file and every note stays below it
                 lock (results)
                     if (results.Count > 0)
                     {
-                        log.BeginUpdate(); log.Items.Clear();
-                        log.Items.Add("What was cleaned");
-                        log.Items.Add("");
-                        foreach (var r in results) log.Items.Add(r);
-                        log.Items.Add("");
-                        log.Items.Add("Every file is listed in the log: press Open log file.");
+                        var top = new List<string> { "What was cleaned", "" };
+                        top.AddRange(results); top.Add(""); top.Add("Every file:");
+                        log.BeginUpdate();
+                        for (int k = top.Count - 1; k >= 0; k--) log.Items.Insert(0, top[k]);
                         log.TopIndex = 0; log.EndUpdate();
                     }
                 tick.Stop(); clock.Stop();

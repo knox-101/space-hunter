@@ -226,6 +226,7 @@ namespace SpaceHunter
             if (w.Contains("another account")) return "Another account's files";
             if (w.Contains("browser")) return "Browser profile";
             if (w.Contains("windows or installed")) return "Windows or an installed app";
+            if (w.Contains("windows' own")) return "Windows settings";
             if (w.Contains("settings") || w.Contains("keys")) return "App settings";
             if (w.Contains("own files") || w.Contains("personal") || w.Contains("profile")) return "Your own files";
             if (w.Contains("protected")) return "Protected";

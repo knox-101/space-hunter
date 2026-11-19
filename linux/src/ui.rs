@@ -911,20 +911,25 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         for d in &unknown { u.dir_sizes.borrow_mut().insert(d.clone(), u64::MAX); }   // "being measured"
         let (tx, rx) = mpsc::channel::<(PathBuf, u64)>();
         std::thread::spawn(move || for d in unknown {
+            use std::os::unix::fs::MetadataExt;
+            let dev = std::fs::symlink_metadata(&d).map(|m| m.dev()).unwrap_or(0);
             let mut sum = 0u64; let mut st = vec![d.clone()];
             while let Some(x) = st.pop() {
                 if let Ok(rd) = std::fs::read_dir(&x) { for e in rd.flatten() { if let Ok(m) = std::fs::symlink_metadata(e.path()) {
-                    if m.is_dir() { st.push(e.path()); } else if m.is_file() { sum += std::os::unix::fs::MetadataExt::blocks(&m) * 512; } } } }
+                    if m.dev() != dev { continue; }   // never into another disk mounted inside
+                    if m.is_dir() { st.push(e.path()); } else if m.is_file() { sum += m.blocks() * 512; } } } }
             }
             if tx.send((d, sum)).is_err() { break; }
         });
         let uu = u.clone();
+        let asked = u.inside_here.borrow().clone();   // the list that asked; another one open by then isn't redrawn
         glib::timeout_add_local(Duration::from_millis(300), move || {
             let mut any = false;
+            let refresh = |uu: &Rc<Ui>| if *uu.inside_here.borrow() == asked { fill_panel(uu); };
             loop { match rx.try_recv() {
                 Ok((d, sz)) => { uu.dir_sizes.borrow_mut().insert(d, sz); any = true; }
-                Err(mpsc::TryRecvError::Empty) => { if any { fill_panel(&uu); } return glib::ControlFlow::Continue; }
-                Err(_) => { if any { fill_panel(&uu); } return glib::ControlFlow::Break; }
+                Err(mpsc::TryRecvError::Empty) => { if any { refresh(&uu); } return glib::ControlFlow::Continue; }
+                Err(_) => { if any { refresh(&uu); } return glib::ControlFlow::Break; }
             } }
         });
     }
@@ -932,6 +937,7 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
 
 // Measure items in the background, a few at once, and fill the numbers in as they arrive.
 fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
+    if ids.is_none() && !u.st.borrow().cleaning { u.dir_sizes.borrow_mut().clear(); }   // folder sizes are measured again
     let targets: Vec<Cat> = {
         let mut st = u.st.borrow_mut();
         if st.cleaning { return; }

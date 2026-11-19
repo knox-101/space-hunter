@@ -321,7 +321,7 @@ namespace SpaceHunter
             if (Custom.IsSkipped(f.FullName, skipNow)) return;
             DateTime t; long len;
             // the newer of "last changed" and "arrived here": photos copied in today are new, whatever their date
-            try { t = f.LastWriteTime; var made = f.CreationTime; if (made > t) t = made; len = f.Length; } catch { return; }
+            try { t = AgeTime(f); len = f.Length; } catch { return; }
             if (Keep.IsKept(f.FullName)) return;   // on the keep list: never touched, never counted
             if (t >= cutoff) { if (delete) cnt.Skipped++; return; }
             if (!delete) { cnt.Files++; cnt.Bytes += len; return; }
@@ -362,10 +362,18 @@ namespace SpaceHunter
             }
         }
 
+        // A file's age: the newer of "last changed" and "arrived here" (copying or unzipping sets a new creation time), so
+        // photos copied in today count as new, whatever their own date.
+        public static DateTime AgeTime(FileSystemInfo f)
+        {
+            DateTime t = f.LastWriteTime, made = f.CreationTime;
+            return made > t ? made : t;
+        }
+
         static DateTime Newest(DirectoryInfo d, Counter cnt)
         {
-            DateTime n = d.LastWriteTime;
-            Walk(d, f => { try { if (f.LastWriteTime > n) n = f.LastWriteTime; } catch { } }, cnt, new HashSet<string>());
+            DateTime n = AgeTime(d);
+            Walk(d, f => { try { var t = AgeTime(f); if (t > n) n = t; } catch { } }, cnt, new HashSet<string>());
             return n;
         }
 

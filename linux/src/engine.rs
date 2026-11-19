@@ -374,8 +374,8 @@ fn walk_as(root: &Path, exclude: &HashSet<String>, kept: &[String], owner: u32, 
 }
 
 fn newest(dir: &Path) -> SystemTime {
-    let mut n = fs::symlink_metadata(dir).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-    walk(dir, &HashSet::new(), &[], &mut |_, m| { if let Ok(t) = m.modified() { if t > n { n = t; } } });
+    let mut n = fs::symlink_metadata(dir).map(|m| age_time(&m)).unwrap_or(SystemTime::UNIX_EPOCH);
+    walk(dir, &HashSet::new(), &[], &mut |_, m| { let t = age_time(m); if t > n { n = t; } });
     n
 }
 
@@ -412,7 +412,7 @@ fn remove_empty_dirs(root: &Path, keep_root: bool, exclude: &HashSet<String>, ke
     all.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
     let mut emptied = touched.clone();
     for d in all {
-        let old = fs::symlink_metadata(&d).map(|m| m.modified().map(|t| t < cutoff).unwrap_or(false)).unwrap_or(false);
+        let old = fs::symlink_metadata(&d).map(|m| age_time(&m) < cutoff).unwrap_or(false);
         if (emptied.contains(&d) || old) && fs::remove_dir(&d).is_ok() {   // only removes folders that are empty
             if let Some(p) = d.parent() { emptied.insert(p.to_path_buf()); }   // its parent may be empty now too
         }

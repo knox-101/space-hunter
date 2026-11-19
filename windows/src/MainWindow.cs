@@ -1025,7 +1025,7 @@ namespace SpaceHunter
                     foreach (var i in items.OfType<DirectoryInfo>().Where(d => !exclude.Contains(d.Name)).OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase))
                         rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true, Size = -1, Sub = sub });
                 foreach (var f in items.OfType<FileInfo>().Where(f => exts == null || exts.Contains(f.Extension)).OrderByDescending(x => { try { return x.Length; } catch { return 0L; } }))
-                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = f.LastWriteTime, Sub = sub });
+                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = Engine.AgeTime(f), Sub = sub });
             }
             catch { }
         }
@@ -1193,7 +1193,7 @@ namespace SpaceHunter
                         stack.Push(sub); continue;
                     }
                     var f = (FileInfo)i; long len; DateTime t;
-                    try { len = f.Length; t = f.LastWriteTime; } catch { continue; }
+                    try { len = f.Length; t = Engine.AgeTime(f); } catch { continue; }
                     string kind; if (!kindOf.TryGetValue(f.Extension, out kind)) kind = "other files";
                     long v; bytes.TryGetValue(kind, out v); bytes[kind] = v + len; files.TryGetValue(kind, out v); files[kind] = v + 1;
                     total += len; count++;

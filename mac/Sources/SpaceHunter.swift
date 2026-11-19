@@ -174,10 +174,16 @@ enum Engine {
             }
             if v.isRegularFile == true {
                 // the newest of changed, created and added to this folder: photos copied in today are new, whatever their date
-                let t = [v.contentModificationDate, v.creationDate, v.addedToDirectoryDate].compactMap { $0 }.max() ?? .distantPast
+                let t = ageDate(v)
                 body(url, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), t)
             }
         }
+    }
+
+    // A file's age: the newest of changed, created and added to its folder, so photos copied, unzipped or AirDropped
+    // today count as new, whatever their own date.
+    static func ageDate(_ v: URLResourceValues) -> Date {
+        [v.contentModificationDate, v.creationDate, v.addedToDirectoryDate].compactMap { $0 }.max() ?? .distantPast
     }
 
     static func newest(_ dir: URL, cnt: Counter) -> Date {
@@ -189,7 +195,7 @@ enum Engine {
     // Removes the empty folders this clean emptied (touched), and empty folders older than the age rule; a folder a
     // program made a moment ago stays. Never goes into another disk mounted inside.
     static func removeEmptyDirs(_ root: URL, keepRoot: Bool, exclude: Set<String>, kept: [String], cutoff: Date = .distantFuture, touched: Set<String> = []) {
-        let vk: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .volumeIdentifierKey, .contentModificationDateKey, .creationDateKey]
+        let vk: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .volumeIdentifierKey]
         let rootVol = (try? root.resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? NSObject
         var all: [URL] = []
         if let e = fm.enumerator(at: root, includingPropertiesForKeys: vk, options: [], errorHandler: { _, _ in true }) {
@@ -205,11 +211,11 @@ enum Engine {
         var emptied = touched
         for dir in all.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
             guard let c = try? fm.contentsOfDirectory(atPath: dir.path), c.isEmpty || c == [".DS_Store"] else { continue }
-            let v = try? dir.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
-            let old = (v?.contentModificationDate ?? .distantPast) < cutoff && (v?.creationDate ?? .distantPast) < cutoff
+            let v = try? dir.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .addedToDirectoryDateKey])
+            let old = v.map { ageDate($0) < cutoff } ?? false
             if emptied.contains(dir.path) || old {
-                try? fm.removeItem(at: dir)
-                emptied.insert(dir.deletingLastPathComponent().path)   // its parent may be empty now too
+                if c == [".DS_Store"] { try? fm.removeItem(at: dir.appendingPathComponent(".DS_Store")) }
+                if rmdir(dir.path) == 0 { emptied.insert(dir.deletingLastPathComponent().path) }   // only if still empty; its parent may be empty now too
             }
         }
     }
@@ -237,7 +243,7 @@ enum Engine {
             var isDir: ObjCBool = false
             if c.isCustom, fm.fileExists(atPath: root.path, isDirectory: &isDir), !isDir.boolValue {   // a single file you added
                 if let v = try? root.resourceValues(forKeys: Set(keys)), v.isSymbolicLink != true, !Keep.isKept(root.path, kept) {
-                    handle(root, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), v.contentModificationDate ?? .distantPast, cutoff)
+                    handle(root, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), ageDate(v), cutoff)
                 }
                 continue
             }
@@ -250,7 +256,7 @@ enum Engine {
                     let items = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: keys)) ?? []
                     for url in items {
                         guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true, v.isSymbolicLink != true else { continue }
-                        handle(url, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), v.contentModificationDate ?? .distantPast, cutoff)
+                        handle(url, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), ageDate(v), cutoff)
                     }
                 } else {
                     walk(root, exclude: c.exclude, kept: kept, cnt: cnt) { url, s, dd in handle(url, s, dd, cutoff) }
@@ -300,6 +306,7 @@ enum Engine {
     static func calm(_ why: String) -> String {
         let w = why.lowercased()
         if w.contains("space hunter") { return "Space Hunter's own folder" }
+        if w.contains("outside your home") { return "Outside your home folder" }
         if w.contains("settings") || w.contains("sign-in") { return "App settings" }
         if w.contains("macos or installed") { return "macOS or an installed app" }
         if w.contains("own files") || w.contains("personal") || w.contains("home") { return "Your own files" }
@@ -720,8 +727,11 @@ enum Updater {
         var req = URLRequest(url: URL(string: "https://github.com/\(repo)/releases/latest")!, timeoutInterval: 10)
         req.setValue("SpaceHunter-updater", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: req) { _, resp, _ in
-            guard let final = resp?.url?.absoluteString, let r = final.range(of: "/tag/") else { return done(nil) }
-            let tag = String(final[r.upperBound...]).removingPercentEncoding ?? ""
+            let prefix = "/\(repo)/releases/tag/"
+            guard let u = resp?.url, u.host == "github.com", u.scheme == "https", u.path.hasPrefix(prefix) else { return done(nil) }
+            let tag = String(u.path.dropFirst(prefix.count))
+            guard !tag.isEmpty, tag.allSatisfy({ $0.isNumber || $0 == "." || $0 == "v" || $0 == "V" }) else { return done(nil) }
+            let final = "https://github.com" + u.path
             let v = tag.hasPrefix("v") || tag.hasPrefix("V") ? String(tag.dropFirst()) : tag
             guard newer(v, than: current),
                   let zip = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/SpaceHunter-mac.zip"),
@@ -1410,13 +1420,14 @@ struct ProgressSheet: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array((state.cleanDone && !state.results.isEmpty ? ["What was cleaned", ""] + state.results + ["", "Every file is listed in the log: press Open log."] : state.log).enumerated()), id: \.offset) { i, line in
+                        ForEach(Array((state.cleanDone && !state.results.isEmpty ? ["What was cleaned", ""] + state.results + ["", "Every file:"] + state.log : state.log).enumerated()), id: \.offset) { i, line in
                             Text(line).font(Theme.mono(11)).foregroundColor(Theme.ink).lineLimit(1).truncationMode(.middle).id(i)
                         }
                     }.padding(12)
                 }
                 .background(Theme.pane)
                 .onChange(of: state.log.count) { n in if n > 0 { proxy.scrollTo(n - 1, anchor: .bottom) } }
+                .onChange(of: state.cleanDone) { d in if d { proxy.scrollTo(0, anchor: .top) } }   // the summary sits on top
             }
 
             HStack {
@@ -1917,7 +1928,7 @@ struct InsideList: View {
     }
 
     func list(_ dir: String, sub: String?) -> [Entry] {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey, .addedToDirectoryDateKey]
         let items = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: keys)) ?? []
         var dirs: [Entry] = [], files: [Entry] = []
         for u in items {
@@ -1927,7 +1938,7 @@ struct InsideList: View {
                 dirs.append(Entry(id: u.path, name: u.lastPathComponent, dir: true, size: 0, sub: sub))
             } else {
                 if let x = exts, !x.contains(u.pathExtension.lowercased()) { continue }
-                files.append(Entry(id: u.path, name: u.lastPathComponent, dir: false, size: Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), modified: v.contentModificationDate ?? .distantPast, sub: sub))
+                files.append(Entry(id: u.path, name: u.lastPathComponent, dir: false, size: Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), modified: Engine.ageDate(v), sub: sub))
             }
         }
         return dirs.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } + files.sorted { $0.size > $1.size }
@@ -2171,7 +2182,7 @@ enum FolderSummary {
         var newest = Date.distantPast
         var signs: [String] = []
         let kept = Keep.all + Keep.builtIn + Custom.skip
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey, .addedToDirectoryDateKey]
         guard let e = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else { return "" }
         func sign(_ s: String) { if !signs.contains(s) { signs.append(s) } }
         for case let url as URL in e {
@@ -2190,7 +2201,7 @@ enum FolderSummary {
                 continue
             }
             guard v.isRegularFile == true else { continue }
-            let len = Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), t = v.contentModificationDate ?? .distantPast
+            let len = Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), t = Engine.ageDate(v)
             let k = kindOf[url.pathExtension.lowercased()] ?? "other files"
             bytes[k, default: 0] += len; files[k, default: 0] += 1
             total += len; count += 1
