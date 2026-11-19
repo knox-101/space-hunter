@@ -157,6 +157,10 @@ jobs:
           GSK_RENDERER: cairo
         run: |
           mkdir -p "$HOME/sh-shot"; for i in $(seq 1 30); do head -c 300000 /dev/urandom > "$HOME/sh-shot/f$i.tmp"; done
+          # something for Quick clean to find, as on a real PC: old temp files and thumbnails
+          mkdir -p "$HOME/.cache/thumbnails/large" /tmp/sh-old
+          for i in $(seq 1 40); do head -c 900000 /dev/urandom > "$HOME/.cache/thumbnails/large/t$i.png"; head -c 2000000 /dev/urandom > "/tmp/sh-old/build$i.o"; done
+          find /tmp/sh-old -type f -exec touch -d '3 days ago' {} +
           shot() {   # name, then the app's arguments
             name=$1; shift
             xvfb-run -a -s "-screen 0 1280x860x24" sh -c "

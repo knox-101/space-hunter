@@ -64,8 +64,8 @@ window, .chassis { background: #D8D5CE; }
 * { font-family: "Schibsted Grotesk"; }
 .display { background: #121212; border-radius: 7px; padding: 14px 22px 18px 22px; }
 .display-label { color: #B4B1AA; font-weight: 600; font-size: 11pt; }
-.hero { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 50pt; }
-.hero-unit { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 20pt; }
+.hero { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 60pt; }
+.hero-unit { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 24pt; }
 .beside { color: #E9E6DF; font-weight: 600; font-size: 10.5pt; }
 .beside-muted { color: #8A8A86; font-weight: 600; font-size: 10.5pt; }
 .disk { color: #B4B1AA; font-size: 11pt; }
