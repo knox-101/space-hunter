@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Space Hunter (Windows) - Space map: drill down from a drive to whatever is big, see whether the cleanup
+// Space Hunter (Windows) - Storage map: drill down from a drive to whatever is big, see whether the cleanup
 // list already covers it, and add a folder to the cleanup list. Nothing is deleted here.
 using System;
 using System.Collections.Generic;
@@ -19,9 +19,11 @@ namespace SpaceHunter
         readonly CanvasPanel head = new CanvasPanel();
         readonly FolderListView list;
         readonly TreeMapView map;
+        readonly PathBar pathBar = new PathBar { Dock = DockStyle.Top };
         readonly DriveKey driveKey = new DriveKey();
         DrivePicker picker;
         public bool OpenDrivesOnStart;   // test hook
+        public int DrillDepth;           // test hook: open the biggest folder this many levels down
         readonly Key upKey = new Key("up one level"), openKey = new Key("open in explorer");
         readonly Label hint = new Label();
         FolderNode cur; string drive; bool scanning; long target; int sweep;   // target: the drive's used bytes (0 = unknown)
@@ -33,32 +35,44 @@ namespace SpaceHunter
         public FinderForm(List<Category> cats, string start = null)
         {
             startPath = start;
-            Theme.Window(this, "Space Hunter  ·  Space map", 940, 760);
+            Theme.Window(this, "Space Hunter  ·  Storage map", 940, 760);
             MinimumSize = SizeFromClientSize(Theme.Fit(660, 480));
             StartPosition = FormStartPosition.CenterParent;
             list = new FolderListView(cats);
             map = new TreeMapView(cats) { Dock = DockStyle.Top, Height = Theme.D(220) };
-            Resize += (s, e) => map.Height = Math.Max(Theme.D(110), Math.Min(Theme.D(240), (ClientSize.Height - Theme.D(176 + 60 + 30)) / 2));
+            Resize += (s, e) => map.Height = Math.Max(Theme.D(110), Math.Min(Theme.D(240), (ClientSize.Height - Theme.D(176 + 60 + 46 + 30)) / 2));
 
             head.Dock = DockStyle.Top; head.Height = Theme.D(158); head.Draw += PaintHead;
             var headWrap = new Panel { Dock = DockStyle.Top, Height = Theme.D(158 + 18), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
             headWrap.Controls.Add(head);
             var keys = new Panel { Dock = DockStyle.Top, Height = Theme.D(60), BackColor = Theme.Chassis };
             driveKey.Location = Theme.P(18, 12);
-            keys.Controls.Add(driveKey); keys.Controls.Add(upKey); keys.Controls.Add(openKey);
-            keys.Resize += (s, e) => { openKey.Location = new Point(keys.Width - openKey.Width - Theme.D(18), Theme.D(12)); upKey.Location = new Point(openKey.Left - upKey.Width - Theme.D(8), Theme.D(12)); };
+            keys.Controls.Add(driveKey); keys.Controls.Add(openKey);   // going up lives in the path bar, right above the chart
+            keys.Resize += (s, e) => openKey.Location = new Point(keys.Width - openKey.Width - Theme.D(18), Theme.D(12));
+            pathBar.Height = Theme.D(46);
             hint.Dock = DockStyle.Bottom; hint.Height = Theme.D(30); hint.Padding = Theme.Pad(20, 7, 0, 0); hint.Font = Theme.Sans(9f); hint.ForeColor = Theme.Muted; hint.UseMnemonic = false;
-            hint.Text = "“Add to cleanup list” puts a folder in the Caution section, unticked. Nothing here deletes anything.";
+            hint.Text = "“Add to cleanup list” puts a folder in Personal & work items, unticked. Nothing here deletes anything.";
             list.Dock = DockStyle.Fill;
-            Controls.Add(list); Controls.Add(map); Controls.Add(keys); Controls.Add(headWrap); Controls.Add(hint);
+            Controls.Add(list); Controls.Add(map); Controls.Add(pathBar); Controls.Add(keys); Controls.Add(headWrap); Controls.Add(hint);
 
             driveKey.Click += (s, e) => OpenDrives();
             upKey.Click += (s, e) => { if (cur != null && cur.Parent != null) Go(cur.Parent); };
             openKey.Click += (s, e) => { if (cur != null) try { Process.Start("explorer.exe", "\"" + cur.Path + "\""); } catch { } };
             list.Open += (s, e) => Go((FolderNode)s);
             map.Open += (s, e) => Go((FolderNode)s);
-            list.Reveal += (s, e) => { try { Process.Start("explorer.exe", "\"" + ((FolderNode)s).Path + "\""); } catch { } };
-            list.AddedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Added: " + Theme.MidPath(((FolderNode)s).Path, 70) + ". It's on the cleanup list, in Caution, unticked. Click “Added” to undo."; };
+            pathBar.Navigate += (s, e) => Go((FolderNode)s);
+            pathBar.AddHere += (s, e) =>
+            {
+                if (cur == null) return;
+                if (pathBar.IsAdded) { Custom.Remove(cur.Path); hint.Text = "Taken off the cleanup list: " + Theme.MidPath(cur.Path, 70) + "."; }
+                else { Custom.Add(cur.Path); hint.Text = "Added: " + Theme.MidPath(cur.Path, 70) + ". It's on the cleanup list, in Personal & work items, unticked."; }
+                Added = true; pathBar.SetNode(cur);
+            };
+            KeyPreview = true;   // Backspace or Alt+Left: up one level, as in Explorer
+            KeyDown += (s, e) => { if ((e.KeyCode == Keys.Back || (e.Alt && e.KeyCode == Keys.Left)) && cur != null && cur.Parent != null && picker == null) { Go(cur.Parent); e.Handled = true; } };
+            list.Reveal += (s, e) => { var r = (FolderNode)s; try { Process.Start("explorer.exe", (r.IsFile ? "/select,\"" : "\"") + r.Path + "\""); } catch { } };
+            list.Placeholder = "Measuring\u2026 the map and the list appear here.";
+            list.AddedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Added: " + Theme.MidPath(((FolderNode)s).Path, 70) + ". It's on the cleanup list, in Personal & work items, unticked. Click “Added” to undo."; };
             list.RemovedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Taken off the cleanup list: " + Theme.MidPath(((FolderNode)s).Path, 70) + "."; };
             tick.Tick += (s, e) => { sweep++; head.Invalidate(); };
             Shown += (s, e) => StartScan(startPath ?? Path.GetPathRoot(Engine.W));
@@ -73,7 +87,7 @@ namespace SpaceHunter
         void StartScan(string path)
         {
             if (scanning) return;
-            scanning = true; drive = path; cur = null; list.SetNode(null);
+            scanning = true; drive = path; cur = null; list.SetNode(null); map.SetNode(null, 0); pathBar.SetNode(null);
             target = 0;
             try { if (path.TrimEnd('\\').Length <= 2) { var di = new DriveInfo(path); target = di.TotalSize - di.TotalFreeSpace; } } catch { }
             driveKey.Drive = DriveChoice.All().FirstOrDefault(d => (path.TrimEnd('\\') + "\\").StartsWith(d.Root, StringComparison.OrdinalIgnoreCase));
@@ -88,6 +102,7 @@ namespace SpaceHunter
                     BeginInvoke((Action)(() =>
                     {
                         scanning = false; tick.Stop(); Go(n); driveKey.Enabled = true;
+                        for (int d = 0; d < DrillDepth && cur.Kids.Count > 0; d++) Go(cur.Kids[0]);
                         if (OpenDrivesOnStart) { OpenDrivesOnStart = false; OpenDrives(); return; }
                         if (SnapshotPath != null) { Program.Snap(this, SnapshotPath); Close(); }
                     }));
@@ -118,7 +133,8 @@ namespace SpaceHunter
 
         void Go(FolderNode n)
         {
-            cur = n; list.SetNode(n); map.SetNode(n, FreeHere());
+            cur = n; list.SetNode(n); map.SetNode(n, FreeHere()); pathBar.SetNode(n);
+            map.Visible = n.Kids.Count(k => k.Size > 0) + (n.OwnSize > 0 ? 1 : 0) + (FreeHere() > 0 ? 1 : 0) > 1;   // a single block says nothing
             upKey.Enabled = n.Parent != null; openKey.Enabled = true; head.Invalidate();
         }
 
@@ -136,16 +152,16 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             string phase = BigFolders.Phase;
             bool waiting = scanning && (phase == "starting" || phase == "sorting" || BigFolders.Scanned == 0);
-            string label = !scanning ? "Space map  ·  just looking, nothing is deleted here"
-                         : "Space map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
+            string label = !scanning ? "Storage map  ·  just looking, nothing is deleted here"
+                         : "Storage map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
                                                                      : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
-            if (waiting)   // a small turning arc at the top right: something is happening before the numbers start
+            if (scanning)   // a large turning ring at the right for the whole scan: impossible to miss
             {
-                float cx = W - pad - 9, cy = 23, rr = 8;
-                using (var pen = new Pen(Theme.DisplayTrack, 2.4f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
-                using (var pen = new Pen(Theme.Orange, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                    g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (sweep * 24) % 360, 100);
+                float rr = 26, cx = W - pad - rr - 6, cy = H / 2 - 4;
+                using (var pen = new Pen(Theme.DisplayTrack, 5f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
+                using (var pen = new Pen(Theme.Orange, 5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (sweep * 18) % 360, 110);
             }
             if (cur != null)
             {
@@ -164,7 +180,7 @@ namespace SpaceHunter
             {
                 // a big running count and a bar, so the scan is impossible to miss
                 using (var b = new SolidBrush(Theme.Orange)) g.DrawString(BigFolders.Scanned.ToString("N0") + " FILES", fBig, b, pad - 5, 28);
-                float bx = pad, by = 98, bw = W - 2 * pad, bh = 14;
+                float bx = pad, by = 98, bw = W - 2 * pad - 80, bh = 14;   // leaves room for the ring
                 using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, bx, by, bw, bh);
                 if (target > 0)
                 {
@@ -200,6 +216,13 @@ namespace SpaceHunter
         Font fName = Theme.CSemi(10.5f), fSize = Theme.CSemi(10.5f), fSub = Theme.CSans(8.75f), fChip = Theme.CSemi(8.25f);
 
         public FolderListView(List<Category> cats) { this.cats = cats ?? new List<Category>(); }
+        public string Placeholder;   // shown while there's nothing to list yet
+
+        static string FileKind(string name)
+        {
+            string e = Path.GetExtension(name).TrimStart('.').ToUpperInvariant();
+            return e.Length == 0 ? "file" : e + " file";
+        }
 
         public void SetNode(FolderNode n)
         {
@@ -207,10 +230,23 @@ namespace SpaceHunter
             if (n != null)
             {
                 rows.AddRange(n.Kids.Where(k => k.Size > 0));
-                if (n.OwnSize > 0) { rows.Add(new FolderNode { Name = "Files directly in this folder", Path = n.Path, Size = n.OwnSize, Files = n.OwnFiles }); rows.Sort((a, b) => b.Size.CompareTo(a.Size)); }
+                // the files directly in this folder, one row each, under the folders (read now, only for this folder)
+                if (n.OwnFiles > 0)
+                {
+                    var fl = new List<FolderNode>();
+                    try
+                    {
+                        foreach (var f in new DirectoryInfo(n.Path).GetFiles())
+                            if ((f.Attributes & FileAttributes.ReparsePoint) == 0) fl.Add(new FolderNode { Name = f.Name, Path = f.FullName, Size = f.Length, Files = 1, IsFile = true });
+                    }
+                    catch { }
+                    fl.Sort((a, b) => b.Size.CompareTo(a.Size));
+                    rows.AddRange(fl.Take(400));
+                    if (fl.Count > 400) rows.Add(new FolderNode { Name = "+ " + (fl.Count - 400).ToString("N0") + " smaller files", Path = n.Path, Size = fl.Skip(400).Sum(f => f.Size), Files = fl.Count - 400 });
+                }
                 // folders you added earlier show as "added", so they can be taken off again here
                 var mine = new HashSet<string>(Custom.All.Select(p => p.TrimEnd(Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
-                foreach (var r in rows.Where(r => r.Parent != null))
+                foreach (var r in rows.Where(r => r.Parent != null || r.IsFile))
                 {
                     if (mine.Contains(r.Path.TrimEnd(Path.DirectorySeparatorChar))) { added.Add(r); continue; }
                     bool ins; var c = Engine.Coverage(r.Path, cats, out ins);
@@ -234,7 +270,7 @@ namespace SpaceHunter
 
         // the "add to cleanup list" key sits between the name and the bar
         RectangleF Chip(int i) { float w = LW - 14; return new RectangleF(w * 0.38f, i * RowH - scroll + 12, 162, 26); }
-        bool CanAddRow(FolderNode r) { return r.Parent != null && !added.Contains(r) && !refusal.ContainsKey(r) && !(inside.ContainsKey(r) && inside[r]); }
+        bool CanAddRow(FolderNode r) { return (r.Parent != null || r.IsFile) && !added.Contains(r) && !refusal.ContainsKey(r) && !(inside.ContainsKey(r) && inside[r]); }
         bool HasChip(FolderNode r) { return CanAddRow(r) || added.Contains(r); }   // "added" chips can be clicked to undo
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -274,7 +310,12 @@ namespace SpaceHunter
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = Begin(e); g.Clear(Theme.Chassis);
-            if (node == null) return;
+            if (node == null)
+            {
+                if (Placeholder != null) using (var b = new SolidBrush(Theme.Muted)) using (var sf = new StringFormat { Alignment = StringAlignment.Center })
+                    g.DrawString(Placeholder, Theme.CSemi(11f), b, new RectangleF(0, LH / 2 - 40, LW, 30), sf);
+                return;
+            }
             float w = LW - 14;
             int first = (int)(scroll / RowH), last = Math.Min(rows.Count - 1, (int)((scroll + LH) / RowH));
             long max = Math.Max(1, node.Size);
@@ -283,10 +324,10 @@ namespace SpaceHunter
             {
                 var r = rows[i]; float top = i * RowH - scroll;
                 if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 10, top, w - 6, RowH - 1);
-                bool own = r.Parent == null;
+                bool own = r.Parent == null && !r.IsFile;   // the folder's own summary rows
                 float nameW = w * 0.38f - 30;
                 using (var b = new SolidBrush(own ? Theme.Soft : Theme.Ink)) g.DrawString(r.Name, fName, b, new RectangleF(22, top + 7, nameW, 20), nowrap);
-                string sub = r.Files.ToString("N0") + (r.Files == 1 ? " file" : " files") + (r.Denied ? "  ·  partly unreadable" : "");
+                string sub = r.IsFile ? FileKind(r.Name) : r.Files.ToString("N0") + (r.Files == 1 ? " file" : " files") + (r.Denied ? "  ·  partly unreadable" : "");
                 if (!own && cover.ContainsKey(r)) sub = (inside[r] ? "Cleaned by: " : "Has cleanup items: ") + cover[r];
                 else if (!own && refusal.ContainsKey(r) && !added.Contains(r)) sub = "Can't add: " + refusal[r];
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(sub, fSub, b, new RectangleF(22, top + 27, nameW, 18), nowrap);
@@ -306,7 +347,7 @@ namespace SpaceHunter
                     using (var p = Theme.Round(new RectangleF(chip.X, chip.Y + 2, chip.Width, chip.Height), 4)) using (var b = new SolidBrush(Theme.KeyShadow)) g.FillPath(b, p);
                     using (var p = Theme.Round(chip, 4)) using (var b = new SolidBrush(hot ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(b, p);
                     using (var b = new SolidBrush(Theme.Ink)) using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                        g.DrawString("+ ADD TO CLEANUP LIST", fChip, b, chip, sf);
+                        g.DrawString("+ ADD TO LIST", fChip, b, chip, sf);
                 }
 
                 // bar: share of the current folder
@@ -456,10 +497,116 @@ namespace SpaceHunter
                     using (var br = new SolidBrush(soft)) g.DrawString(Engine.Fmt(b.Size), fSize, br, new RectangleF(r.X + 8, r.Y + 23, r.Width - 16, 16), nowrap);
                 }
             }
+            if (blocks.Count == 0) return;   // nothing to explain until the chart is there
             string cap = "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  hatched: free space" : "");
             if (hover >= 0) { var hb = blocks[hover]; cap = hb.Name + "  ·  " + Engine.Fmt(hb.Size) + (hb.Marked ? "  ·  part of it is already a cleanup item" : "") + (CanOpen(hb) ? "  ·  click to go inside" : ""); }
             using (var br = new SolidBrush(Theme.Muted))
                 g.DrawString(cap, fCap, br, new RectangleF(20, LH - Caption + 4, LW - 40, 16), nowrap);
+        }
+    }
+}
+
+namespace SpaceHunter
+{
+    // Where you are in the Storage map: a Back key, then every folder from the drive down, each one clickable.
+    class PathBar : Canvas
+    {
+        FolderNode node; int hover = -1;
+        readonly List<KeyValuePair<RectangleF, FolderNode>> hits = new List<KeyValuePair<RectangleF, FolderNode>>();
+        public event EventHandler Navigate;
+        Font fKey = Theme.CSemi(9.25f), fCrumb = Theme.CSans(10f), fNow = Theme.CBold(10f);
+
+        public void SetNode(FolderNode n)
+        {
+            node = n; hover = -1;
+            string why; canAdd = n != null && Engine.CanAdd(n.Path, out why);
+            IsAdded = n != null && Custom.All.Any(p => string.Equals(p.TrimEnd('\\'), n.Path.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
+            Invalidate();
+        }
+        bool canAdd; public bool IsAdded;
+        public event EventHandler AddHere;
+        // "+ Add this folder" at the right, for a folder you've opened (so you don't have to go back to add it)
+        RectangleF AddKey() { return new RectangleF(LW - 18 - 160, 7, 160, 30); }
+        bool ShowAdd { get { return node != null && (canAdd || IsAdded); } }
+
+        RectangleF Back() { return new RectangleF(18, 7, 92, 30); }
+        bool CanGoBack { get { return node != null && node.Parent != null; } }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            float x = X(e), y = Y(e); int h = -1;
+            if (CanGoBack && Back().Contains(x, y)) h = 0;
+            else if (ShowAdd && AddKey().Contains(x, y)) h = 1000;
+            else for (int i = 0; i < hits.Count; i++) if (hits[i].Key.Contains(x, y)) h = i + 1;
+            if (h != hover) { hover = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        }
+        protected override void OnMouseLeave(EventArgs e) { if (hover != -1) { hover = -1; Invalidate(); } }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            if (Navigate == null || node == null) return;
+            float x = X(e), y = Y(e);
+            if (CanGoBack && Back().Contains(x, y)) { Navigate(node.Parent, EventArgs.Empty); return; }
+            if (ShowAdd && AddKey().Contains(x, y)) { if (AddHere != null) AddHere(this, EventArgs.Empty); return; }
+            foreach (var h in hits) if (h.Key.Contains(x, y)) { Navigate(h.Value, EventArgs.Empty); return; }
+        }
+
+        string NameOf(FolderNode n) { return n.Parent == null ? (n.Path.TrimEnd('\\').Length <= 2 ? n.Path.TrimEnd('\\') : Theme.MidPath(n.Path, 24)) : n.Name; }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = Begin(e); g.Clear(Theme.Chassis); hits.Clear();
+            if (node == null) return;
+            // the Back key, drawn like the other keys (flat and grey at the top of the drive)
+            var b = Back(); bool on = CanGoBack;
+            if (on) using (var p = Theme.Round(new RectangleF(b.X, b.Y + 2, b.Width, b.Height), 4)) using (var br = new SolidBrush(Theme.KeyShadow)) g.FillPath(br, p);
+            using (var p = Theme.Round(b, 4)) using (var br = new SolidBrush(!on ? Color.FromArgb(0xD0, 0xCD, 0xC6) : hover == 0 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
+            Color ink = on ? Theme.Ink : Theme.Disabled;
+            using (var pen = new Pen(ink, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            {
+                float ax = b.X + 14, ay = b.Y + b.Height / 2;
+                g.DrawLines(pen, new[] { new PointF(ax + 5, ay - 5), new PointF(ax, ay), new PointF(ax + 5, ay + 5) });
+                g.DrawLine(pen, ax, ay, ax + 12, ay);
+            }
+            using (var br = new SolidBrush(ink)) g.DrawString("BACK", fKey, br, b.X + 36, b.Y + 6);
+
+            // the trail: drive > folder > folder; a long trail keeps the drive and the last folders
+            var chain = new List<FolderNode>(); for (var n = node; n != null; n = n.Parent) chain.Insert(0, n);
+            float x = b.Right + 16, maxX = LW - 18 - (ShowAdd ? 176 : 0), y = 13;
+            if (ShowAdd)
+            {
+                var a = AddKey();
+                using (var p = Theme.Round(new RectangleF(a.X, a.Y + 2, a.Width, a.Height), 4)) using (var br = new SolidBrush(IsAdded ? Color.Black : Theme.KeyShadow)) g.FillPath(br, p);
+                using (var p = Theme.Round(a, 4)) using (var br = new SolidBrush(IsAdded ? (hover == 1000 ? Theme.Muted : Theme.Ink) : hover == 1000 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
+                using (var br = new SolidBrush(IsAdded ? Theme.DisplayInk : Theme.Ink)) using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                    g.DrawString(IsAdded ? (hover == 1000 ? "REMOVE FROM LIST" : "ADDED") : "+ ADD THIS FOLDER", fKey, br, a, sf);
+            }
+            var w = chain.Select((n, i) => g.MeasureString(NameOf(n), i == chain.Count - 1 ? fNow : fCrumb).Width + 26).ToList();
+            int skipTo = 1;
+            while (skipTo < chain.Count - 1 && x + w[0] + 30 + w.Skip(skipTo).Sum() > maxX) skipTo++;
+            for (int i = 0; i < chain.Count; i++)
+            {
+                if (i > 0 && i < skipTo)
+                {
+                    if (i == 1) { using (var br = new SolidBrush(Theme.Soft)) g.DrawString("\u2026", fCrumb, br, x, y); x += 16; Chevron(g, ref x, y); }
+                    continue;
+                }
+                bool last = i == chain.Count - 1;
+                var f = last ? fNow : fCrumb; string name = NameOf(chain[i]); var sz = g.MeasureString(name, f);
+                var r = new RectangleF(x - 4, y - 4, sz.Width + 8, sz.Height + 8);
+                bool hot = false;
+                if (!last) { hits.Add(new KeyValuePair<RectangleF, FolderNode>(r, chain[i])); hot = hover == hits.Count; }
+                if (hot) using (var p = Theme.Round(r, 3)) using (var br = new SolidBrush(Theme.Key)) g.FillPath(br, p);
+                using (var br = new SolidBrush(last ? Theme.Ink : hot ? Theme.Ink : Theme.Muted)) g.DrawString(name, f, br, x, y);
+                x += sz.Width + 2;
+                if (!last) Chevron(g, ref x, y);
+            }
+        }
+
+        void Chevron(Graphics g, ref float x, float y)
+        {
+            using (var pen = new Pen(Theme.Soft, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                g.DrawLines(pen, new[] { new PointF(x + 4, y + 5), new PointF(x + 8, y + 9.5f), new PointF(x + 4, y + 14) });
+            x += 20;
         }
     }
 }

@@ -14,15 +14,16 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · first-run steps are 
 - **Shows every place separately**: temp files, Windows leftovers, browser and app caches, developer caches (npm,
   pip, Gradle, Xcode…), AI tool leftovers (e.g. Claude Code and Codex history, downloaded models), old installers.
   Only apps you actually have get a row.
-- **Sorts them by risk**: **Safe to clean** (rebuilds or isn't needed, ticked at start), **Review first** (comes back by
-  re-downloading) and **Caution** (can hold your history or work).
+- **Sorts them by risk**: **Quick clean** (caches and leftovers that rebuild, ticked at start), **Big caches &
+  history** (big caches that download again, or old history) and **Personal & work items** (can hold your work or
+  history; check before cleaning).
 - **Explains each one**: click a row to see what it is, what gets deleted, whether it's safe and what happens after,
   and choose "only files older than N days" or "everything".
 - **Asks before cleaning**, with a choice of **Delete** or **Recycle Bin / Trash**, and shows each file as it goes.
-- **Space map**: see how your whole disk is split up, folder by folder, on any drive (about 10 seconds for a full
+- **Storage map**: see how your whole disk is split up, folder by folder, on any drive (about 10 seconds for a full
   Windows drive), and add a cache folder to the cleanup list from there.
 
-![The Space map](docs/screenshots/windows-space-map.png)
+![The Storage map](docs/screenshots/windows-space-map.png)
 
 ## Safe by design
 
