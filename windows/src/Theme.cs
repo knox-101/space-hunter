@@ -124,13 +124,14 @@ namespace SpaceHunter
         public static Font CMono(float s) { return Make(mono, s / A, FontStyle.Regular); }
         public static Font CMonoSemi(float s) { return Make(monoSemi, s / A, FontStyle.Regular); }
 
-        public static string TierName(Level l) { return l == Level.Safe ? "Safe to clean" : l == Level.Review ? "Review first" : "Caution"; }
-        public static string TierDesc(Level l) { return l == Level.Safe ? "Rebuilds or isn't needed" : l == Level.Review ? "Re-downloads or history" : "Can hold your history or work"; }
-        // one plain line under each section's heading, so nobody has to guess what "safe" means here
+        // Names a newcomer can act on without opening anything: the first is the no-worry clean.
+        public static string TierName(Level l) { return l == Level.Safe ? "Quick clean" : l == Level.Review ? "History & re-downloads" : "Personal & work items"; }
+        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Comes back by downloading, or is history" : "Can hold your work or history. Check first"; }
+        // one plain line under each section's heading, so nobody has to guess what's in it
         public static string TierExplain(Level l)
         {
-            return l == Level.Safe ? "Caches, temp files and leftovers that apps and Windows rebuild or no longer need. Your files, logins and passwords aren't touched. Some things load a little slower once."
-                 : l == Level.Review ? "These come back by downloading again, or they're history you might still want. Read each one before you tick it."
+            return l == Level.Safe ? "Caches, temp files and leftovers that apps and Windows rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once."
+                 : l == Level.Review ? "Things that come back by downloading them again, or history you might still want. Read each one before you tick it."
                  : "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes.";
         }
 

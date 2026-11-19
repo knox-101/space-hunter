@@ -62,12 +62,18 @@ enum Keep {   // protected folders: never shown, counted or cleaned
     static func add(_ p: String) { var a = all; if !a.contains(p) { a.append(p) }; Store2.write("keep.txt", a) }
     static func remove(_ p: String) { Store2.write("keep.txt", all.filter { $0 != p }) }
     static func isKept(_ path: String, _ list: [String]) -> Bool { list.contains { path == $0 || path.hasPrefix($0 + "/") } }
+    // Space Hunter itself (the app and its settings folder): always protected, and can't be taken off the list
+    static var builtIn: [String] { [Bundle.main.bundlePath, Store2.dir.path] }
 }
 
 enum Custom {   // folders added to the cleanup list from the Space map
     static var all: [String] { Store2.lines("your-folders.txt") }
     static func add(_ p: String) { var a = all; if !a.contains(p) { a.append(p) }; Store2.write("your-folders.txt", a) }
     static func remove(_ p: String) { Store2.write("your-folders.txt", all.filter { $0 != p }) }
+    // inside a folder you added: the files and sub-folders you unticked, which that item never cleans
+    static var skip: [String] { Store2.lines("your-folders-skip.txt") }
+    static func isSkipped(_ path: String, _ list: [String]) -> Bool { list.contains { path == $0 || path.hasPrefix($0 + "/") } }
+    static func setSkipped(_ p: String, _ on: Bool) { var a = skip.filter { $0 != p }; if on { a.append(p) }; Store2.write("your-folders-skip.txt", a) }
 }
 
 enum Engine {
@@ -113,7 +119,7 @@ enum Engine {
             c.isCustom = true
             c.short = "Everything inside goes; the folder itself stays"
             c.what = "A folder you added from the Space map: " + p
-            c.deletes = "Every file inside it (older than the age you set) and the sub-folders that end up empty. The folder itself stays."
+            c.deletes = "Every file inside it (older than the age you set) and the sub-folders that end up empty, except what you untick under \u{201C}Inside this folder\u{201D}. The folder itself stays."
             c.safeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped."
             c.after = "The files are gone, unless you choose Trash in the confirm window."
             if d.object(forKey: "v4.age.\(c.id)") != nil { c.ageMinutes = d.integer(forKey: "v4.age.\(c.id)") }
@@ -189,7 +195,7 @@ enum Engine {
 
     static func process(_ c: Cat, delete: Bool, toTrash: Bool, cnt: Counter) {
         let cutoff = Date().addingTimeInterval(-Double(c.ageMinutes) * 60)
-        let kept = Keep.all
+        let kept = Keep.all + Keep.builtIn + (c.isCustom ? Custom.skip : [])
         let trashIt = toTrash && c.kind != .trash   // emptying the Trash can't go to the Trash
         func handle(_ url: URL, _ size: Int64, _ date: Date, _ cut: Date) {
             if let ext = c.extensions, !ext.contains(url.pathExtension.lowercased()) { return }
@@ -244,6 +250,7 @@ enum Engine {
             return "it holds your home or personal folders"
         }
         if let k = personalFolderOf(p) { return "it's inside your personal files (\((k as NSString).lastPathComponent))" }
+        if Keep.isKept(p, Keep.builtIn) { return "it's Space Hunter's own folder" }
         if Keep.isKept(p, Keep.all) { return "it's a protected folder" }
         if Custom.all.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) { return "it's already on the cleanup list" }
         return nil
@@ -392,12 +399,13 @@ enum Theme {
     static func mono(_ s: CGFloat) -> Font { .custom("IBMPlexMono-Regular", size: s) }
     static func monoSemi(_ s: CGFloat) -> Font { .custom("IBMPlexMono-SemiBold", size: s) }
 
-    static func tierName(_ l: Level) -> String { l == .safe ? "Safe to clean" : l == .review ? "Review first" : "Caution" }
-    static func tierDesc(_ l: Level) -> String { l == .safe ? "Rebuilds or isn't needed" : l == .review ? "Re-downloads or history" : "Can hold your history or work" }
-    // one plain line under each section's heading, so nobody has to guess what "safe" means here
+    // Names a newcomer can act on without opening anything: the first is the no-worry clean.
+    static func tierName(_ l: Level) -> String { l == .safe ? "Quick clean" : l == .review ? "History & re-downloads" : "Personal & work items" }
+    static func tierDesc(_ l: Level) -> String { l == .safe ? "Caches and leftovers that rebuild" : l == .review ? "Comes back by downloading, or is history" : "Can hold your work or history. Check first" }
+    // one plain line under each section's heading, so nobody has to guess what's in it
     static func tierExplain(_ l: Level) -> String {
-        l == .safe ? "Caches, temp files and leftovers that apps and macOS rebuild or no longer need. Your files, logins and passwords aren't touched. Some things load a little slower once."
-        : l == .review ? "These come back by downloading again, or they're history you might still want. Read each one before you tick it."
+        l == .safe ? "Caches, temp files and leftovers that apps and macOS rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once."
+        : l == .review ? "Things that come back by downloading them again, or history you might still want. Read each one before you tick it."
         : "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes."
     }
 }
@@ -485,7 +493,8 @@ final class AppState: ObservableObject {
     @Published var disk = Engine.disk()
     @Published var status = ""
     @Published var freedAll = Engine.freedAllTime()
-    @Published var cleaning = false
+    @Published var cleaning = false        // the cleaning window is showing
+    @Published var cleanRunning = false    // a clean is in progress
     @Published var cleanDone = false
     @Published var cleanStopped = false
     @Published var freed: Int64 = 0
@@ -515,6 +524,7 @@ final class AppState: ObservableObject {
     func reload() { cats = Engine.build(); scan() }
 
     func scan(_ ids: [String]? = nil) {
+        if cleanRunning { return }   // measured again once the clean is done
         // Safe-to-delete items first, so the ticked total and the CLEAN key are ready first
         let targets = cats.indices.filter { ids == nil || ids!.contains(cats[$0].id) }.sorted { cats[$0].level.rawValue < cats[$1].level.rawValue }
         for i in targets {
@@ -530,7 +540,7 @@ final class AppState: ObservableObject {
                         self.cats[j].files = cnt.files; self.cats[j].bytes = cnt.bytes; self.cats[j].scanned = true
                     }
                     self.scanning -= 1
-                    self.status = self.scanning > 0 ? "Scanning \(snapshot.name)…" : (self.freedAll.0 == 0 ? "Quick cleanup: the Safe to clean items are ticked for you, so one click on Clean is enough. You see the list before anything goes." : "Scan done. Click a row to see what it is. Tick the box to include it.")
+                    self.status = self.scanning > 0 ? "Scanning \(snapshot.name)…" : (self.freedAll.0 == 0 ? "Quick clean is ticked for you, so one click on Clean is enough. You see the list before anything goes." : "Scan done. Click a row to see what it is. Tick the box to include it.")
                     if self.scanning == 0 { self.disk = Engine.disk(); self.freedAll = Engine.freedAllTime() }
                 }
             }
@@ -550,7 +560,7 @@ final class AppState: ObservableObject {
             save(cats[i])
         }
         scan()
-        status = "Back to default: Safe to clean items ticked, default ages. Protected folders stay protected."
+        status = "Back to default: Quick clean items ticked, default ages. Protected folders stay protected."
     }
 
     func clean(toTrash: Bool) {
@@ -559,7 +569,8 @@ final class AppState: ObservableObject {
         guard !sel.isEmpty else { return }
         expected = max(1, sel.reduce(0) { $0 + $1.bytes })
         freed = 0; trashed = 0; cleanedFiles = 0; skipped = 0; log = []
-        cleanDone = false; cleanStopped = false; cleaning = true
+        cleanDone = false; cleanStopped = false; cleaning = true; cleanRunning = true
+        status = "Cleaning in its own window. You can keep looking around here; Clean is ready again when it's done."
         let cnt = Counter(); counter = cnt
         var pending: [String] = []
         let lock = NSLock()
@@ -590,14 +601,15 @@ final class AppState: ObservableObject {
                 timer.fire(); timer.invalidate()
                 self.log.append(contentsOf: summary.map { "— " + $0 })
                 self.freed = cnt.bytes; self.trashed = cnt.trashedBytes; self.cleanedFiles = cnt.files; self.skipped = cnt.skipped
-                self.cleanStopped = cnt.cancel; self.cleanDone = true
-                self.disk = Engine.disk()
+                self.cleanStopped = cnt.cancel; self.cleanDone = true; self.cleanRunning = false
+                self.disk = Engine.disk(); self.scan()
+                self.status = "Cleaning finished. The list is being measured again."
             }
         }
     }
 
     func stop() { counter?.cancel = true }
-    func finishCleaning() { cleaning = false; scan() }
+    func finishCleaning() { cleaning = false }
 }
 
 // MARK: - Updates
@@ -690,8 +702,12 @@ struct UpdateBar: View {
     @State private var busy = false
     var body: some View {
         HStack(spacing: 8) {
-            Text(message ?? "Space Hunter \(release.version) is ready  ·  you have \(Updater.current). Updating takes a few seconds and keeps your settings.")
-                .font(Theme.semi(13)).foregroundColor(Theme.ink).lineLimit(2)
+            Circle().fill(Theme.orange).frame(width: 10, height: 10).padding(.trailing, 8)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Space Hunter \(release.version) is ready").font(Theme.semi(14)).foregroundColor(Theme.screenInk)
+                Text(message ?? "You have \(Updater.current). Updating takes a few seconds and keeps your settings.")
+                    .font(Theme.sans(12)).foregroundColor(Theme.screenMuted).lineLimit(2)
+            }
             Spacer()
             Button("What's new") { if let p = release.page, let u = URL(string: p) { NSWorkspace.shared.open(u) } }
                 .buttonStyle(KeyStyle()).disabled(busy)
@@ -707,8 +723,9 @@ struct UpdateBar: View {
             }
             .buttonStyle(KeyStyle(primary: true)).disabled(busy)
         }
-        .padding(.horizontal, 22).padding(.vertical, 10)
-        .background(Theme.pane)
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
+        .padding(.horizontal, 18).padding(.vertical, 10)
     }
 }
 
@@ -738,6 +755,10 @@ struct SpaceHunterApp: App {
             FinderView().environmentObject(state)
         }
         .defaultSize(width: 940, height: 760)
+        Window("Cleaning", id: "cleaning") {
+            ProgressSheet().environmentObject(state)
+        }
+        .defaultSize(width: 780, height: 560)
         Window("Protected folders", id: "protect") {
             ProtectView().environmentObject(state)
         }
@@ -758,13 +779,15 @@ struct MainView: View {
             HStack(spacing: 8) {
                 Button { openWindow(id: "finder") } label: { HStack(spacing: 8) { MapIcon(); Text("Space map") } }.buttonStyle(KeyStyle(accent: true))
                 Spacer()
-                Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0)
+                Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0 || state.cleanRunning)
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
                 Button("Reset to default") { state.resetAll() }.buttonStyle(KeyStyle())
                     .padding(.trailing, 4)
-                Button("Clean \(Engine.fmt(state.selectedBytes))") { confirm = true }
-                    .buttonStyle(KeyStyle(primary: true, big: true))
-                    .disabled(state.scanning > 0 || state.selectedBytes == 0)
+                Button(state.cleanRunning ? "Cleaning…" : "Clean \(Engine.fmt(state.selectedBytes))") {
+                    if state.cleaning { openWindow(id: "cleaning") } else { confirm = true }
+                }
+                .buttonStyle(KeyStyle(primary: true, big: true))
+                .disabled(!state.cleaning && (state.scanning > 0 || state.selectedBytes == 0))
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
             TierBar().padding(.horizontal, 18).padding(.bottom, 6)
@@ -777,10 +800,11 @@ struct MainView: View {
                 }
             }
             .animation(.easeOut(duration: 0.26), value: state.openID)
-            if let u = state.update { UpdateBar(release: u) }
-            Rectangle().fill(Theme.line).frame(height: 1)
-            Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
+            if let u = state.update { UpdateBar(release: u) } else {
+                Rectangle().fill(Theme.line).frame(height: 1)
+                Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
+            }
         }
         .background(Theme.chassis)
         .ignoresSafeArea(.container, edges: .top)
@@ -789,7 +813,7 @@ struct MainView: View {
             Updater.check { r in DispatchQueue.main.async { state.update = r } }   // one quiet check; offline = nothing happens
         }
         .sheet(isPresented: $confirm) { ConfirmSheet(confirm: $confirm).environmentObject(state) }
-        .sheet(isPresented: $state.cleaning) { ProgressSheet().environmentObject(state) }
+        .onChange(of: state.cleaning) { c in if c { openWindow(id: "cleaning") } }
     }
 }
 
@@ -904,7 +928,8 @@ struct TierTile: View {
         let on = state.tier == lvl
         let ink = on ? Theme.screenInk : Theme.ink
         let soft = on ? Theme.screenMuted : Theme.soft
-        let sub = "\(items.count) items  ·  " + (nTicked == 0 ? "none ticked" : "\(nTicked) ticked" + (ticked > 0 ? ", \(Engine.fmt(ticked))" : ""))
+        let nItems = items.filter { $0.bytes > 0 || $0.files > 0 }.count
+        let sub = nItems == 0 ? "Nothing to clean here right now" : nTicked == 0 ? "None of \(nItems) ticked" : "\(nTicked) of \(nItems) ticked  ·  \(Engine.fmt(ticked))"
         Button {
             state.tier = lvl
             if let o = state.open, o.level != lvl { state.openID = nil }
@@ -912,9 +937,13 @@ struct TierTile: View {
             HStack(alignment: .top, spacing: 10) {
                 if lvl != .safe { LevelMark(level: lvl, ink: ink, ground: on ? Theme.ink : Theme.key).frame(width: 5).padding(.vertical, 6) }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(Theme.tierName(lvl) + (lvl == .caution ? "  !" : "")).font(Theme.bold(15)).foregroundColor(ink)
+                    Text(Theme.tierName(lvl)).font(Theme.bold(15)).foregroundColor(ink)
                     Text(Theme.tierDesc(lvl)).font(Theme.sans(11.5)).foregroundColor(soft)
-                    Text(sub).font(nTicked > 0 ? Theme.semi(11.5) : Theme.sans(11.5)).foregroundColor(nTicked > 0 ? ink : soft)
+                    // how much of it is ticked, at a glance
+                    HStack(spacing: 6) {
+                        Check(on: nTicked > 0).scaleEffect(0.7).frame(width: 12, height: 12)
+                        Text(sub).font(nTicked > 0 ? Theme.semi(11.5) : Theme.sans(11.5)).foregroundColor(nTicked > 0 ? ink : soft)
+                    }
                 }
                 Spacer()
                 Text(Engine.fmt(total)).font(Theme.semi(17)).foregroundColor(ink)
@@ -1013,20 +1042,21 @@ struct DetailPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(Theme.tierName(c.level) + (c.level == .caution ? "  !" : "")).font(Theme.semi(12)).foregroundColor(Theme.muted)
+                    Text(Theme.tierName(c.level)).font(Theme.semi(12)).foregroundColor(Theme.muted)
                     Spacer()
                     Button("Close") { state.openID = nil }.buttonStyle(KeyStyle())
                 }
                 Text(c.name).font(Theme.bold(19)).foregroundColor(Theme.ink).lineLimit(2)
                 Text(c.scanned ? "\(Engine.fmt(c.bytes))   ·   \(c.files) files" : "Scanning…").font(Theme.sans(13)).foregroundColor(Theme.ink).padding(.bottom, 10)
                 if c.kind != .trash { AgeControls(c: c, older: older, ageValue: $ageValue, unit: $unit) }
+                if c.isCustom, let root = c.roots.first { InsideList(root: root.path, catID: c.id) }
                 Group {
                     section("What is it?", c.what)
                     section("What gets cleaned", c.deletes)
                     section("Is it safe?", c.safeText)
                     section("What happens after", c.after)
                 }
-                FolderKeeps(cat: c)
+                if !c.isCustom { FolderKeeps(cat: c) }
                 if c.isCustom {
                     Button("Remove from cleanup list") {
                         for r in c.roots { Custom.remove(r.path) }
@@ -1145,7 +1175,7 @@ struct ConfirmSheet: View {
     @State private var chosen = false
     var body: some View {
         let sel = state.cats.filter { $0.checked && ($0.bytes > 0 || $0.files > 0) }
-        // the safe choice first: anything beyond "Safe to clean" goes to the Trash unless you choose otherwise
+        // the safe choice first: anything beyond "Quick clean" goes to the Trash unless you choose otherwise
         let trashing = chosen ? toTrash : sel.contains { !$0.isSafe }
         VStack(alignment: .leading, spacing: 8) {
             Text("Clean \(Engine.fmt(state.selectedBytes))?").font(Theme.bold(24)).foregroundColor(Theme.ink)
@@ -1186,7 +1216,7 @@ struct ConfirmSheet: View {
 struct ConfirmHead: View {
     let level: Level
     var body: some View {
-        Text((level == .safe ? "Safe to clean" : level == .review ? "Review first" : "Caution  !").uppercased())
+        Text(Theme.tierName(level).uppercased())
             .font(Theme.bold(11)).foregroundColor(Theme.muted).padding(.top, 6)
     }
 }
@@ -1224,6 +1254,7 @@ struct ConfirmRow: View {
 
 struct ProgressSheet: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
         let binOnly = state.freed == 0 && state.trashed > 0
         let p = Engine.parts(binOnly ? state.trashed : state.freed)
@@ -1265,13 +1296,13 @@ struct ProgressSheet: View {
             HStack {
                 if state.cleanDone { Button("Open log") { NSWorkspace.shared.open(Engine.logURL) }.buttonStyle(KeyStyle()) }
                 Spacer()
-                Button(state.cleanDone ? "Close" : "Stop") { if state.cleanDone { state.finishCleaning() } else { state.stop() } }.buttonStyle(KeyStyle())
+                Button(state.cleanDone ? "Close" : "Stop") { if state.cleanDone { state.finishCleaning(); dismiss() } else { state.stop() } }.buttonStyle(KeyStyle())
             }
         }
         .padding(20)
-        .frame(width: 780, height: 560)
+        .frame(minWidth: 680, minHeight: 480)
         .background(Theme.chassis)
-        .interactiveDismissDisabled(true)
+        .onDisappear { if state.cleanDone { state.finishCleaning() } }
     }
 }
 
@@ -1286,7 +1317,8 @@ struct ProtectView: View {
                   "Keys and sign-in settings (.ssh, .gnupg, .aws, .kube, .docker)",
                   "AI agents' memory folders (for example Claude Code's memory)",
                   "macOS and installed apps",
-                  "Anything reached through a link (links are never followed)"]
+                  "Anything reached through a link (links are never followed)",
+                  "Space Hunter itself: the app, its settings and its log"]
     var body: some View {
         let mine = Keep.all
         VStack(alignment: .leading, spacing: 10) {
@@ -1368,25 +1400,36 @@ final class Scanner: ObservableObject {
         }
     }
 
-    private func fill(_ n: FolderNode) {
+    // Reads each folder with plain directory calls (much faster than asking for URL properties one file at a
+    // time) and measures the first two levels' folders in parallel, as SSDs answer several reads at once.
+    private func fill(_ n: FolderNode, depth: Int = 0) {
         if cancel { return }
-        let url = URL(fileURLWithPath: n.path)
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey, .fileSizeKey]
-        guard let items = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys) else { return }
+        guard let dir = opendir(n.path) else { return }
+        let fd = dirfd(dir)
         var addCount: Int64 = 0, addBytes: Int64 = 0
-        for item in items {
-            guard let v = try? item.resourceValues(forKeys: Set(keys)) else { continue }
-            if v.isSymbolicLink == true { continue }
-            if v.isDirectory == true {
-                if item.path == "/System/Volumes" || item.path == "/Volumes" || item.path == "/dev" { continue }
-                n.kids.append(FolderNode(name: item.lastPathComponent, path: item.path, parent: n))
-            } else {
-                let s = Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0)
-                n.ownSize += s; n.ownFiles += 1; addCount += 1; addBytes += s
+        var st = stat()
+        while let ent = readdir(dir) {
+            let name = withUnsafeBytes(of: ent.pointee.d_name) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+            if name == "." || name == ".." { continue }
+            if fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0 { continue }
+            let mode = st.st_mode & S_IFMT
+            if mode == S_IFDIR {
+                let p = n.path == "/" ? "/" + name : n.path + "/" + name
+                if p == "/System/Volumes" || p == "/Volumes" || p == "/dev" { continue }
+                n.kids.append(FolderNode(name: name, path: p, parent: n))
+            } else if mode == S_IFREG {
+                let size = Int64(st.st_blocks) * 512
+                n.ownSize += size; n.ownFiles += 1; addCount += 1; addBytes += size
             }
         }
+        closedir(dir)
         lock.lock(); count += addCount; bytes += addBytes; lock.unlock()
-        for k in n.kids { fill(k) }
+        let kids = n.kids
+        if depth < 2 && kids.count > 1 {
+            DispatchQueue.concurrentPerform(iterations: kids.count) { i in fill(kids[i], depth: depth + 1) }
+        } else {
+            for k in kids { fill(k, depth: depth + 1) }
+        }
     }
 
     private func total(_ n: FolderNode) {
@@ -1507,10 +1550,10 @@ struct FinderView: View {
                 .disabled(scanner.running)
                 .anchorPreference(key: DriveKeyAnchor.self, value: .bounds) { $0 }
                 Spacer()
-                Button("Up one level") { if let p = current?.parent { current = p } }.buttonStyle(KeyStyle()).disabled(current?.parent == nil)
                 Button("Show in Finder") { if let c = current { NSWorkspace.shared.open(URL(fileURLWithPath: c.path)) } }.buttonStyle(KeyStyle()).disabled(current == nil)
             }
             if let c = current {
+                PathBar(node: c) { n in current = n }
                 TreeMap(node: c, free: (c.parent == nil && place?.id == c.path) ? (place?.free ?? 0) : 0, added: added) { k in current = k }
                     .frame(height: 240)
                 ScrollView {
@@ -1525,7 +1568,7 @@ struct FinderView: View {
             } else {
                 Spacer()
             }
-            Text("\u{201C}Add to cleanup list\u{201D} puts a folder in the Caution section, unticked. Nothing here deletes anything.")
+            Text("\u{201C}Add to cleanup list\u{201D} puts a folder in Personal & work items, unticked. Nothing here deletes anything.")
                 .font(Theme.sans(12)).foregroundColor(Theme.muted)
         }
         .padding(18).frame(minWidth: 760, minHeight: 520).background(Theme.chassis)
@@ -1583,7 +1626,128 @@ struct FinderHeader: View {
             }
         }
         .padding(20).frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 150)
+        .overlay(alignment: .trailing) { if scanner.running { SpinRing().frame(width: 56, height: 56).padding(.trailing, 28) } }
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
+    }
+}
+
+// A large turning ring for the whole scan: impossible to miss.
+struct SpinRing: View {
+    var body: some View {
+        TimelineView(.animation) { tl in
+            let t = tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.1) / 1.1
+            ZStack {
+                Circle().stroke(Theme.track, lineWidth: 5)
+                Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(360 * t))
+            }
+        }
+    }
+}
+
+// Where you are in the Space map: a Back key, then every folder from the top down, each one clickable.
+struct PathBar: View {
+    let node: FolderNode
+    let go: (FolderNode) -> Void
+    var body: some View {
+        let chain = trail()
+        HStack(spacing: 10) {
+            Button { if let p = node.parent { go(p) } } label: {
+                HStack(spacing: 6) { Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold)); Text("Back") }
+            }
+            .buttonStyle(KeyStyle()).disabled(node.parent == nil)
+            .keyboardShortcut(.leftArrow, modifiers: .command)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(chain.enumerated()), id: \.offset) { i, n in
+                            if i > 0 { Chevron(color: Theme.soft).scaleEffect(0.7) }
+                            Button(name(n)) { go(n) }
+                                .buttonStyle(.plain)
+                                .font(i == chain.count - 1 ? Theme.bold(13) : Theme.sans(13))
+                                .foregroundColor(i == chain.count - 1 ? Theme.ink : Theme.muted)
+                                .disabled(i == chain.count - 1)
+                                .id(i)
+                        }
+                    }
+                }
+                .onAppear { proxy.scrollTo(chain.count - 1, anchor: .trailing) }
+                .onChange(of: node.id) { _ in proxy.scrollTo(trail().count - 1, anchor: .trailing) }
+            }
+        }
+    }
+    func trail() -> [FolderNode] { var c: [FolderNode] = []; var n: FolderNode? = node; while let x = n { c.insert(x, at: 0); n = x.parent }; return c }
+    func name(_ n: FolderNode) -> String {
+        if n.parent != nil { return n.name }
+        return n.path == "/" ? "Disk" : n.path == Engine.home.path ? "Home" : (n.path as NSString).lastPathComponent
+    }
+}
+
+// Inside a folder you added: its files and sub-folders, each with a tick box. Unticked ones stay; clicking a
+// folder's name opens it, and Back goes up (never above the folder you added).
+struct InsideList: View {
+    @EnvironmentObject var state: AppState
+    let root: String
+    let catID: String
+    @State private var here = ""
+    @State private var tick = 0
+    struct Entry: Identifiable { let id: String; let name: String; let dir: Bool; let size: Int64 }
+
+    var body: some View {
+        let cur = here.isEmpty ? root : here
+        let skip = Custom.skip
+        let entries = list(cur)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Inside this folder  ·  untick what should stay").font(Theme.semi(12)).foregroundColor(Theme.muted).padding(.top, 4)
+            Text("Ticked files and folders are cleaned (older than the age above). Click a folder's name to look inside it.")
+                .font(Theme.sans(12)).foregroundColor(Theme.soft).fixedSize(horizontal: false, vertical: true).padding(.bottom, 6)
+            if cur != root {
+                Button { here = (cur as NSString).deletingLastPathComponent } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold))
+                        Text("Back  ·  " + (root as NSString).lastPathComponent + String(cur.dropFirst(root.count))).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                .buttonStyle(.plain).font(Theme.semi(12)).foregroundColor(Theme.ink).padding(.vertical, 6)
+            }
+            if entries.isEmpty { Text("Empty").font(Theme.sans(12)).foregroundColor(Theme.soft).padding(.vertical, 6) }
+            ForEach(Array(entries.prefix(60))) { e in
+                let inherited = Custom.isSkipped((e.id as NSString).deletingLastPathComponent, skip)
+                let off = inherited || Custom.isSkipped(e.id, skip)
+                HStack(spacing: 10) {
+                    Button { if !inherited { Custom.setSkipped(e.id, !off); tick += 1; state.scan([catID]) } } label: { Check(on: !off, empty: inherited) }
+                        .buttonStyle(.plain)
+                    Button { if e.dir { here = e.id } } label: {
+                        HStack(spacing: 8) {
+                            Text(e.name).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Text(e.dir ? "folder" : Engine.fmt(e.size)).foregroundColor(Theme.soft)
+                            if e.dir { Chevron(color: Theme.soft) }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).font(Theme.sans(12.5)).foregroundColor(off ? Theme.soft : Theme.ink)
+                }
+                .padding(.vertical, 5)
+                .overlay(Rectangle().fill(Theme.line).frame(height: 1), alignment: .bottom)
+            }
+            if entries.count > 60 { Text("+ \(entries.count - 60) more (open the folder in Finder to see them all)").font(Theme.sans(11)).foregroundColor(Theme.soft).padding(.top, 6) }
+        }
+        .id(tick)
+        .padding(.bottom, 12)
+        .onChange(of: root) { _ in here = "" }
+    }
+
+    func list(_ dir: String) -> [Entry] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey, .fileSizeKey]
+        let items = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: keys)) ?? []
+        var dirs: [Entry] = [], files: [Entry] = []
+        for u in items {
+            guard let v = try? u.resourceValues(forKeys: Set(keys)), v.isSymbolicLink != true else { continue }
+            if v.isDirectory == true { dirs.append(Entry(id: u.path, name: u.lastPathComponent, dir: true, size: 0)) }
+            else { files.append(Entry(id: u.path, name: u.lastPathComponent, dir: false, size: Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0))) }
+        }
+        return dirs.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } + files.sorted { $0.size > $1.size }
     }
 }
 

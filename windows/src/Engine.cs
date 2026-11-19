@@ -107,7 +107,7 @@ namespace SpaceHunter
                 c.Note = "A folder you added";
                 c.Short = "Everything inside goes; the folder itself stays";
                 c.What = "A folder you added from the Space map: " + p;
-                c.Deletes = "Every file inside it (older than the age you set), and the sub-folders that end up empty. The folder itself stays.";
+                c.Deletes = "Every file inside it (older than the age you set), and the sub-folders that end up empty, except what you untick under \u201cInside this folder\u201d below. The folder itself stays.";
                 c.SafeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped.";
                 c.After = "The files are gone, unless you choose Recycle Bin in the confirm window.";
                 list.Add(c);
@@ -213,6 +213,7 @@ namespace SpaceHunter
             if (c.Kind == Kind.WindowsOld) { var m = Measure(c); cnt.Files += m.Files; cnt.Bytes += m.Bytes; return; }
 
             var bin = delete && c.Recycle ? new RecycleBatch(cnt) : null;
+            skipNow = c.IsCustom ? Custom.Skip : null;   // what you unticked inside a folder you added
             foreach (var root in c.Roots)
             {
                 if (cnt.Cancel) break;
@@ -286,8 +287,11 @@ namespace SpaceHunter
             }
         }
 
+        [ThreadStatic] static HashSet<string> skipNow;
+
         static void Handle(FileInfo f, DateTime cutoff, bool delete, Counter cnt, RecycleBatch bin)
         {
+            if (Custom.IsSkipped(f.FullName, skipNow)) return;
             DateTime t; long len;
             try { t = f.LastWriteTime; len = f.Length; } catch { return; }
             if (Keep.IsKept(f.FullName)) return;   // on the keep list: never touched, never counted
@@ -320,7 +324,7 @@ namespace SpaceHunter
                 if (cnt.Cancel) return;
                 if ((i.Attributes & FileAttributes.ReparsePoint) != 0) continue;
                 var sub = i as DirectoryInfo;
-                if (sub != null) { if (!exclude.Contains(sub.Name) && !Keep.IsKept(sub.FullName)) Walk(sub, onFile, cnt, exclude); }
+                if (sub != null) { if (!exclude.Contains(sub.Name) && !Keep.IsKept(sub.FullName) && !Custom.IsSkipped(sub.FullName, skipNow)) Walk(sub, onFile, cnt, exclude); }
                 else onFile((FileInfo)i);
             }
         }
@@ -337,7 +341,7 @@ namespace SpaceHunter
             DirectoryInfo[] subs;
             try { subs = d.GetDirectories(); } catch { return; }
             foreach (var s in subs)
-                if ((s.Attributes & FileAttributes.ReparsePoint) == 0 && !exclude.Contains(s.Name) && !Keep.IsKept(s.FullName)) RemoveEmptyDirs(s, false, exclude);
+                if ((s.Attributes & FileAttributes.ReparsePoint) == 0 && !exclude.Contains(s.Name) && !Keep.IsKept(s.FullName) && !Custom.IsSkipped(s.FullName, skipNow)) RemoveEmptyDirs(s, false, exclude);
             if (!isRoot)
                 try { if (d.GetFileSystemInfos().Length == 0) { if ((d.Attributes & FileAttributes.ReadOnly) != 0) d.Attributes &= ~FileAttributes.ReadOnly; d.Delete(); } } catch { }
         }
@@ -436,6 +440,7 @@ namespace SpaceHunter
             // a folder made directly on a drive (like C:\Personal) usually holds your own files: never offer it
             var parent = Path.GetDirectoryName(p);
             if (parent == null || parent.TrimEnd('\\').Length <= 2) { why = "likely your own files (made right on the drive)"; return false; }
+            if (Keep.IsBuiltIn(p)) { why = "it's Space Hunter's own folder"; return false; }
             if (Keep.IsKept(p)) { why = "it's a protected folder"; return false; }
             if (Custom.All.Any(c => Under(p, Norm(c)))) { why = "it's already on the cleanup list"; return false; }
             return true;
@@ -557,8 +562,37 @@ namespace SpaceHunter
             lock (gate) paths.RemoveAll(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase));
             Save();
         }
+        // Space Hunter itself: its settings folder, and the app (its own folder, or just the exe when it sits in a shared
+        // folder such as Downloads). Always protected; this can't be removed from the protected list.
+        static List<string> builtIn;
+        public static List<string> BuiltIn
+        {
+            get
+            {
+                if (builtIn != null) return builtIn;
+                var list = new List<string> { Engine.AppDir.TrimEnd('\\') };
+                try
+                {
+                    string exe = Path.GetFullPath(System.Reflection.Assembly.GetEntryAssembly().Location), dir = Path.GetDirectoryName(exe).TrimEnd('\\');
+                    list.Add(exe); list.Add(exe + ".old");
+                    bool shared = dir.Length <= 3 || Engine.PersonalFolders().Any(k => string.Equals(k, dir, StringComparison.OrdinalIgnoreCase))
+                                  || string.Equals(Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\'), dir, StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(Engine.H.TrimEnd('\\'), dir, StringComparison.OrdinalIgnoreCase);
+                    if (!shared) list.Add(dir);
+                }
+                catch { }
+                return builtIn = list;
+            }
+        }
+        public static bool IsBuiltIn(string path)
+        {
+            foreach (var k in BuiltIn)
+                if (path.Equals(k, StringComparison.OrdinalIgnoreCase) || path.StartsWith(k + "\\", StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
         public static bool IsKept(string path)
         {
+            if (IsBuiltIn(path)) return true;
             lock (gate)
             {
                 if (paths.Count == 0) return false;
@@ -588,6 +622,37 @@ namespace SpaceHunter
         static void Save() { try { Directory.CreateDirectory(Engine.AppDir); lock (gate) File.WriteAllLines(FilePath, paths); } catch { } }
         public static void Add(string p) { p = p.TrimEnd('\\'); lock (gate) { if (!paths.Any(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase))) paths.Add(p); } Save(); }
         public static void Remove(string p) { lock (gate) paths.RemoveAll(x => string.Equals(x, p.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)); Save(); }
+
+        // Inside a folder you added: the files and sub-folders you unticked, which that item never cleans.
+        static HashSet<string> skip;
+        static string SkipPath { get { return Path.Combine(Engine.AppDir, "your-folders-skip.txt"); } }
+        public static HashSet<string> Skip
+        {
+            get
+            {
+                lock (gate)
+                {
+                    if (skip == null)
+                        try { skip = new HashSet<string>(File.Exists(SkipPath) ? File.ReadAllLines(SkipPath).Where(l => l.Trim().Length > 0) : new string[0], StringComparer.OrdinalIgnoreCase); }
+                        catch { skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+                    return new HashSet<string>(skip, StringComparer.OrdinalIgnoreCase);
+                }
+            }
+        }
+        public static bool IsSkipped(string path, HashSet<string> set)
+        {
+            if (set == null || set.Count == 0) return false;
+            for (var p = path.TrimEnd('\\'); !string.IsNullOrEmpty(p); p = Path.GetDirectoryName(p)) if (set.Contains(p)) return true;
+            return false;
+        }
+        public static void SetSkipped(string path, bool skipped)
+        {
+            path = path.TrimEnd('\\');
+            var s = Skip;
+            if (skipped) s.Add(path); else s.Remove(path);
+            lock (gate) skip = s;
+            try { Directory.CreateDirectory(Engine.AppDir); File.WriteAllLines(SkipPath, s); } catch { }
+        }
     }
     // Free-space history (one point per hour at most) and the total freed, read back from the log.
     static class History

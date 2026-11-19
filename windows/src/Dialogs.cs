@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
+// Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Space Hunter (Windows) - the confirm window and the live cleaning window.
 using System;
@@ -34,7 +34,7 @@ namespace SpaceHunter
             {
                 var items = sel.Where(c => c.Level == lvl).OrderByDescending(c => c.Bytes).ToList();
                 if (items.Count == 0) continue;
-                lines.Add(new Line { Head = true, Level = lvl, Text = Theme.TierName(lvl) + (lvl == Level.Caution ? "  !" : "") });
+                lines.Add(new Line { Head = true, Level = lvl, Text = Theme.TierName(lvl) });
                 // every section names its items, so you see the real list before anything goes
                 var shown = items.Where(c => !c.Blocked).Take(MaxPerGroup).ToList();
                 foreach (var c in shown) lines.Add(new Line { Level = lvl, Text = c.Name, Size = Engine.Fmt(c.Bytes) });
@@ -47,7 +47,7 @@ namespace SpaceHunter
             Theme.Window(this, "Space Hunter", 560, 282 + listH);
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            // the safe choice first: anything beyond "Safe to clean" goes to the Recycle Bin unless you choose otherwise
+            // the safe choice first: anything beyond "Quick clean" goes to the Recycle Bin unless you choose otherwise
             Recycle = sel.Any(c => !c.Safe);
 
             var h = new Label { Text = "Clean " + Engine.Fmt(total) + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = Theme.P(26, 22), UseMnemonic = false };
@@ -122,7 +122,7 @@ namespace SpaceHunter
         public ProgressForm(List<Category> selection, long expectedBytes)
         {
             sel = selection; expected = Math.Max(1, expectedBytes);
-            Theme.Window(this, "Space Hunter  Â·  cleaning", 780, 560);
+            Theme.Window(this, "Space Hunter  ·  cleaning", 780, 560);
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
             ShowInTaskbar = false;
 
@@ -158,8 +158,8 @@ namespace SpaceHunter
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             int i = Math.Min(index, sel.Count - 1);
-            string label = done ? (cnt.Cancel ? "Stopped  Â·  nothing else will be cleaned" : "Done  Â·  all ticked items")
-                                : "Cleaning  Â·  item " + (i + 1) + " of " + sel.Count + "  Â·  " + sel[i].Name;
+            string label = done ? (cnt.Cancel ? "Stopped  ·  nothing else will be cleaned" : "Done  ·  all ticked items")
+                                : "Cleaning  ·  item " + (i + 1) + " of " + sel.Count + "  ·  " + sel[i].Name;
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
             bool binOnly = cnt.Bytes == 0 && cnt.RecycledBytes > 0;
             string num, unit; Theme.SizeParts(binOnly ? cnt.RecycledBytes : cnt.Bytes, out num, out unit);
@@ -169,7 +169,7 @@ namespace SpaceHunter
                 g.DrawString(num, fBig, b, pad - 5, 28);
                 g.DrawString(unit + (binOnly ? " TO RECYCLE BIN" : " FREED"), fUnit, b, pad - 5 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
             }
-            string stat = cnt.Files.ToString("N0") + " files  Â·  " + cnt.Skipped.ToString("N0") + " skipped  Â·  " + clock.Elapsed.ToString(@"m\:ss");
+            string stat = cnt.Files.ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
             using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
             if (cnt.RecycledBytes > 0 && !binOnly)
                 using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
@@ -204,7 +204,7 @@ namespace SpaceHunter
                 Engine.Log((cnt.Cancel ? "STOPPED " : "CLEANED ") + Engine.Fmt(cnt.Bytes) + ", " + cnt.Files.ToString("N0") + " files; " +
                            (cnt.RecycledBytes > 0 ? Engine.Fmt(cnt.RecycledBytes) + " to Recycle Bin; " : "") + "skipped " +
                            cnt.Skipped.ToString("N0") + " (in use, recent or too big for the bin). " + string.Join(" | ", summary));
-                foreach (var line in summary) feed.Enqueue("â€” " + line);
+                foreach (var line in summary) feed.Enqueue("— " + line);
                 done = true;
             });
             t.IsBackground = true; t.Start();
@@ -253,7 +253,7 @@ namespace SpaceHunter
             if (done && tick.Enabled && feed.IsEmpty)
             {
                 tick.Stop(); clock.Stop(); display.Invalidate();
-                stopKey.Text = "close"; stopKey.Enabled = true; Text = "Space Hunter  Â·  " + (cnt.Cancel ? "stopped" : "done");
+                stopKey.Text = "close"; stopKey.Enabled = true; Text = "Space Hunter  ·  " + (cnt.Cancel ? "stopped" : "done");
                 stopKey.Left = ClientSize.Width - stopKey.Width - Theme.D(18); logKey.Visible = true;
                 if (SnapshotPath != null) { Program.Snap(this, SnapshotPath); Close(); }
             }

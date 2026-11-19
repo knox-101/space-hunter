@@ -94,7 +94,8 @@ namespace SpaceHunter
             "Keys and sign-in settings (.ssh, .gnupg, .aws, .azure, .kube, .docker)",
             "AI agents' memory folders (for example Claude Code's memory)",
             "Windows itself (only its temp, cache and log folders are cleaned)",
-            "Anything reached through a shortcut-style link (links are never followed)" };
+            "Anything reached through a shortcut-style link (links are never followed)",
+            "Space Hunter's own folder: the app, its settings and its log" };
 
         Label Heading(string t)
         {

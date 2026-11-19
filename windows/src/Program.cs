@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Space Hunter (Windows) - entry point.
 //   SpaceHunter.exe                     the app (asks for admin rights at launch)
-//   SpaceHunter.exe --auto              clean the ticked "Safe to clean" items WITHOUT asking, log, exit
+//   SpaceHunter.exe --auto              clean the ticked "Quick clean" items WITHOUT asking, log, exit
 //   SpaceHunter.exe --report            print a scan, delete nothing
 //   SpaceHunter.exe --version           print the version
 // Console output is only visible when redirected from an Administrator terminal (it's a windowed app):
@@ -206,6 +206,17 @@ namespace SpaceHunter
                 Application.Run(cf);
                 return 0;
             }
+            string insideDir = Arg(args, "--test-inside");   // test hook: the "Inside this folder" list on its own
+            if (insideDir != null)
+            {
+                var fm = new Form { ClientSize = Theme.D(440, 300), BackColor = Theme.Pane, StartPosition = FormStartPosition.CenterScreen, Text = "Inside" };
+                var il = new InsideList { Location = Theme.P(20, 16), Width = Theme.D(400) };
+                fm.Controls.Add(il); il.Open(insideDir);
+                if (Arg(args, "--go") != null) il.GetType().GetMethod("Go", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).Invoke(il, new object[] { Arg(args, "--go") });
+                if (snap != null) fm.Shown += (s, e) => { Application.DoEvents(); Snap(fm, snap); fm.Close(); };
+                Application.Run(fm);
+                return 0;
+            }
             if (Has(args, "--test-protect"))
             {
                 Keep.Load();
@@ -228,7 +239,7 @@ namespace SpaceHunter
                         new DriveChoice { Root = "G:\\", Letter = "G:", Name = "Media", Total = 4000787030016L, Free = 1095216660480L },
                         new DriveChoice { Root = "H:\\", Letter = "H:", Name = "Backup", Total = 2000398934016L, Free = 1505337982976L, Removable = true } }).ToList();
                 }
-                var ff = new FinderForm(Engine.Build(), finderPath) { SnapshotPath = during == null ? snap : null, StartPosition = FormStartPosition.CenterScreen, ShowInTaskbar = true, OpenDrivesOnStart = Has(args, "--open-drives") };
+                var ff = new FinderForm(Engine.Build(), finderPath) { SnapshotPath = during == null ? snap : null, StartPosition = FormStartPosition.CenterScreen, ShowInTaskbar = true, OpenDrivesOnStart = Has(args, "--open-drives"), DrillDepth = Has(args, "--drill") ? 4 : 0 };
                 if (during != null) ff.Shown += (s, e) => { var tm = new System.Windows.Forms.Timer { Interval = 4000 }; tm.Tick += (s2, e2) => { tm.Stop(); try { ff.SaveImage(during); } catch { } Environment.Exit(0); }; tm.Start(); };
                 Application.Run(ff);
                 return 0;
