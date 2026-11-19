@@ -93,7 +93,7 @@ jobs:
           # skip the manual-page index rebuild, which can stall package installs on these machines for many minutes
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends libgtk-4-dev xvfb xauth imagemagick
+          sudo apt-get install -y -q --no-install-recommends -o Acquire::Retries=5 libgtk-4-dev xvfb xauth imagemagick || { sleep 20; sudo apt-get update -q; sudo apt-get install -y -q --no-install-recommends -o Acquire::Retries=5 libgtk-4-dev xvfb xauth imagemagick; }
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: linux
