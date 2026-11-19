@@ -155,7 +155,7 @@ namespace SpaceHunter
                 using (var p = Theme.Round(new RectangleF(r.X, r.Y + 3, r.Width, r.Height - 3), 6)) using (var b = new SolidBrush(on ? Color.Black : Theme.KeyShadow)) g.FillPath(b, p);
                 using (var p = Theme.Round(new RectangleF(r.X, r.Y, r.Width, r.Height - 3), 6)) using (var b = new SolidBrush(fill)) g.FillPath(b, p);
                 float x = r.X + 16;
-                if (lvl != Level.Safe) { Theme.Hatch(g, new RectangleF(r.X + 10, r.Y + 12, 5, r.Height - 27), ink, fill); x = r.X + 24; }
+                if (lvl != Level.Safe) { Theme.LevelMark(g, new RectangleF(r.X + 10, r.Y + 12, 5, r.Height - 27), lvl, ink, fill); x = r.X + 24; }
                 string name = Theme.TierName(lvl) + (lvl == Level.Caution ? "  !" : "");
                 using (var b = new SolidBrush(ink)) g.DrawString(name, fName, b, x, r.Y + 10);
                 bool roomy = r.Height >= 80;   // compact tiles (short screens) fold the description into the count line

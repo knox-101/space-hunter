@@ -875,7 +875,7 @@ struct TierTile: View {
             if let o = state.open, o.level != lvl { state.openID = nil }
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                if lvl != .safe { Hatch(ink: ink, ground: on ? Theme.ink : Theme.key).frame(width: 5).padding(.vertical, 6) }
+                if lvl != .safe { LevelMark(level: lvl, ink: ink, ground: on ? Theme.ink : Theme.key).frame(width: 5).padding(.vertical, 6) }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(Theme.tierName(lvl) + (lvl == .caution ? "  !" : "")).font(Theme.bold(15)).foregroundColor(ink)
                     Text(Theme.tierDesc(lvl)).font(Theme.sans(11.5)).foregroundColor(soft)
@@ -1045,7 +1045,7 @@ struct AgeControls: View {
             }
             .disabled(!older)
             Text((older ? "Files untouched for \(Engine.fmtAge(c.ageMinutes)) or more." : "Every file, whatever its age.") + " Delete or Trash is chosen when you press Clean.")
-                .font(Theme.sans(12)).foregroundColor(Theme.soft).fixedSize(horizontal: false, vertical: true).padding(.bottom, 10)
+                .font(Theme.sans(12)).foregroundColor(Theme.muted).fixedSize(horizontal: false, vertical: true).padding(.bottom, 10)
         }
     }
 
@@ -1104,21 +1104,33 @@ struct ConfirmSheet: View {
     @EnvironmentObject var state: AppState
     @Binding var confirm: Bool
     @State private var toTrash = false
+    @State private var chosen = false
     var body: some View {
         let sel = state.cats.filter { $0.checked && ($0.bytes > 0 || $0.files > 0) }
         let safe = sel.filter { $0.isSafe }
-        let risky = sel.filter { !$0.isSafe }.sorted { $0.bytes > $1.bytes }
-        VStack(alignment: .leading, spacing: 10) {
+        // the safe choice first: anything beyond "Safe to delete" goes to the Trash unless you choose otherwise
+        let trashing = chosen ? toTrash : sel.contains { !$0.isSafe }
+        VStack(alignment: .leading, spacing: 8) {
             Text("Clean \(Engine.fmt(state.selectedBytes))?").font(Theme.bold(24)).foregroundColor(Theme.ink)
-            if !safe.isEmpty { ConfirmRow(name: "\(safe.count) safe-to-delete item" + (safe.count == 1 ? "" : "s"), bytes: safe.reduce(Int64(0)) { $0 + $1.bytes }, hatch: false) }
-            ForEach(Array(risky.prefix(6))) { c in ConfirmRow(name: c.name + (c.level == .caution ? "  !" : ""), bytes: c.bytes, hatch: true) }
-            if risky.count > 6 { ConfirmRow(name: "+ \(risky.count - 6) more to review", bytes: risky.dropFirst(6).reduce(Int64(0)) { $0 + $1.bytes }, hatch: true) }
+            // grouped by risk, so it's plain which ticked items need care
+            if !safe.isEmpty {
+                ConfirmHead(level: .safe)
+                ConfirmRow(name: "\(safe.count) item" + (safe.count == 1 ? "" : "s") + " that rebuild themselves", bytes: safe.reduce(Int64(0)) { $0 + $1.bytes }, level: .safe)
+            }
+            ForEach([Level.review, Level.caution], id: \.self) { lvl in
+                let items = sel.filter { $0.level == lvl }.sorted { $0.bytes > $1.bytes }
+                if !items.isEmpty {
+                    ConfirmHead(level: lvl)
+                    ForEach(Array(items.prefix(4))) { c in ConfirmRow(name: c.name, bytes: c.bytes, level: lvl) }
+                    if items.count > 4 { ConfirmRow(name: "+ \(items.count - 4) more", bytes: items.dropFirst(4).reduce(Int64(0)) { $0 + $1.bytes }, level: lvl) }
+                }
+            }
             Text("How to clean").font(Theme.semi(13)).foregroundColor(Theme.muted).padding(.top, 8)
             HStack(spacing: 4) {
-                Button("Delete") { toTrash = false }.buttonStyle(KeyStyle(toggled: !toTrash))
-                Button("Move to Trash") { toTrash = true }.buttonStyle(KeyStyle(toggled: toTrash))
+                Button("Delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
+                Button("Move to Trash") { toTrash = true; chosen = true }.buttonStyle(KeyStyle(toggled: trashing))
             }
-            Text(toTrash ? "Everything goes to the Trash, so you can restore it. The space comes back when you empty the Trash. If the Trash item is ticked, the old Trash is emptied first."
+            Text(trashing ? "Everything goes to the Trash, so you can restore it. The space comes back when you empty the Trash. If the Trash item is ticked, the old Trash is emptied first."
                          : "Everything is deleted permanently. The space comes back straight away.")
                 .font(Theme.sans(12)).foregroundColor(Theme.soft).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
@@ -1127,7 +1139,7 @@ struct ConfirmSheet: View {
                 Button("Cancel") { confirm = false }.buttonStyle(KeyStyle()).keyboardShortcut(.cancelAction)
                 Button("Clean \(Engine.fmt(state.selectedBytes))") {
                     confirm = false
-                    let trash = toTrash
+                    let trash = trashing
                     // let the confirm sheet finish closing before the progress sheet opens
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { state.clean(toTrash: trash) }
                 }.buttonStyle(KeyStyle(primary: true))
@@ -1137,13 +1149,35 @@ struct ConfirmSheet: View {
     }
 }
 
+struct ConfirmHead: View {
+    let level: Level
+    var body: some View {
+        Text((level == .safe ? "Safe to delete" : level == .review ? "Review first" : "Caution  !").uppercased())
+            .font(Theme.bold(11)).foregroundColor(Theme.muted).padding(.top, 6)
+    }
+}
+
+// The mark for each section, readable without colour: Safe none, Review a hatched bar, Caution a solid bar.
+struct LevelMark: View {
+    let level: Level
+    var ink = Theme.ink
+    var ground = Theme.chassis
+    var body: some View {
+        switch level {
+        case .safe: Color.clear
+        case .review: Hatch(ink: ink, ground: ground)
+        case .caution: Rectangle().fill(ink)
+        }
+    }
+}
+
 struct ConfirmRow: View {
     let name: String
     let bytes: Int64
-    let hatch: Bool
+    let level: Level
     var body: some View {
         HStack(spacing: 10) {
-            if hatch { Hatch(ink: Theme.ink, ground: Theme.chassis).frame(width: 5, height: 18) } else { Spacer().frame(width: 5) }
+            LevelMark(level: level).frame(width: 5, height: 18)
             Text(name).font(Theme.semi(14))
             Spacer()
             Text(Engine.fmt(bytes)).font(Theme.semi(14))

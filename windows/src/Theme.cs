@@ -155,6 +155,13 @@ namespace SpaceHunter
             g.Restore(st);
         }
 
+        // The mark for each section, readable without colour: Safe none, Review a hatched bar, Caution a solid bar.
+        public static void LevelMark(Graphics g, RectangleF r, Level level, Color ink, Color ground)
+        {
+            if (level == Level.Review) Hatch(g, r, ink, ground);
+            else if (level == Level.Caution) using (var b = new SolidBrush(ink)) g.FillRectangle(b, r);
+        }
+
         // Shorten a path in the middle, keeping the last part whole and a fixed-length start.
         public static string MidPath(string p, int max)
         {

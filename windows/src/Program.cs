@@ -198,8 +198,8 @@ namespace SpaceHunter
             }
             if (Has(args, "--test-confirm"))
             {
-                var all2 = Engine.Build(); var demo = all2.Where(x => x.Safe).Take(3).Concat(all2.Where(x => !x.Safe).Take(2)).ToList();
-                long[] sizes = { 23400000000L, 3500000000L, 1200000000L, 9500000000L, 1500000000L };
+                var all2 = Engine.Build(); var demo = all2.Where(x => x.Safe).Take(3).Concat(all2.Where(x => x.Level == Level.Review).Take(2)).Concat(all2.Where(x => x.Level == Level.Caution).Take(1)).ToList();
+                long[] sizes = { 23400000000L, 3500000000L, 1200000000L, 9500000000L, 1500000000L, 4400000000L };
                 for (int k = 0; k < demo.Count; k++) demo[k].Bytes = sizes[k];
                 var cf = new ConfirmForm(demo) { StartPosition = FormStartPosition.CenterScreen, ShowInTaskbar = true };
                 if (snap != null) cf.Shown += (s, e) => { Application.DoEvents(); Snap(cf, snap); cf.Close(); };

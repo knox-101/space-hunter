@@ -16,43 +16,64 @@ namespace SpaceHunter
     // Shown every time Clean is pressed: what will go, and one toggle for how (Delete or Recycle Bin).
     class ConfirmForm : Form
     {
-        public bool Recycle;   // false = delete permanently (the default)
+        public bool Recycle;   // false = delete permanently
         readonly Key delKey = new Key("delete"), binKey = new Key("recycle bin");
         readonly Label hint;
+        const int RowH = 32, HeadH = 26, MaxPerGroup = 4;
+
+        // One line of the list: a section heading, or an item (or a "+ N more" line) with its size.
+        class Line { public string Text, Size; public Level Level; public bool Head; }
 
         public ConfirmForm(List<Category> sel)
         {
             long total = sel.Sum(c => c.Bytes);
-            var risky = sel.Where(c => !c.Safe).OrderByDescending(c => c.Bytes).ToList();
-            var safe = sel.Where(c => c.Safe).ToList();
-            int n = Math.Min(risky.Count, 6), listH = n * 32 + (safe.Count > 0 ? 32 : 0);
+            var lines = new List<Line>();
+            // grouped by risk, so it's plain which ticked items need care
+            foreach (var lvl in new[] { Level.Safe, Level.Review, Level.Caution })
+            {
+                var items = sel.Where(c => c.Level == lvl).OrderByDescending(c => c.Bytes).ToList();
+                if (items.Count == 0) continue;
+                lines.Add(new Line { Head = true, Level = lvl, Text = Theme.TierName(lvl) + (lvl == Level.Caution ? "  !" : "") });
+                var shown = lvl == Level.Safe ? new List<Category>() : items.Where(c => !c.Blocked).Take(MaxPerGroup).ToList();
+                if (lvl == Level.Safe)
+                {
+                    var measured = items.Where(c => !c.Blocked).ToList();
+                    if (measured.Count > 0) lines.Add(new Line { Level = lvl, Text = measured.Count + " item" + (measured.Count == 1 ? "" : "s") + " that rebuild themselves", Size = Engine.Fmt(measured.Sum(c => c.Bytes)) });
+                }
+                foreach (var c in shown) lines.Add(new Line { Level = lvl, Text = c.Name, Size = Engine.Fmt(c.Bytes) });
+                var rest = items.Where(c => !c.Blocked && !shown.Contains(c) && lvl != Level.Safe).ToList();
+                if (rest.Count > 0) lines.Add(new Line { Level = lvl, Text = "+ " + rest.Count + " more", Size = Engine.Fmt(rest.Sum(c => c.Bytes)) });
+                var blocked = items.Where(c => c.Blocked).ToList();   // only when the app runs without admin rights
+                if (blocked.Count > 0) lines.Add(new Line { Level = lvl, Text = "+ " + blocked.Count + " Windows folder" + (blocked.Count == 1 ? "" : "s") + " (" + string.Join(", ", blocked.Select(c => c.Name)) + ")", Size = "size after cleaning" });
+            }
+            int listH = lines.Sum(l => l.Head ? HeadH : RowH);
             Theme.Window(this, "Space Hunter", 560, 268 + listH);
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
+            // the safe choice first: anything beyond "Safe to delete" goes to the Recycle Bin unless you choose otherwise
+            Recycle = sel.Any(c => !c.Safe);
 
-            var h = new Label { Text = "Clean " + Engine.Fmt(total) + (sel.Any(c => c.Blocked) ? " + system folders" : "") + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = Theme.P(26, 22), UseMnemonic = false };
+            var h = new Label { Text = "Clean " + Engine.Fmt(total) + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = Theme.P(26, 22), UseMnemonic = false };
             var lst = new CanvasPanel { Location = Theme.P(26, 70), Size = Theme.D(508, listH) };
-            Font fn = Theme.CSemi(10.5f);
+            Font fn = Theme.CSemi(10.5f), fh = Theme.CBold(9.5f);
             lst.Draw += (s, e) =>
             {
                 var g = e.Graphics; float W = lst.LW, y = 0;
                 g.Clear(Theme.Chassis);
-                if (safe.Count > 0)
+                foreach (var l in lines)
                 {
-                    Row(g, W, y, safe.Count + " safe-to-delete item" + (safe.Count == 1 ? "" : "s"), Engine.Fmt(safe.Sum(c => c.Bytes)), false, fn);
-                    y += 32;
-                }
-                for (int i = 0; i < n; i++, y += 32)
-                {
-                    var c = risky[i];
-                    bool more = i == 5 && risky.Count > 6;
-                    Row(g, W, y, more ? "+ " + (risky.Count - 5) + " more to review" : c.Name + (c.Level == Level.Caution ? "  !" : ""),
-                        Engine.Fmt(more ? risky.Skip(5).Sum(x => x.Bytes) : c.Bytes), true, fn);
+                    if (l.Head)
+                    {
+                        using (var br = new SolidBrush(Theme.Muted)) g.DrawString(l.Text.ToUpperInvariant(), fh, br, 0, y + 7);
+                        y += HeadH; continue;
+                    }
+                    Row(g, W, y, l.Text, l.Size, l.Level, fn);
+                    y += RowH;
                 }
             };
             var how = new Label { Text = "How to clean", Font = Theme.Semi(10f), ForeColor = Theme.Muted, AutoSize = true, Location = Theme.P(28, 82 + listH), UseMnemonic = false };
             delKey.Location = Theme.P(26, 106 + listH); binKey.Location = new Point(delKey.Right + Theme.D(4), delKey.Top);
-            hint = new Label { Font = Theme.Sans(9.5f), ForeColor = Theme.Soft, Location = Theme.P(28, 150 + listH), AutoSize = true, MaximumSize = Theme.D(508, 0), UseMnemonic = false };
+            hint = new Label { Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, Location = Theme.P(28, 150 + listH), AutoSize = true, MaximumSize = Theme.D(508, 0), UseMnemonic = false };
             delKey.Click += (s, e) => { Recycle = false; ShowHow(); };
             binKey.Click += (s, e) => { Recycle = true; ShowHow(); };
             ShowHow();
@@ -67,11 +88,13 @@ namespace SpaceHunter
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
         }
 
-        static void Row(Graphics g, float W, float y, string name, string size, bool hatch, Font f)
+        static void Row(Graphics g, float W, float y, string name, string size, Level level, Font f)
         {
-            if (hatch) Theme.Hatch(g, new RectangleF(0, y + 7, 5, 18), Theme.Ink, Theme.Chassis);
-            using (var br = new SolidBrush(Theme.Ink)) g.DrawString(name, f, br, 14, y + 5);
+            Theme.LevelMark(g, new RectangleF(0, y + 7, 5, 18), level, Theme.Ink, Theme.Chassis);
             var m = g.MeasureString(size, f);
+            using (var br = new SolidBrush(Theme.Ink))
+            using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                g.DrawString(name, f, br, new RectangleF(14, y + 5, W - m.Width - 26, 22), sf);
             using (var br = new SolidBrush(Theme.Ink)) g.DrawString(size, f, br, W - m.Width, y + 5);
             using (var p = new Pen(Theme.Line)) g.DrawLine(p, 14, y + 31, W, y + 31);
         }
