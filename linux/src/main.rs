@@ -3,6 +3,7 @@
 // Space Hunter (Linux) - phase 1: the window, the look, the fonts and the disk numbers. Scanning and cleaning come next.
 
 mod engine;
+mod ui;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -55,6 +56,7 @@ fn disk(path: &str) -> (u64, u64) {
     (s.f_bavail as u64 * unit, s.f_blocks as u64 * unit)
 }
 
+#[allow(unused_imports)]
 use engine::fmt;
 
 const CSS: &str = r#"
@@ -85,179 +87,49 @@ button.key.primary:disabled { background: #D0CDC6; color: #9A968F; box-shadow: 0
 .explain { color: #5F5C56; font-size: 9pt; }
 .note { color: #7D7972; font-size: 9.5pt; }
 .status { color: #5F5C56; font-size: 9pt; padding: 10px 22px; border-top: 1px solid #C3BFB6; }
+.legend-ink { color: #E9E6DF; font-weight: 600; font-size: 10.5pt; }
+button.key.on { background: #1B1B1A; color: #E9E6DF; box-shadow: 0 2px 0 #000000; }
+button.key.small { font-size: 8.5pt; padding: 5px 10px; }
+button.key:disabled { background: #D0CDC6; color: #9A968F; box-shadow: 0 2px 0 #C3BFB6; }
+button.tile { background: #ECEAE5; background-image: none; border: none; border-radius: 6px; box-shadow: 0 3px 0 #A9A59C; padding: 10px 16px 12px 16px; }
+button.tile:hover { background: #F3F1ED; }
+button.tile.on { background: #1B1B1A; box-shadow: 0 3px 0 #000000; }
+button.tile label.tile-name { color: #1B1B1A; font-weight: 700; font-size: 11.5pt; }
+button.tile.on label.tile-name { color: #E9E6DF; }
+button.tile label.tile-size { color: #1B1B1A; font-weight: 600; font-size: 12.5pt; }
+button.tile.on label.tile-size { color: #E9E6DF; }
+button.tile label.tile-desc { color: #7D7972; font-size: 9pt; }
+button.tile.on label.tile-desc { color: #8A8A86; }
+button.tile label.tile-count { color: #5F5C56; font-weight: 600; font-size: 9pt; }
+button.tile.on label.tile-count { color: #E9E6DF; }
+button.link-btn { background: none; border: none; box-shadow: none; padding: 2px 4px; color: #1B1B1A; font-weight: 600; font-size: 9pt; border-bottom: 1px solid #1B1B1A; border-radius: 0; }
+.rowline { border-bottom: 1px solid #C3BFB6; }
+button.row-btn { background: none; background-image: none; border: none; box-shadow: none; border-radius: 0; padding: 8px 6px; }
+button.row-btn:hover { background: #E0DDD6; }
+button.row-btn.open { background: #E9E6E0; }
+.row-name { color: #1B1B1A; font-weight: 600; font-size: 10.5pt; }
+.row-name-dim { color: #7D7972; font-size: 10pt; }
+.row-sub { color: #7D7972; font-size: 9pt; }
+.row-size { color: #1B1B1A; font-weight: 600; font-size: 11pt; }
+.chevron { color: #7D7972; font-size: 16pt; }
+.chevron-open { color: #FF5B1F; font-size: 16pt; font-weight: 700; }
+.group-note { color: #7D7972; font-size: 9pt; }
+checkbutton check { min-width: 17px; min-height: 17px; border-radius: 2px; border: 2px solid #1B1B1A; background: transparent; background-image: none; box-shadow: none; }
+checkbutton check:checked { background: #FF5B1F; border-color: #FF5B1F; color: #1B1B1A; }
+checkbutton check:disabled { border-color: #C3BFB6; background: transparent; }
+.panel { background: #E4E1DA; border-left: 1px solid #C3BFB6; }
+.panel-tag { color: #5F5C56; font-weight: 600; font-size: 9.5pt; }
+.panel-title { color: #1B1B1A; font-weight: 700; font-size: 14pt; }
+.panel-stats { color: #1B1B1A; font-size: 10.5pt; margin-bottom: 6px; }
+.panel-head { color: #5F5C56; font-weight: 600; font-size: 10pt; }
+.panel-body { color: #1B1B1A; font-size: 10.25pt; }
+.panel-path { color: #1B1B1A; font-size: 9.5pt; }
+.age-value { color: #1B1B1A; font-weight: 600; font-size: 13pt; }
+.confirm-title { color: #1B1B1A; font-weight: 700; font-size: 17pt; margin-bottom: 4px; }
+.confirm-head { color: #5F5C56; font-weight: 700; font-size: 9.5pt; }
+.confirm-how { color: #5F5C56; font-weight: 600; font-size: 10pt; }
+textview.log, textview.log text { background: #E4E1DA; color: #1B1B1A; font-family: "IBM Plex Mono"; font-size: 8.5pt; }
 "#;
-
-fn label(text: &str, class: &str) -> gtk::Label {
-    let l = gtk::Label::new(Some(text));
-    l.add_css_class(class);
-    l.set_xalign(0.0);
-    l
-}
-
-fn key(text: &str, classes: &[&str]) -> gtk::Button {
-    let b = gtk::Button::with_label(&text.to_uppercase());
-    b.add_css_class("key");
-    for c in classes { b.add_css_class(c); }
-    b.set_valign(gtk::Align::Center);
-    b
-}
-
-// four blocks of different sizes: a tiny picture of the Space map, for its key
-fn map_icon() -> gtk::DrawingArea {
-    let d = gtk::DrawingArea::new();
-    d.set_content_width(14);
-    d.set_content_height(12);
-    d.set_draw_func(|_, cr, _, _| {
-        cr.set_source_rgb(0.106, 0.106, 0.102);
-        cr.rectangle(0.0, 0.0, 7.0, 12.0);
-        cr.rectangle(8.0, 0.0, 6.0, 7.0);
-        cr.rectangle(8.0, 8.0, 3.0, 4.0);
-        let _ = cr.fill();
-        cr.set_source_rgb(1.0, 0.357, 0.122);
-        cr.rectangle(12.0, 8.0, 2.0, 4.0);
-        let _ = cr.fill();
-    });
-    d
-}
-
-fn tile(name: &str, desc: &str, on: bool) -> gtk::Box {
-    let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    b.add_css_class("tile");
-    if on { b.add_css_class("on"); }
-    b.set_hexpand(true);
-    b.append(&label(name, "tile-name"));
-    b.append(&label(desc, "tile-desc"));
-    b
-}
-
-fn build(app: &gtk::Application) {
-    let (free, total) = disk("/");
-
-    let win = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("Space Hunter")
-        .default_width(1180)
-        .default_height(760)
-        .build();
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.add_css_class("chassis");
-
-    // the dark display: the number, the disk, one bar
-    let display = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    display.add_css_class("display");
-    display.set_margin_top(18);
-    display.set_margin_start(18);
-    display.set_margin_end(18);
-    let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    left.append(&label("Space to free up", "display-label"));
-    let num = gtk::Box::new(gtk::Orientation::Horizontal, 14);
-    let hero = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    let n = label("0", "hero");
-    let u = label("MB", "hero-unit");
-    u.set_valign(gtk::Align::End);
-    u.set_margin_bottom(12);
-    hero.append(&n);
-    hero.append(&u);
-    num.append(&hero);
-    let beside = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    beside.set_valign(gtk::Align::Center);
-    beside.append(&label("Linux preview", "beside"));
-    beside.append(&label("Scanning and cleaning come in the next step", "beside-muted"));
-    num.append(&beside);
-    left.append(&num);
-    top.append(&left);
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    top.append(&spacer);
-    let right = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let dl = label("Disk /", "display-label");
-    dl.set_xalign(1.0);
-    let df = label(&format!("{} free of {}", fmt(free), fmt(total)), "disk");
-    df.set_xalign(1.0);
-    right.append(&dl);
-    right.append(&df);
-    top.append(&right);
-    display.append(&top);
-
-    let bar = gtk::DrawingArea::new();
-    bar.set_content_height(16);
-    bar.set_margin_top(14);
-    let used = if total > 0 { (total - free) as f64 / total as f64 } else { 0.0 };
-    bar.set_draw_func(move |_, cr, w, h| {
-        cr.set_source_rgb(0.227, 0.227, 0.220);   // free: the track
-        cr.rectangle(0.0, 0.0, w as f64, h as f64);
-        let _ = cr.fill();
-        cr.set_source_rgb(0.435, 0.424, 0.400);   // used
-        cr.rectangle(0.0, 0.0, w as f64 * used, h as f64);
-        let _ = cr.fill();
-    });
-    display.append(&bar);
-    let legend = gtk::Box::new(gtk::Orientation::Horizontal, 24);
-    legend.set_margin_top(10);
-    legend.append(&label("■ Used", "legend"));
-    legend.append(&label("□ Free", "legend"));
-    display.append(&legend);
-    root.append(&display);
-
-    // the keys: the Space map alone at the left, the cleaning keys together at the right
-    let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    keys.set_margin_start(18);
-    keys.set_margin_end(18);
-    keys.set_margin_top(12);
-    keys.set_margin_bottom(12);
-    let map = gtk::Button::new();
-    map.add_css_class("key");
-    map.add_css_class("accent");
-    map.set_valign(gtk::Align::Center);
-    let mc = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    mc.append(&map_icon());
-    mc.append(&gtk::Label::new(Some("SPACE MAP")));
-    map.set_child(Some(&mc));
-    keys.append(&map);
-    let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    gap.set_hexpand(true);
-    keys.append(&gap);
-    keys.append(&key("scan again", &[]));
-    keys.append(&key("protected folders", &[]));
-    let reset = key("reset to default", &[]);
-    reset.set_margin_end(4);
-    keys.append(&reset);
-    let clean = key("clean", &["primary"]);
-    clean.set_sensitive(false);
-    keys.append(&clean);
-    root.append(&keys);
-
-    // the three sections
-    let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    tiles.set_homogeneous(true);
-    tiles.set_margin_start(18);
-    tiles.set_margin_end(18);
-    tiles.append(&tile("Safe to clean", "Rebuilds or isn't needed", true));
-    tiles.append(&tile("Review first", "Re-downloads or history", false));
-    tiles.append(&tile("Caution  !", "Can hold your history or work", false));
-    root.append(&tiles);
-
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    section.set_margin_start(22);
-    section.set_margin_end(22);
-    section.set_margin_top(20);
-    section.set_vexpand(true);
-    section.append(&label("SAFE TO CLEAN  ·  Rebuilds or isn't needed", "section-title"));
-    let ex = label("Caches, temp files and leftovers that apps and Linux rebuild or no longer need. Your files, logins and passwords aren't touched. Some things load a little slower once.", "explain");
-    ex.set_wrap(true);
-    ex.set_max_width_chars(110);
-    section.append(&ex);
-    let note = label("The cleanup list for Linux arrives in the next step.", "note");
-    note.set_margin_top(18);
-    section.append(&note);
-    root.append(&section);
-
-    root.append(&label(&format!("Space Hunter {} for Linux  ·  preview build", VERSION.trim()), "status"));
-    win.set_child(Some(&root));
-    win.present();
-}
 
 fn main() -> glib::ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -288,7 +160,7 @@ fn main() -> glib::ExitCode {
             id: "test".into(), name: "Test folder".into(), level: engine::Level::Safe,
             kind: if sub { engine::Kind::Subfolders } else { engine::Kind::Contents }, admin: false,
             roots: vec![dir], exclude: ["memory".to_string()].into_iter().collect(), extensions: None, top_level_only: false,
-            is_custom: false, default_age: engine::DAY, age_minutes: engine::DAY, checked: true, files: 0, bytes: 0,
+            is_custom: false, default_age: engine::DAY, age_minutes: engine::DAY, last_age: engine::DAY, checked: true, files: 0, bytes: 0,
             scanned: false, blocked: false, short: String::new(), what: String::new(), deletes: String::new(),
             safe_text: String::new(), after: String::new(),
         };
@@ -312,8 +184,13 @@ fn main() -> glib::ExitCode {
             gtk::style_context_add_provider_for_display(&d, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
     });
+    let opts = ui::Opts {
+        open: args.iter().position(|a| a == "--open").and_then(|i| args.get(i + 1)).cloned(),
+        confirm: args.iter().any(|a| a == "--confirm"),
+        progress_dir: args.iter().position(|a| a == "--test-progress").and_then(|i| args.get(i + 1)).cloned(),
+    };
     app.connect_activate(move |app| {
-        build(app);
+        let _ui = ui::build(app, opts.clone());
         if let Some(s) = quit_after {
             let a = app.clone();
             glib::timeout_add_seconds_local_once(s, move || a.quit());

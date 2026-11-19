@@ -76,6 +76,7 @@ pub struct Cat {
     pub is_custom: bool,                     // a folder added from the Space map
     pub default_age: u32,
     pub age_minutes: u32,                    // only files untouched for this long (0 = everything)
+    pub last_age: u32,                       // the age to go back to when switching from "Everything"
     pub checked: bool,
     pub files: u64,
     pub bytes: u64,
@@ -92,12 +93,18 @@ impl Cat {
     pub fn is_safe(&self) -> bool { self.level == Level::Safe }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Counter {
     pub files: u64,
     pub bytes: u64,
     pub skipped: u64,
     pub trashed: u64,   // bytes moved to the Trash (they come back only when the Trash is emptied)
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,              // Stop
+    pub on_item: Option<Box<dyn FnMut(&Path, u64, bool, bool) + Send>>,            // path, size, ok, to the Trash
+}
+
+impl Counter {
+    pub fn cancelled(&self) -> bool { self.cancel.as_ref().map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(false) }
 }
 
 pub fn is_root() -> bool { unsafe { libc::geteuid() == 0 } }
@@ -270,7 +277,7 @@ pub fn build() -> Vec<Cat> {
             exclude: d.exclude.into_iter().collect(),
             extensions: d.extensions.map(|v| v.into_iter().map(|e| e.to_lowercase()).collect()),
             top_level_only: d.top_level_only, is_custom: false,
-            default_age: age, age_minutes: age, checked: level == Level::Safe,
+            default_age: age, age_minutes: age, last_age: if age > 0 { age } else { 14 * DAY }, checked: level == Level::Safe,
             files: 0, bytes: 0, scanned: false, blocked: false,
             short: d.short, what: d.what, deletes: d.deletes, safe_text: d.safe, after: d.after,
         };
@@ -287,7 +294,7 @@ pub fn build() -> Vec<Cat> {
         list.push(Cat {
             id: format!("custom:{}", p), name: format!("{}  (your folder)", name), level: Level::Caution, kind: Kind::Contents,
             admin: false, roots: vec![path], exclude: HashSet::new(), extensions: None, top_level_only: false, is_custom: true,
-            default_age: 30 * DAY, age_minutes: 30 * DAY, checked: false, files: 0, bytes: 0, scanned: false, blocked: false,
+            default_age: 30 * DAY, age_minutes: 30 * DAY, last_age: 30 * DAY, checked: false, files: 0, bytes: 0, scanned: false, blocked: false,
             short: "Everything inside goes; the folder itself stays".into(),
             what: format!("A folder you added from the Space map: {}", p),
             deletes: "Every file inside it (older than the age you set) and the sub-folders that end up empty. The folder itself stays.".into(),
@@ -365,6 +372,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
     let root_user = is_root();
     let trash_it = to_trash && c.kind != Kind::Trash && !c.admin;   // emptying the Trash can't go to the Trash
     let handle = |path: &Path, m: &fs::Metadata, cut: SystemTime, cnt: &mut Counter| {
+        if cnt.cancelled() { return; }
         if let Some(ext) = &c.extensions {
             let e = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             if !ext.contains(&e) { return; }
@@ -377,8 +385,10 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
         if !delete { cnt.files += 1; cnt.bytes += size; return; }
         let ok = if trash_it { trash(path) } else { fs::remove_file(path).is_ok() };
         if ok { cnt.files += 1; if trash_it { cnt.trashed += size } else { cnt.bytes += size } } else { cnt.skipped += 1; }
+        if let Some(f) = cnt.on_item.as_mut() { f(path, size, ok, trash_it); }
     };
     for root in &c.roots {
+        if cnt.cancelled() { break; }
         let m = match fs::symlink_metadata(root) { Ok(m) => m, Err(_) => continue };
         if !m.is_dir() { continue; }   // a linked root is never followed
         if !is_safe_root(root, c.admin, c.extensions.is_some() && c.top_level_only) { continue; }
@@ -457,4 +467,70 @@ pub fn fmt(b: u64) -> String {
     else if b >= m { format!("{:.0} MB", b / m) }
     else if b >= k { format!("{:.0} KB", b / k) }
     else { "0 MB".to_string() }
+}
+
+// Your ticks and ages, kept between runs (~/.config/space-hunter/settings.tsv: id, ticked, age, last age).
+pub mod settings {
+    use super::*;
+    fn path() -> PathBuf { config_dir().join("settings.tsv") }
+    pub fn load(cats: &mut [Cat]) {
+        let text = fs::read_to_string(path()).unwrap_or_default();
+        for line in text.lines() {
+            let p: Vec<&str> = line.split('\t').collect();
+            if p.len() < 4 { continue; }
+            if let Some(c) = cats.iter_mut().find(|c| c.id == p[0]) {
+                if c.refused().is_none() { c.checked = p[1] == "1"; }
+                if let Ok(a) = p[2].parse() { c.age_minutes = a; }
+                if let Ok(a) = p[3].parse::<u32>() { if a > 0 { c.last_age = a; } }
+            }
+        }
+    }
+    pub fn save(cats: &[Cat]) {
+        let _ = fs::create_dir_all(config_dir());
+        let text: Vec<String> = cats.iter().map(|c| format!("{}\t{}\t{}\t{}", c.id, if c.checked { 1 } else { 0 }, c.age_minutes, c.last_age)).collect();
+        let _ = fs::write(path(), text.join("\n"));
+    }
+}
+
+// What's been freed so far, one line per clean (~/.local/share/space-hunter/cleans.tsv).
+pub mod history {
+    use super::*;
+    fn path() -> PathBuf { glib::user_data_dir().join("space-hunter").join("cleans.tsv") }
+    pub fn record(bytes: u64, trashed: u64) {
+        let _ = fs::create_dir_all(glib::user_data_dir().join("space-hunter"));
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let mut text = fs::read_to_string(path()).unwrap_or_default();
+        text.push_str(&format!("{}\t{}\t{}\n", now, bytes, trashed));
+        let _ = fs::write(path(), text);
+    }
+    // (bytes freed, number of cleans)
+    pub fn total() -> (u64, u32) {
+        let text = fs::read_to_string(path()).unwrap_or_default();
+        let mut b = 0u64; let mut n = 0u32;
+        for l in text.lines() { let p: Vec<&str> = l.split('\t').collect(); if p.len() >= 2 { b += p[1].parse::<u64>().unwrap_or(0); n += 1; } }
+        (b, n)
+    }
+}
+
+impl Cat {
+    // something you added that the safety rules refuse: listed so it can be removed, never cleaned
+    pub fn refused(&self) -> Option<&str> { if self.is_custom && !is_safe_root(&self.roots[0], false, false) { Some("likely your own files") } else { None } }
+}
+
+pub fn fmt_age(m: u32) -> String {
+    if m == 0 { return "any age".into(); }
+    if m % DAY == 0 { let n = m / DAY; return format!("{} day{}", n, if n == 1 { "" } else { "s" }); }
+    if m % HOUR == 0 { let n = m / HOUR; return format!("{} hour{}", n, if n == 1 { "" } else { "s" }); }
+    format!("{} min", m)
+}
+
+// The names a newcomer can act on without opening anything (the same as on Windows and Mac).
+pub fn tier_name(l: Level) -> &'static str { match l { Level::Safe => "Quick clean", Level::Review => "Big caches & history", Level::Caution => "Personal & work items" } }
+pub fn tier_desc(l: Level) -> &'static str { match l { Level::Safe => "Caches and leftovers that rebuild", Level::Review => "Big caches that download again, or old history", Level::Caution => "Can hold your work or history. Check before cleaning" } }
+pub fn tier_explain(l: Level) -> &'static str {
+    match l {
+        Level::Safe => "Caches, temp files and leftovers that apps and Linux rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once.",
+        Level::Review => "Things that come back by downloading them again, or history you might still want. Read each one before you tick it.",
+        Level::Caution => "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes.",
+    }
 }

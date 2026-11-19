@@ -151,24 +151,32 @@ jobs:
           echo "-- what this machine has"
           "$BIN" --report
           rm -rf "$T"
-      - name: Launch it on a virtual screen and take a screenshot
+      - name: Launch it on a virtual screen and take screenshots
         working-directory: linux
         env:
           GSK_RENDERER: cairo
         run: |
-          xvfb-run -a -s "-screen 0 1200x800x24" sh -c '
-            ./target/release/space-hunter --quit-after 10 & APP=$!
-            sleep 7
-            import -window root screenshot-main.png
-            kill -0 $APP || { echo "App did not stay running"; exit 1; }
-            wait $APP'
-          ls -l target/release/space-hunter screenshot-main.png
+          mkdir -p "$HOME/sh-shot"; for i in $(seq 1 30); do head -c 300000 /dev/urandom > "$HOME/sh-shot/f$i.tmp"; done
+          shot() {   # name, then the app's arguments
+            name=$1; shift
+            xvfb-run -a -s "-screen 0 1280x860x24" sh -c "
+              ./target/release/space-hunter --quit-after 14 $* & APP=\$!
+              sleep 11
+              import -window root screenshot-$name.png
+              kill -0 \$APP || { echo 'App did not stay running'; exit 1; }
+              wait \$APP"
+          }
+          shot main
+          shot panel --open temp
+          shot confirm --confirm
+          shot cleaning --test-progress "$HOME/sh-shot"
+          ls -l target/release/space-hunter screenshot-*.png
       - uses: actions/upload-artifact@v5
         with:
           name: SpaceHunter-linux-preview
           path: |
             linux/target/release/space-hunter
-            linux/screenshot-main.png
+            linux/screenshot-*.png
             linux/Cargo.lock
 
   release:
