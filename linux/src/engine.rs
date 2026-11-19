@@ -587,9 +587,14 @@ pub fn can_add(p: &Path, existing: bool) -> Result<(), String> {
     }
     if let Some(k) = personal_folder_of(p) { return Err(format!("it's inside your personal files ({})", k.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())); }
     if personal().iter().any(|k| k.starts_with(p)) { return Err("it holds your personal folders".into()); }
+    // installed tools and app settings: removing anything inside breaks them; their known caches are separate items
+    for t in [".config", ".local", ".rustup", ".cargo", ".dotnet", ".nvm", ".pyenv", ".sdkman", ".rbenv", ".mozilla",
+              ".thunderbird", ".var", "snap", ".steam", ".wine", ".pki", ".java"] {
+        if p.starts_with(h.join(t)) { return Err("part of an installed tool or app's settings".into()); }
+    }
     // a folder made right in your home (like ~/Work) usually holds your own files; hidden ones (~/.gradle) are app data
     if p.parent() == Some(h.as_path()) && !p.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
-        return Err("likely your own files (a folder right in your home)".into());
+        return Err("a folder right in your home; it may hold your own files".into());
     }
     if keep::is_kept(p, &keep::all()) { return Err("it's a protected folder".into()); }
     if !existing && custom::all().iter().any(|c| p.starts_with(c)) { return Err("it's already on the cleanup list".into()); }

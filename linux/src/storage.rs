@@ -95,7 +95,7 @@ fn key(text: &str, classes: &[&str]) -> gtk::Button {
 }
 fn clear(b: &gtk::Box) { while let Some(c) = b.first_child() { b.remove(&c); } }
 fn hspacer() -> gtk::Box { let s = gtk::Box::new(gtk::Orientation::Horizontal, 0); s.set_hexpand(true); s }
-fn home_short(p: &Path) -> String { let h = engine::home(); match p.strip_prefix(&h) { Ok(r) if r.as_os_str().is_empty() => "~".into(), Ok(r) => format!("~/{}", r.display()), Err(_) => p.display().to_string() } }
+fn home_short(p: &Path) -> String { let h = engine::home(); match p.strip_prefix(&h) { Ok(r) if r.as_os_str().is_empty() => "~  (your home folder)".into(), Ok(r) => format!("~/{}", r.display()), Err(_) => p.display().to_string() } }
 fn split(b: u64) -> (String, String) { let s = fmt(b); match s.split_once(' ') { Some((n, u)) => (n.into(), u.into()), None => (s, String::new()) } }
 
 #[derive(Clone)]
@@ -596,9 +596,10 @@ fn pangocairo_show(cr: &gtk::cairo::Context, l: &gtk::pango::Layout) { pangocair
 
 // ---- Protected folders: never cleaned, whatever is ticked ----
 
-const BUILT_IN: [&str; 8] = [
+const BUILT_IN: [&str; 9] = [
     "Documents, Desktop, Pictures, Videos, Music, Public and Templates (in your system's language)",
-    "Downloads, except old installers and archives, and those only when you tick that item",
+    "Downloads (only old installers and archives can be cleaned, and only if you tick that item)",
+    "App settings and installed tools (~/.config, ~/.local, .rustup, .cargo, .dotnet, Flatpak and Snap data): only their known caches are cleaned",
     "Your code and project folders (Projects, src, code, dev)",
     "Cloud folders (Dropbox, Nextcloud, ownCloud, OneDrive)",
     "Keys and sign-in settings (.ssh, .gnupg, .aws, .azure, .kube, .docker, password store, keyrings)",
