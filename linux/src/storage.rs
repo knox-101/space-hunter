@@ -429,9 +429,9 @@ fn show(s: &Rc<Storage>) {
     // the chart (folders only, plus "Files here" and, at the top of a disk, free space); one block says nothing
     let free = if sm.path.is_empty() && sm.place.mount { sm.place.free } else { 0 };
     let n_blocks = cur.kids.iter().filter(|k| k.size > 0).count() + (cur.own_size > 0) as usize + (free > 0) as usize;
+    drop(sm);   // let go before touching widgets: GTK may call back into the map straight away
     s.chart.set_visible(n_blocks > 1);
     s.chart.queue_draw();
-    drop(sm);
     caption_text(s);
     // the list
     clear(&s.rows);
@@ -636,7 +636,7 @@ pub fn open_protect(parent: &gtk::ApplicationWindow, on_change: Rc<dyn Fn()>) ->
             let mine = engine::keep::all();
             hero.set_text(&format!("{} BUILT IN + {} YOURS", BUILT_IN.len(), mine.len()));
             let h = label("Your protected folders", "section-title"); h.set_margin_top(10); list.append(&h);
-            if mine.is_empty() { list.append(&label("None yet. Add a folder above, or press Keep on a folder in an item's panel.", "group-note")); }
+            if mine.is_empty() { list.append(&label("None yet. Press Add folder above.", "group-note")); }
             for p in mine {
                 let r = gtk::Box::new(gtk::Orientation::Horizontal, 10);
                 let rm = key("remove", &["small"]);

@@ -64,7 +64,7 @@ enum Keep {   // protected folders: never shown, counted or cleaned
     static func remove(_ p: String) { Store2.write("keep.txt", all.filter { $0 != p }) }
     static func isKept(_ path: String, _ list: [String]) -> Bool { list.contains { path == $0 || path.hasPrefix($0 + "/") } }
     // Space Hunter itself (the app and its settings folder): always protected, and can't be taken off the list
-    static var builtIn: [String] { [Bundle.main.bundlePath, Store2.dir.path] }
+    static var builtIn: [String] { [Bundle.main.bundlePath, Store2.dir.path, Engine.u("Library/Logs/SpaceHunter").path] }   // incl. its log, which holds "Freed so far"
 }
 
 enum Custom {   // folders added to the cleanup list from the Storage map
@@ -259,6 +259,12 @@ enum Engine {
     static func canAdd(_ path: String, existing: Bool = false) -> String? {
         let p = (path as NSString).standardizingPath
         if p == "/" { return "a whole disk" }
+        // only inside your home folder, and never apps' settings in ~/Library (their caches and logs are fine)
+        if !p.hasPrefix(home.path + "/") { return "outside your home folder" }
+        let lib = u("Library").path
+        if p.hasPrefix(lib + "/"), !["Caches", "Logs", "Developer"].contains(where: { p == lib + "/" + $0 || p.hasPrefix(lib + "/" + $0 + "/") }) {
+            return "it holds an app's settings"
+        }
         // a folder made right at the top of the disk (like /Personal) or a whole user folder: likely your own files
         if p.split(separator: "/").count <= 2 { return "likely your own files (made right on the disk)" }
         for sys in ["/System", "/Library", "/Applications", "/usr", "/bin", "/sbin", "/private", "/opt", "/Volumes", "/cores"] where p == sys || p.hasPrefix(sys + "/") {
@@ -558,7 +564,7 @@ final class AppState: ObservableObject {
                         self.cats[j].files = cnt.files; self.cats[j].bytes = cnt.bytes; self.cats[j].scanned = true
                     }
                     self.scanning -= 1
-                    self.status = self.scanning > 0 ? "Scanning \(snapshot.name)…" : (self.freedAll.0 == 0 ? "Quick clean is ticked for you, so one click on Clean is enough. You see the list before anything goes." : "Scan done. Click a row to see what it is. Tick the box to include it.")
+                    self.status = self.scanning > 0 ? "Scanning \(snapshot.name)…" : (self.freedAll.0 == 0 ? "Quick clean is ticked for you: press Clean, check the list, and it's done." : "Scan done. Click a row to see what it is. Tick the box to include it.")
                     if self.scanning == 0 { self.disk = Engine.disk(); self.freedAll = Engine.freedAllTime() }
                 }
             }
@@ -855,7 +861,7 @@ struct DisplayView: View {
                         if state.scanning == 0 && state.selectedBytes > 0 {
                             let onlySafe = !state.cats.contains { $0.checked && !$0.isSafe && ($0.bytes > 0 || $0.files > 0) }
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(onlySafe ? (state.freedAll.0 == 0 ? "all safe to clean  ·  one click on Clean" : "all safe to clean") : "includes items to check first")
+                                Text(onlySafe ? (state.freedAll.0 == 0 ? "all safe to clean  ·  press Clean to start" : "all safe to clean") : "includes items to check first")
                                     .font(Theme.semi(13)).foregroundColor(Theme.screenInk)
                                 if state.notTicked > 0 {
                                     Text("+ \(Engine.fmt(state.notTicked)) more you can check yourself").font(Theme.semi(13)).foregroundColor(Theme.screenMuted)
@@ -1337,7 +1343,12 @@ struct ProgressSheet: View {
                 }
             }
             .padding(20).background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
-            .onChange(of: state.cleanDone) { d in if d && !state.cleanStopped && !reduceMotion { finishStart = Date() } }
+            .onChange(of: state.cleanDone) { d in
+                if d && !state.cleanStopped && !reduceMotion {
+                    finishStart = Date()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { finishStart = nil }   // stop redrawing once it has settled
+                }
+            }
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -1397,7 +1408,7 @@ struct ProtectView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Your protected folders").font(Theme.semi(14)).padding(.top, 8)
-                    if mine.isEmpty { Text("None yet. Add a folder above, or press Keep on a folder in an item's panel.").font(Theme.sans(13)).foregroundColor(Theme.soft) }
+                    if mine.isEmpty { Text("None yet. Press Add folder above.").font(Theme.sans(13)).foregroundColor(Theme.soft) }
                     ForEach(mine, id: \.self) { p in
                         HStack(spacing: 10) {
                             Button("Remove") { Keep.remove(p); tick += 1; state.scan() }.buttonStyle(KeyStyle())

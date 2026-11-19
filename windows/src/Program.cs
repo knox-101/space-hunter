@@ -59,6 +59,9 @@ namespace SpaceHunter
         [STAThread]
         static int Main(string[] args)
         {
+            // long paths (past the old 260-character limit) work instead of throwing; must be set before any file access
+            AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
+            AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
             if (Has(args, "--version")) { Console.WriteLine("Space Hunter " + AppVersion.Text); return 0; }
             string verifyFile = Arg(args, "--test-verify");   // test hook: --test-verify <file> <sig> <public-key.xml>
             if (verifyFile != null)

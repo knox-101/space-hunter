@@ -139,6 +139,12 @@ jobs:
           "$BIN" --test-engine "$T/s" --subfolders
           ok test ! -e "$T/s/oldproj"; ok test -e "$T/s/newproj/f1"
 
+          echo "-- a folder owned by someone else (here root) is never entered"
+          sudo mkdir -p "$T/rootowned"; sudo sh -c "printf x > '$T/rootowned/f'"; sudo touch -d '3 days ago' "$T/rootowned/f"
+          "$BIN" --test-engine "$T"
+          ok test -e "$T/rootowned/f"
+          sudo rm -rf "$T/rootowned"
+
           echo "-- folders outside your home and /tmp are refused"
           set +e; "$BIN" --test-engine /etc; code=$?; set -e
           ok test "$code" = 3

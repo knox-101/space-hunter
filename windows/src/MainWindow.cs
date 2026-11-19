@@ -49,7 +49,7 @@ namespace SpaceHunter
                 if (!Scanning && Selected > 0)
                 {
                     float tx = pad - 6 + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14;
-                    using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString(OnlySafe ? (FreedAll == 0 ? "all safe to clean  ·  one click on Clean" : "all safe to clean") : "includes items to check first", fLegend, ib, tx, 44);
+                    using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString(OnlySafe ? (FreedAll == 0 ? "all safe to clean  ·  press Clean to start" : "all safe to clean") : "includes items to check first", fLegend, ib, tx, 44);
                     if (ReviewUnticked > 0)
                         using (var mb = new SolidBrush(Theme.DisplayMuted)) g.DrawString("+ " + Engine.Fmt(ReviewUnticked) + " more you can check yourself", fLegend, mb, tx, 64);
                 }
@@ -817,6 +817,7 @@ namespace SpaceHunter
             cleanKey.Text = cleaning ? "show cleaning" : "clean " + Engine.Fmt(disp.Selected);
             cleanKey.Enabled = cleaning || !busy && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)));
             scanKey.Enabled = !busy && !cleaning;
+            resetKey.Enabled = !cleaning;   // ticks and ages stay as they were until the clean is done
             PlaceKeys(cleanKey.Parent);
         }
 
@@ -854,6 +855,7 @@ namespace SpaceHunter
             updateKey.Click += (s, e) =>
             {
                 if (pending == null) return;
+                if (cleaning) { updateSub.Text = "A clean is running. Update once it's done."; return; }   // never two copies at once
                 updateKey.Enabled = laterKey.Enabled = newsKey.Enabled = false;
                 var r = pending;
                 new Thread(() =>
@@ -911,7 +913,7 @@ namespace SpaceHunter
                     lock (qLock) { if (scanQueue.Count == 0) { workers--; break; } c = scanQueue.Dequeue(); }
                     BeginInvoke((Action)(() => status.Text = "Scanning  " + c.Name + " ..."));
                     var cnt = new Counter();
-                    Engine.Process(c, false, cnt);
+                    try { Engine.Process(c, false, cnt); } catch { }   // a problem in one item never closes the app
                     c.Files = cnt.Files; c.Bytes = cnt.Bytes; c.Scanned = true;
                     BeginInvoke((Action)(() => { drawer.Panel.RefreshStats(c); Refresh_(); }));
                 }
@@ -921,7 +923,7 @@ namespace SpaceHunter
                     ReadDisk(); History.Record(disp.Free); disp.History = History.Read();
                     list.Relayout(); Refresh_();
                     status.Text = History.FreedAllTime(out _cl) == 0
-                        ? "Quick clean is ticked for you, so one click on Clean is enough. You see the list before anything goes."
+                        ? "Quick clean is ticked for you: press Clean, check the list, and it's done."
                         : "Scan done.  Click a row to see what it is.  Tick the box to include it.";
                     if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; } OpenPanelFor = null; }
                     if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
@@ -942,6 +944,7 @@ namespace SpaceHunter
                 if (cf.ShowDialog(this) != DialogResult.OK) return;
                 recycle = cf.Recycle;
             }
+            sel = sel.Select(c => c.Snapshot()).ToList();   // frozen: Reset or age changes mid-clean don't touch it
             foreach (var c in sel) c.Recycle = recycle && !c.Safe;   // the confirm window's choice, for this clean; Quick clean is always deleted for good
             // the cleaning window doesn't block: you can keep looking around; Clean waits until this one is done
             cleaning = true; Refresh_();

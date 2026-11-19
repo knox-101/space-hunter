@@ -384,6 +384,15 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         ui.st.borrow_mut().cats = cats;
     }
     refresh(&ui);
+    {   // closing the main window mid-clean would cut the clean off: show the cleaning window instead
+        let u = ui.clone();
+        ui.win.connect_close_request(move |_| {
+            if !u.st.borrow().cleaning { return glib::Propagation::Proceed; }
+            u.status.set_text("Cleaning is still running. Press Stop in its window first, or wait for it to finish.");
+            if let Some(w) = u.prog_win.borrow().as_ref() { w.present(); }
+            glib::Propagation::Stop
+        });
+    }
     ui.win.present();
     let hooks = ui.opts.open.is_some() || ui.opts.confirm || ui.opts.progress_dir.is_some() || ui.opts.storage.is_some() || ui.opts.protect;
     if !hooks { check_update(&ui); }
@@ -517,7 +526,7 @@ fn refresh_top(u: &Rc<Ui>) {
     u.unit.set_text(&unit);
     let freed = engine::history::total();
     if st.pending > 0 { u.beside1.set_text("measuring\u{2026}"); }
-    else if only_safe { u.beside1.set_text(if freed.1 == 0 { "all safe to clean  \u{00B7}  one click on Clean" } else { "all safe to clean" }); }
+    else if only_safe { u.beside1.set_text(if freed.1 == 0 { "all safe to clean  \u{00B7}  press Clean to start" } else { "all safe to clean" }); }
     else { u.beside1.set_text("includes items to check first"); }
     u.beside2.set_text(&if not_ticked > 0 { format!("+ {} more you can check yourself", fmt(not_ticked)) } else { String::new() });
     let (free, total) = crate::disk("/");
@@ -731,9 +740,12 @@ fn fill_panel(u: &Rc<Ui>) {
     // a folder or file you added: say what's actually in it (worked out here, nothing is sent anywhere)
     let what = if c.is_custom {
         let root = c.roots[0].to_string_lossy().to_string();
-        match u.described.borrow().get(&root) {
-            Some(d) => d.clone(),
+        let known = u.described.borrow().get(&root).cloned();
+        match known {
+            Some(d) => d,
             None => {
+                let looking = format!("Looking inside {}\u{2026}", c.roots[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+                u.described.borrow_mut().insert(root.clone(), looking);   // one look at a time, however often the panel redraws
                 let (tx, rx) = mpsc::channel::<String>();
                 let r2 = c.roots[0].clone();
                 std::thread::spawn(move || { let _ = tx.send(engine::describe(&r2)); });
@@ -928,7 +940,7 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
             let pending = uu.st.borrow().pending;
             let freed = engine::history::total();
             uu.status.set_text(&if pending > 0 { format!("Measuring {}\u{2026}", last) }
-                               else if freed.1 == 0 { "Quick clean is ticked for you, so one click on Clean is enough. You see the list before anything goes.".to_string() }
+                               else if freed.1 == 0 { "Quick clean is ticked for you: press Clean, check the list, and it's done.".to_string() }
                                else { "Scan done.  Click a row to see what it is.  Tick the box to include it.".to_string() });
             refresh(&uu);
             if uu.st.borrow().open.is_some() { fill_panel(&uu); }

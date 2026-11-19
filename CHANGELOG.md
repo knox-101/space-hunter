@@ -3,6 +3,31 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.3.1 (2026-11-19)
+
+Fixes from a full stress test. Updating is recommended.
+
+- **Windows: no more crash on very long paths.** A folder nested past Windows' old 260-character limit (for example
+  deep `node_modules` in Temp) could close the app during its first scan. One odd file or folder is now skipped,
+  never the whole scan.
+- **Windows: a clean in progress can't be changed.** Pressing Reset to default, or changing an item, while a clean
+  runs no longer switches the rest of that clean from Recycle Bin to permanent delete.
+- **Windows: Recycle Bin is only used where there is one.** On USB and network drives, which have no bin, files are
+  kept (choose Permanently delete to clean them) instead of being deleted for good without a word.
+- **Windows: other accounts' folders, Windows' own key and credential folders, the top of AppData and browser
+  profile folders can't be added to the cleanup list.**
+- Windows: no update while a clean is running, so two copies never run at once. "Freed so far" now reads right in
+  countries that write decimals with a comma.
+- **Linux: the password helper only enters folders owned by root**, and cleaning never enters another user's folder,
+  so a folder swapped for a link mid-clean can't redirect a delete. Empty-folder removal never crosses into another
+  disk mounted inside.
+- Linux: updates and the password helper trust only Space Hunter's own AppImage, never one inherited from another
+  AppImage app. System items (downloaded updates, crash dumps) are now measured, so they can be cleaned. Closing the
+  main window during a clean shows the cleaning window instead of cutting it off. One possible Storage map crash fixed.
+- Mac: Space Hunter's own log is protected (the "Logs" item no longer resets "Freed so far"). Only folders in your
+  home folder can be added, and never apps' settings in ~/Library (their caches and logs are fine).
+- Clearer words: "press Clean to start", and Protected folders no longer points to a button that isn't there.
+
 ## 1.3.0 (2026-11-19)
 
 - **What's inside, for every item**: an item's panel lists the folders and files it would clean, each with the folder

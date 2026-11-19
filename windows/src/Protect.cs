@@ -66,7 +66,7 @@ namespace SpaceHunter
             int w = Math.Max(Theme.D(300), rows.ClientSize.Width - rows.Padding.Horizontal - Theme.D(4));
             rows.Controls.Add(Heading("Your protected folders"));
             var mine = Keep.All;
-            if (mine.Count == 0) rows.Controls.Add(Text_("None yet. Add a folder above, or press Keep on a folder in an item's panel.", Theme.Soft, w));
+            if (mine.Count == 0) rows.Controls.Add(Text_("None yet. Press Add folder above.", Theme.Soft, w));
             foreach (var path in mine)
             {
                 var p = path;

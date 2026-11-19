@@ -59,7 +59,16 @@ pub fn verify(data: &[u8], sig: &[u8], key_der: &[u8]) -> bool {
 }
 
 // Only the AppImage can replace itself; other installs update through what installed them.
-pub fn self_path() -> Option<PathBuf> { std::env::var_os("APPIMAGE").map(PathBuf::from) }
+pub fn self_path() -> Option<PathBuf> { appimage() }
+
+// This program's own AppImage. APPIMAGE alone can't be trusted: it's inherited by anything started from another
+// AppImage app, so it must come with APPDIR, and this program must be running from inside that APPDIR.
+pub fn appimage() -> Option<PathBuf> {
+    let a = PathBuf::from(std::env::var_os("APPIMAGE")?);
+    let d = PathBuf::from(std::env::var_os("APPDIR")?);
+    let me = std::env::current_exe().ok()?;
+    if me.starts_with(&d) && a.is_file() { Some(a) } else { None }
+}
 
 // Ok(()) when the new version is opening (the caller quits), or a sentence saying why it didn't update.
 pub fn install(r: &Release, say: &dyn Fn(&str)) -> Result<(), String> {

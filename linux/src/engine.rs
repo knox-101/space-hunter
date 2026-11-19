@@ -141,7 +141,7 @@ pub mod keep {
     fn builtin_now() -> Vec<String> {
         let mut v = vec![config_dir().to_string_lossy().to_string(), glib::user_data_dir().join("space-hunter").to_string_lossy().to_string(),
                          glib::user_cache_dir().join("space-hunter").to_string_lossy().to_string()];
-        if let Some(a) = std::env::var_os("APPIMAGE") { v.push(PathBuf::from(a).to_string_lossy().to_string()); }
+        if let Some(a) = crate::updater::appimage() { v.push(a.to_string_lossy().to_string()); }
         if let Ok(e) = std::env::current_exe() { v.push(e.to_string_lossy().to_string()); }
         v
     }
@@ -347,6 +347,12 @@ fn size_of(m: &fs::Metadata) -> u64 { m.blocks() * 512 }   // space actually tak
 
 // Every regular file under root, on the same disk, skipping excluded and protected folders. Links are never followed.
 fn walk(root: &Path, exclude: &HashSet<String>, kept: &[String], f: &mut dyn FnMut(&Path, &fs::Metadata)) {
+    walk_as(root, exclude, kept, uid(), f)
+}
+
+// owner: only folders owned by this user are entered. Someone else's folder inside /tmp or /var/crash could be swapped
+// for a link to somewhere else while we work; we never go into it, so that can't redirect a delete.
+fn walk_as(root: &Path, exclude: &HashSet<String>, kept: &[String], owner: u32, f: &mut dyn FnMut(&Path, &fs::Metadata)) {
     let dev = match fs::symlink_metadata(root) { Ok(m) => m.dev(), Err(_) => return };
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -358,7 +364,7 @@ fn walk(root: &Path, exclude: &HashSet<String>, kept: &[String], f: &mut dyn FnM
             if ft.is_symlink() { continue; }
             if ft.is_dir() {
                 let name = e.file_name().to_string_lossy().to_string();
-                if exclude.contains(&name) || keep::is_kept(&path, kept) || m.dev() != dev { continue; }
+                if exclude.contains(&name) || keep::is_kept(&path, kept) || m.dev() != dev || m.uid() != owner { continue; }
                 stack.push(path);
             } else if ft.is_file() {
                 f(&path, &m);
@@ -373,13 +379,16 @@ fn newest(dir: &Path) -> SystemTime {
     n
 }
 
-fn remove_empty_dirs(root: &Path, keep_root: bool, exclude: &HashSet<String>, kept: &[String]) {
+fn remove_empty_dirs(root: &Path, keep_root: bool, exclude: &HashSet<String>, kept: &[String], owner: u32) {
+    let dev = match fs::symlink_metadata(root) { Ok(m) => m.dev(), Err(_) => return };
     let mut all = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for d in dirs(&dir) {
             let name = d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             if exclude.contains(&name) || keep::is_kept(&d, kept) { continue; }
+            // never another disk mounted inside, never someone else's folder
+            match fs::symlink_metadata(&d) { Ok(m) if m.dev() == dev && m.uid() == owner => {}, _ => continue }
             stack.push(d.clone());
             all.push(d);
         }
@@ -418,7 +427,9 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
             if !ext.contains(&e) { return; }
         }
         if keep::is_kept(path, &kept) { return; }
-        if !root_user && m.uid() != me { return; }   // other people's and the system's files are never touched
+        // other people's and the system's files are never touched (system items are only measured here; the password
+        // helper cleans them as root)
+        if !root_user && m.uid() != me && !(c.admin && !delete) { return; }
         let t = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         if t >= cut { if delete { cnt.skipped += 1; } return; }
         let size = size_of(m);
@@ -446,16 +457,18 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
                         }
                     }
                 } else {
-                    walk(root, &c.exclude, &kept, &mut |p, fm| handle(p, fm, cutoff, cnt));
-                    if delete { remove_empty_dirs(root, true, &c.exclude, &kept); }
+                    let owner = if c.admin && !delete { fs::symlink_metadata(root).map(|m| m.uid()).unwrap_or(me) } else { me };
+                    walk_as(root, &c.exclude, &kept, owner, &mut |p, fm| handle(p, fm, cutoff, cnt));
+                    if delete { remove_empty_dirs(root, true, &c.exclude, &kept, me); }
                 }
             }
             Kind::Subfolders => {
                 for sub in dirs(root) {
                     if keep::is_kept(&sub, &kept) || newest(&sub) >= cutoff { continue; }
                     let far = SystemTime::now() + Duration::from_secs(3600);
+                    if fs::symlink_metadata(&sub).map(|m| m.uid() != me).unwrap_or(true) { continue; }
                     walk(&sub, &c.exclude, &kept, &mut |p, fm| handle(p, fm, far, cnt));
-                    if delete { remove_empty_dirs(&sub, false, &c.exclude, &kept); }
+                    if delete { remove_empty_dirs(&sub, false, &c.exclude, &kept, me); }
                 }
             }
             Kind::Journal => {}
@@ -466,7 +479,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
 // Where to run the helper from: inside an AppImage the program sits in a private mount root can't open, so use the
 // AppImage file itself.
 fn helper_exe() -> Option<PathBuf> {
-    if let Some(a) = std::env::var_os("APPIMAGE") { return Some(PathBuf::from(a)); }
+    if let Some(a) = crate::updater::appimage() { return Some(a); }
     std::env::current_exe().ok()
 }
 

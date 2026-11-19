@@ -18,6 +18,8 @@ namespace SpaceHunter
 
     class Category
     {
+        // a frozen copy for a running clean: changing ticks, ages or Reset in the window can't alter it half-way
+        public Category Snapshot() { var c = (Category)MemberwiseClone(); c.Roots = new List<string>(Roots); return c; }
         public string Id, Name, Note;
         public Level Level;
         public Kind Kind;
@@ -345,10 +347,14 @@ namespace SpaceHunter
             foreach (var i in items)
             {
                 if (cnt.Cancel) return;
-                if ((i.Attributes & FileAttributes.ReparsePoint) != 0) continue;
-                var sub = i as DirectoryInfo;
-                if (sub != null) { if (!exclude.Contains(sub.Name) && !Keep.IsKept(sub.FullName) && !Custom.IsSkipped(sub.FullName, skipNow)) Walk(sub, onFile, cnt, exclude); }
-                else onFile((FileInfo)i);
+                try   // one odd entry (a name Windows can't handle) is skipped, never the end of the scan
+                {
+                    if ((i.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    var sub = i as DirectoryInfo;
+                    if (sub != null) { if (!exclude.Contains(sub.Name) && !Keep.IsKept(sub.FullName) && !Custom.IsSkipped(sub.FullName, skipNow)) Walk(sub, onFile, cnt, exclude); }
+                    else onFile((FileInfo)i);
+                }
+                catch { cnt.Skipped++; }
             }
         }
 
@@ -371,10 +377,11 @@ namespace SpaceHunter
 
         public static string Fmt(long b)
         {
-            if (b >= 1L << 40) return (b / 1099511627776.0).ToString("0.00") + " TB";
-            if (b >= 1L << 30) return (b / 1073741824.0).ToString("0.0") + " GB";
-            if (b >= 1L << 20) return (b / 1048576.0).ToString("0") + " MB";
-            if (b > 0) return (b / 1024.0).ToString("0") + " KB";
+            var inv = CultureInfo.InvariantCulture;   // "1.5 GB" everywhere, so the log reads back the same in every country
+            if (b >= 1L << 40) return (b / 1099511627776.0).ToString("0.00", inv) + " TB";
+            if (b >= 1L << 30) return (b / 1073741824.0).ToString("0.0", inv) + " GB";
+            if (b >= 1L << 20) return (b / 1048576.0).ToString("0", inv) + " MB";
+            if (b > 0) return (b / 1024.0).ToString("0", inv) + " KB";
             return "0 MB";
         }
 
@@ -459,6 +466,16 @@ namespace SpaceHunter
             var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
             foreach (var sys in new[] { W, pf, pf86, PD })
                 if (!string.IsNullOrEmpty(sys) && Under(p, Norm(sys))) { why = "part of Windows or installed programs"; return false; }
+            // other people's profiles (C:\Users\Alice, Public, Default) are never offered
+            string users = Norm(Path.GetDirectoryName(H));
+            if (Under(p, users) && !Under(p, Norm(H))) { why = "it's in another account's folders"; return false; }
+            // Windows' own app data (keys, credentials, profiles) and the top of AppData
+            foreach (var a in new[] { Path.Combine(R, "Microsoft"), Path.Combine(L, "Microsoft"), Path.Combine(H, "AppData", "LocalLow", "Microsoft") })
+                if (Under(p, Norm(a))) { why = "it holds Windows' own settings and keys"; return false; }
+            foreach (var a in new[] { Path.Combine(H, "AppData"), R, L, Path.Combine(H, "AppData", "LocalLow") })
+                if (string.Equals(p, Norm(a), StringComparison.OrdinalIgnoreCase)) { why = "it holds settings for all your apps"; return false; }
+            if (Path.GetFileName(p).Equals("User Data", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(p).Equals("Profiles", StringComparison.OrdinalIgnoreCase))
+            { why = "it holds a browser's profiles (logins, history)"; return false; }
             foreach (var keep in new[] { H, L, R, Path.GetDirectoryName(H) }.Concat(PersonalFolders()))
                 if (!string.IsNullOrEmpty(keep) && Under(Norm(keep), p)) { why = "it holds your profile or personal folders"; return false; }
             if (PersonalFolderOf(p) != null) { why = "it's inside your personal files (" + Path.GetFileName(PersonalFolderOf(p)) + ")"; return false; }
@@ -501,8 +518,27 @@ namespace SpaceHunter
         readonly List<KeyValuePair<string, long>> pending = new List<KeyValuePair<string, long>>();
         public RecycleBatch(Counter c) { cnt = c; }
 
+        // removable and network drives have no Recycle Bin: Windows would delete for good without asking, so keep them
+        static readonly Dictionary<string, bool> hasBin = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        static bool HasBin(string path)
+        {
+            string root; try { root = Path.GetPathRoot(path); } catch { return false; }
+            lock (hasBin)
+            {
+                bool ok;
+                if (!hasBin.TryGetValue(root, out ok)) { try { ok = new DriveInfo(root).DriveType == DriveType.Fixed; } catch { ok = false; } hasBin[root] = ok; }
+                return ok;
+            }
+        }
+
         public void Add(string path, long size)
         {
+            if (!HasBin(path))
+            {
+                cnt.Skipped++;
+                if (cnt.OnNote != null) cnt.OnNote("kept, this drive has no Recycle Bin (choose Permanently delete to clean it): " + path);
+                return;
+            }
             // a file bigger than the Recycle Bin can hold would be deleted for good by Windows: keep it instead
             long limit = Engine.BinLimit(path);
             if (size > limit)
@@ -667,7 +703,15 @@ namespace SpaceHunter
         public static bool IsSkipped(string path, HashSet<string> set)
         {
             if (set == null || set.Count == 0) return false;
-            for (var p = path.TrimEnd('\\'); !string.IsNullOrEmpty(p); p = Path.GetDirectoryName(p)) if (set.Contains(p)) return true;
+            // walk up by plain string cuts: no path parsing, so an odd or very long path can't throw
+            var p = (path ?? "").TrimEnd('\\');
+            while (p.Length > 0)
+            {
+                if (set.Contains(p)) return true;
+                int cut = p.LastIndexOf('\\');
+                if (cut <= 2) break;   // stop at the drive ("C:\")
+                p = p.Substring(0, cut);
+            }
             return false;
         }
         public static void SetSkipped(string path, bool skipped)

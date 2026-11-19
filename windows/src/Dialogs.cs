@@ -236,7 +236,8 @@ namespace SpaceHunter
                     index = i;
                     if (sel[i].Blocked) continue;   // only when not elevated: these go through one permission prompt, below
                     long b0 = cnt.Bytes, r0 = cnt.RecycledBytes, f0 = cnt.Files, s0 = cnt.Skipped;
-                    Engine.Process(sel[i], true, cnt);
+                    try { Engine.Process(sel[i], true, cnt); }
+                    catch (Exception ex) { if (cnt.OnNote != null) cnt.OnNote(sel[i].Name + ": stopped early (" + ex.Message + ")"); }   // the rest still runs
                     summary.Add(sel[i].Name + ": freed " + Engine.Fmt(cnt.Bytes - b0) + (cnt.RecycledBytes > r0 ? " + " + Engine.Fmt(cnt.RecycledBytes - r0) + " to Recycle Bin" : "") +
                                 ", " + (cnt.Files - f0).ToString("N0") + " files, skipped " + (cnt.Skipped - s0).ToString("N0"));
                 }
