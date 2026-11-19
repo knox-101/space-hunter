@@ -96,7 +96,7 @@ namespace SpaceHunter
         System.Windows.Forms.Timer tick;
         volatile int index; volatile bool done;
         public string SnapshotPath;
-        Font fLabel = Theme.CMonoSemi(7.5f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fStat = Theme.CSemi(10.5f), fStat2 = Theme.CSans(10f);
+        Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fStat = Theme.CSemi(10.5f), fStat2 = Theme.CSans(10f);
 
         public ProgressForm(List<Category> selection, long expectedBytes)
         {
@@ -137,9 +137,9 @@ namespace SpaceHunter
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             int i = Math.Min(index, sel.Count - 1);
-            string label = done ? (cnt.Cancel ? "STOPPED  ·  NOTHING ELSE WILL BE CLEANED" : "DONE  ·  ALL TICKED ITEMS")
-                                : "CLEANING  ·  ITEM " + (i + 1) + " OF " + sel.Count + "  ·  " + sel[i].Name.ToUpperInvariant();
-            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString(label, fLabel, b, pad, 14);
+            string label = done ? (cnt.Cancel ? "Stopped  ·  nothing else will be cleaned" : "Done  ·  all ticked items")
+                                : "Cleaning  ·  item " + (i + 1) + " of " + sel.Count + "  ·  " + sel[i].Name;
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
             bool binOnly = cnt.Bytes == 0 && cnt.RecycledBytes > 0;
             string num, unit; Theme.SizeParts(binOnly ? cnt.RecycledBytes : cnt.Bytes, out num, out unit);
             using (var b = new SolidBrush(Theme.Orange))

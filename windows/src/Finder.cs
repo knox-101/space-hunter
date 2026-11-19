@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Space Hunter (Windows) - Find big folders: drill down from a drive to whatever is big, see whether the cleanup
+// Space Hunter (Windows) - Space map: drill down from a drive to whatever is big, see whether the cleanup
 // list already covers it, and add a folder to the cleanup list. Nothing is deleted here.
 using System;
 using System.Collections.Generic;
@@ -27,12 +27,12 @@ namespace SpaceHunter
         readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 60 };
         public string SnapshotPath; readonly string startPath;
         public bool Added;
-        Font fLabel = Theme.CMonoSemi(7.5f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fPath = Theme.CSans(11f), fSub = Theme.CSans(9.5f);
+        Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fPath = Theme.CSans(11f), fSub = Theme.CSans(9.5f);
 
         public FinderForm(List<Category> cats, string start = null)
         {
             startPath = start;
-            Theme.Window(this, "Space Hunter  ·  big folders", 940, 760);
+            Theme.Window(this, "Space Hunter  ·  Space map", 940, 760);
             MinimumSize = SizeFromClientSize(Theme.Fit(660, 480));
             StartPosition = FormStartPosition.CenterParent;
             list = new FolderListView(cats);
@@ -125,10 +125,10 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             string phase = BigFolders.Phase;
             bool waiting = scanning && (phase == "starting" || phase == "sorting" || BigFolders.Scanned == 0);
-            string label = !scanning ? "BIG FOLDERS  ·  LOOKING ONLY, NOTHING IS DELETED HERE"
-                         : "BIG FOLDERS  ·  " + (phase == "sorting" ? "SORTING FOLDERS BY SIZE" : waiting ? "GETTING READY TO MEASURE " + (drive ?? "").TrimEnd('\\')
-                                                                     : "MEASURING " + (drive ?? "").TrimEnd('\\') + "  ·  COUNTING FILES");
-            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString(label, fLabel, b, pad, 14);
+            string label = !scanning ? "Space map  ·  looking only, nothing is deleted here"
+                         : "Space map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
+                                                                     : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
             if (waiting)   // a small turning arc at the top right: something is happening before the numbers start
             {
                 float cx = W - pad - 9, cy = 23, rr = 8;

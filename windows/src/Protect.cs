@@ -16,7 +16,7 @@ namespace SpaceHunter
         readonly FlowLayoutPanel rows = new FlowLayoutPanel();
         readonly Key addKey = new Key("add folder", true);
         public bool Changed;
-        Font fLabel = Theme.CMonoSemi(7.5f), fBig = Theme.CDisplay(40f), fSub = Theme.CSans(10f);
+        Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fSub = Theme.CSans(10f);
 
         public ProtectForm()
         {
@@ -52,7 +52,7 @@ namespace SpaceHunter
             var g = e.Graphics; float W = head.LW, H = head.LH, pad = 20;
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
-            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString("PROTECTED FOLDERS  ·  NEVER CLEANED, WHATEVER IS TICKED", fLabel, b, pad, 14);
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString("Protected folders  ·  never cleaned, whatever is ticked", fLabel, b, pad, 12);
             int n = Keep.All.Count;
             using (var b = new SolidBrush(Theme.Orange)) g.DrawString(n + (n == 1 ? " FOLDER" : " FOLDERS"), fBig, b, pad - 5, 28);
             using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString("Yours, plus the places Space Hunter never touches.", fSub, b, pad, 104);

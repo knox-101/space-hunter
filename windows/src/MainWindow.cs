@@ -21,7 +21,7 @@ namespace SpaceHunter
         public int Cleans;
         public bool Scanning, Compact;
         public List<KeyValuePair<DateTime, long>> History = new List<KeyValuePair<DateTime, long>>();
-        Font fLabel = Theme.CMonoSemi(7.5f), fBig = Theme.CDisplay(50f), fUnit = Theme.CDisplay(20f), fDisk = Theme.CSans(11f),
+        Font fLabel = Theme.CSemi(11f), fHist = Theme.CSemi(10f), fBig = Theme.CDisplay(50f), fUnit = Theme.CDisplay(20f), fDisk = Theme.CSans(11f),
              fLegend = Theme.CSemi(10.5f), fSmall = Theme.CSans(9.5f);
 
         public float DesignHeight { get { return Compact ? 172 : 206; } }
@@ -33,11 +33,11 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             using (var pen = new Pen(Color.Black, 2)) g.DrawLine(pen, 7, 2, W - 7, 2);   // inset lip
             float pad = 22, right = W - pad;
-            using (var b = new SolidBrush(Theme.DisplayMuted))
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA)))
             {
-                g.DrawString(Scanning ? "SPACE HUNTER  ·  SCANNING" : "SPACE HUNTER  ·  READY TO FREE", fLabel, b, pad, 16);
-                var dl = "DISK " + Path.GetPathRoot(Engine.W).TrimEnd('\\'); var sz = g.MeasureString(dl, fLabel);
-                g.DrawString(dl, fLabel, b, right - sz.Width, 16);
+                g.DrawString(Scanning ? "Scanning ..." : "Space to free up", fLabel, b, pad, 13);
+                var dl = "Disk " + Path.GetPathRoot(Engine.W).TrimEnd('\\'); var sz = g.MeasureString(dl, fLabel);
+                g.DrawString(dl, fLabel, b, right - sz.Width, 13);
             }
             string num, unit; Theme.SizeParts(Selected, out num, out unit);
             using (var b = new SolidBrush(Theme.Orange))
@@ -47,7 +47,7 @@ namespace SpaceHunter
                 g.DrawString(unit, fUnit, b, pad - 6 + ns.Width - 8, 30 + ns.Height - g.MeasureString(unit, fUnit).Height - 13);
             }
             string disk = Total > 0 ? Engine.Fmt(Free) + " free of " + Engine.Fmt(Total) : "";
-            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) { var ds = g.MeasureString(disk, fDisk); g.DrawString(disk, fDisk, b, right - ds.Width, 32); }
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) { var ds = g.MeasureString(disk, fDisk); g.DrawString(disk, fDisk, b, right - ds.Width, 35); }
 
             // history: free space over time + everything freed so far
             if (!Compact && History.Count >= 2)
@@ -62,8 +62,8 @@ namespace SpaceHunter
                 using (var b = new SolidBrush(Theme.Orange)) { var lp = line[line.Count - 1]; g.FillEllipse(b, lp.X - 3, lp.Y - 3, 6, 6); }
                 using (var b = new SolidBrush(Theme.DisplayMuted))
                 {
-                    var hl = "FREE SPACE SINCE " + pts[0].Key.ToString("d MMM").ToUpperInvariant(); var hs = g.MeasureString(hl, fLabel);
-                    g.DrawString(hl, fLabel, b, right - hs.Width, sy + sh + 4);
+                    var hl = "Free space since " + pts[0].Key.ToString("d MMM"); var hs = g.MeasureString(hl, fHist);
+                    g.DrawString(hl, fHist, b, right - hs.Width, sy + sh + 3);
                 }
             }
             if (FreedAll > 0)
@@ -629,7 +629,7 @@ namespace SpaceHunter
             disp.Dock = DockStyle.Top; disp.Height = Theme.D(disp.DesignHeight);
             var top = new Panel { Dock = DockStyle.Top, Height = Theme.D(disp.DesignHeight + 18 + 64), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            scanKey = new Key("scan again"); finderKey = new Key("find big folders"); protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
+            scanKey = new Key("scan again"); finderKey = new Key("space map"); protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
             keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
@@ -709,10 +709,13 @@ namespace SpaceHunter
 
         void PlaceKeys(Control keys)
         {
-            // Clean is the one big key, under the display's right edge; the quiet keys sit at the left.
+            // The Space map is a tool of its own, alone at the left. The cleaning keys sit together at the right:
+            // scan again, protected folders and reset to default lead into the one big Clean key.
+            int y = Theme.D(14);
             cleanKey.Location = new Point(keys.Width - cleanKey.Width - Theme.D(18), Theme.D(10));
-            int x = Theme.D(18), y = Theme.D(14);
-            foreach (var k in new[] { scanKey, finderKey, protectKey, resetKey }) { k.Location = new Point(x, y); x = k.Right + Theme.D(8); }
+            finderKey.Location = new Point(Theme.D(18), y);
+            int x = cleanKey.Left - Theme.D(12);
+            foreach (var k in new[] { resetKey, protectKey, scanKey }) { x -= k.Width; k.Location = new Point(x, y); x -= Theme.D(8); }
         }
 
         void ReadDisk()

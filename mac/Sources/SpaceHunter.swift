@@ -64,7 +64,7 @@ enum Keep {   // protected folders: never shown, counted or cleaned
     static func isKept(_ path: String, _ list: [String]) -> Bool { list.contains { path == $0 || path.hasPrefix($0 + "/") } }
 }
 
-enum Custom {   // folders added to the cleanup list from Find big folders
+enum Custom {   // folders added to the cleanup list from the Space map
     static var all: [String] { Store2.lines("your-folders.txt") }
     static func add(_ p: String) { var a = all; if !a.contains(p) { a.append(p) }; Store2.write("your-folders.txt", a) }
     static func remove(_ p: String) { Store2.write("your-folders.txt", all.filter { $0 != p }) }
@@ -112,7 +112,7 @@ enum Engine {
                         kind: .contents, roots: [URL(fileURLWithPath: p)], defaultAge: 30 * day, ageMinutes: 30 * day, lastAge: 30 * day, checked: false)
             c.isCustom = true
             c.short = "Everything inside goes; the folder itself stays"
-            c.what = "A folder you added from Find big folders: " + p
+            c.what = "A folder you added from the Space map: " + p
             c.deletes = "Every file inside it (older than the age you set) and the sub-folders that end up empty. The folder itself stays."
             c.safeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped."
             c.after = "The files are gone, unless you choose Trash in the confirm window."
@@ -231,7 +231,7 @@ enum Engine {
         }
     }
 
-    // Can a folder from Find big folders be added to the cleanup list? nil = yes, otherwise the reason.
+    // Can a folder from the Space map be added to the cleanup list? nil = yes, otherwise the reason.
     static func canAdd(_ path: String) -> String? {
         let p = (path as NSString).standardizingPath
         if p == "/" || p.split(separator: "/").count <= 2 { return "a whole disk or user folder" }
@@ -712,7 +712,7 @@ struct SpaceHunterApp: App {
             MainView().environmentObject(state).frame(minWidth: 1000, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
-        Window("Find big folders", id: "finder") {
+        Window("Space map", id: "finder") {
             FinderView().environmentObject(state)
         }
         .defaultSize(width: 940, height: 760)
@@ -734,11 +734,12 @@ struct MainView: View {
         VStack(spacing: 0) {
             DisplayView().padding(.horizontal, 18).padding(.top, 34)
             HStack(spacing: 8) {
+                Button("Space map") { openWindow(id: "finder") }.buttonStyle(KeyStyle())
+                Spacer()
                 Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0)
-                Button("Find big folders") { openWindow(id: "finder") }.buttonStyle(KeyStyle())
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
                 Button("Reset to default") { state.resetAll() }.buttonStyle(KeyStyle())
-                Spacer()
+                    .padding(.trailing, 4)
                 Button("Clean \(Engine.fmt(state.selectedBytes))") { confirm = true }
                     .buttonStyle(KeyStyle(primary: true, big: true))
                     .disabled(state.scanning > 0 || state.selectedBytes == 0)
@@ -777,8 +778,8 @@ struct DisplayView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.scanning > 0 ? "SPACE HUNTER  ·  SCANNING" : "SPACE HUNTER  ·  READY TO FREE")
-                        .font(Theme.monoSemi(10)).tracking(1.4).foregroundColor(Theme.screenMuted)
+                    Text(state.scanning > 0 ? "Scanning …" : "Space to free up")
+                        .font(Theme.semi(13)).foregroundColor(Color(hex: 0xB4B1AA))
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(p.0).font(Theme.display(76))
                         Text(p.1).font(Theme.display(28))
@@ -786,7 +787,7 @@ struct DisplayView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
-                    Text("DISK").font(Theme.monoSemi(10)).tracking(1.4).foregroundColor(Theme.screenMuted)
+                    Text("Disk").font(Theme.semi(13)).foregroundColor(Color(hex: 0xB4B1AA))
                     Text("\(Engine.fmt(state.disk.free)) free of \(Engine.fmt(state.disk.total))").font(Theme.sans(14)).foregroundColor(Color(hex: 0xB4B1AA))
                     if state.freedAll.0 > 0 {
                         Text("Freed so far: \(Engine.fmt(state.freedAll.0)) in \(state.freedAll.1) clean" + (state.freedAll.1 == 1 ? "" : "s"))
@@ -1161,8 +1162,8 @@ struct ProgressSheet: View {
         let fraction: CGFloat = state.cleanDone && !state.cleanStopped ? 1 : min(1, CGFloat(Double(state.freed + state.trashed) / Double(state.expected)))
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(state.cleanDone ? (state.cleanStopped ? "STOPPED  ·  NOTHING ELSE WILL BE CLEANED" : "DONE  ·  ALL TICKED ITEMS") : "CLEANING  ·  " + state.currentItem)
-                    .font(Theme.monoSemi(10)).tracking(1.2).foregroundColor(Theme.screenMuted).lineLimit(1)
+                Text(state.cleanDone ? (state.cleanStopped ? "Stopped  ·  nothing else will be cleaned" : "Done  ·  all ticked items") : "Cleaning  ·  " + state.currentItem)
+                    .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(p.0).font(Theme.display(60))
                     Text(p.1 + (binOnly ? " TO TRASH" : " FREED")).font(Theme.display(24))
@@ -1219,7 +1220,7 @@ struct ProtectView: View {
         let mine = Keep.all
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("PROTECTED FOLDERS  ·  NEVER CLEANED, WHATEVER IS TICKED").font(Theme.monoSemi(10)).tracking(1.2).foregroundColor(Theme.screenMuted)
+                Text("Protected folders  ·  never cleaned, whatever is ticked").font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA))
                 Text("\(mine.count) FOLDER" + (mine.count == 1 ? "" : "S")).font(Theme.display(44)).foregroundColor(Theme.orange)
                 Text("Yours, plus the places Space Hunter never touches.").font(Theme.sans(13)).foregroundColor(Theme.screenMuted)
             }
@@ -1258,7 +1259,7 @@ struct ProtectView: View {
     }
 }
 
-// MARK: - Find big folders
+// MARK: - Space map
 
 final class FolderNode: Identifiable {
     let id = UUID()
@@ -1323,7 +1324,7 @@ final class Scanner: ObservableObject {
     }
 }
 
-// The places Find big folders can measure: your home folder, then every disk (internal and external).
+// The places the Space map can measure: your home folder, then every disk (internal and external).
 struct VolumeChoice: Identifiable, Equatable {
     let id: String          // the path measured
     let name: String
@@ -1490,8 +1491,8 @@ struct FinderHeader: View {
     let target: Int64
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(scanner.running ? "BIG FOLDERS  ·  COUNTING FILES" : "BIG FOLDERS  ·  LOOKING ONLY, NOTHING IS DELETED HERE")
-                .font(Theme.monoSemi(10)).tracking(1.2).foregroundColor(Theme.screenMuted)
+            Text(scanner.running ? "Space map  ·  counting files" : "Space map  ·  looking only, nothing is deleted here")
+                .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA))
             if scanner.running {
                 Text("\(scanner.scanned) FILES").font(Theme.display(52)).foregroundColor(Theme.orange)
                 ScanBar(done: scanner.scannedBytes, target: target).frame(height: 14)

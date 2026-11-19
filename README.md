@@ -19,10 +19,10 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · first-run steps are 
 - **Explains each one**: click a row to see what it is, what gets deleted, whether it's safe and what happens after,
   and choose "only files older than N days" or "everything".
 - **Asks before cleaning**, with a choice of **Delete** or **Recycle Bin / Trash**, and shows each file as it goes.
-- **Finds big folders** anywhere on a drive (about 10 seconds for a full Windows drive), so you can add a cache
-  folder to the cleanup list.
+- **Space map**: see how your whole disk is split up, folder by folder, on any drive (about 10 seconds for a full
+  Windows drive), and add a cache folder to the cleanup list from there.
 
-![Find big folders](docs/screenshots/windows-big-folders.png)
+![The Space map](docs/screenshots/windows-space-map.png)
 
 ## Safe by design
 

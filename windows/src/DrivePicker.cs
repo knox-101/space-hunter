@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Space Hunter (Windows) - the drive key in Find big folders and the list it opens. One key however many drives
+// Space Hunter (Windows) - the drive key in the Space map and the list it opens. One key however many drives
 // there are; while the list is open the rest of the window dims, until a drive is picked or the list is dismissed.
 using System;
 using System.Collections.Generic;

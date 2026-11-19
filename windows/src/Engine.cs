@@ -30,7 +30,7 @@ namespace SpaceHunter
         public bool Checked;
         public bool Recycle;                            // send to the Recycle Bin instead of deleting
         public bool AdminOnly;                          // a system folder: needs admin rights (the app starts with them)
-        public bool IsCustom;                           // a folder the user added from Find big folders
+        public bool IsCustom;                           // a folder the user added from the Space map
         public string What, Deletes, SafeText, After;   // expanded notes
         public string Short;                            // one line: what happens if cleared
         public long Files, Bytes;
@@ -96,7 +96,7 @@ namespace SpaceHunter
             // the items live in cleaners.json; only apps that are on this PC get a row
             var list = Cleaners.Load().Where(Cleaners.Installed).ToList();
 
-            // folders the user sent here from "Find big folders"
+            // folders the user sent here from the Space map
             Custom.Load();
             foreach (var p in Custom.All)
             {
@@ -106,7 +106,7 @@ namespace SpaceHunter
                 c.IsCustom = true; c.Checked = false;   // your folders start unticked, older than 30 days
                 c.Note = "A folder you added";
                 c.Short = "Everything inside goes; the folder itself stays";
-                c.What = "A folder you sent here from Find big folders: " + p;
+                c.What = "A folder you added from the Space map: " + p;
                 c.Deletes = "Every file inside it (older than the age you set), and the sub-folders that end up empty. The folder itself stays.";
                 c.SafeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped.";
                 c.After = "The files are gone, unless you choose Recycle Bin in the confirm window.";
@@ -416,7 +416,7 @@ namespace SpaceHunter
         static string Norm(string p) { try { return Path.GetFullPath(p).TrimEnd('\\'); } catch { return (p ?? "").TrimEnd('\\'); } }
         static bool Under(string child, string parent) { return child.Equals(parent, StringComparison.OrdinalIgnoreCase) || child.StartsWith(parent + "\\", StringComparison.OrdinalIgnoreCase); }
 
-        // Can a folder from Find big folders be added to the cleanup list? Never a drive, Windows, Program Files,
+        // Can a folder from the Space map be added to the cleanup list? Never a drive, Windows, Program Files,
         // or anything that holds the profile, AppData, Documents, Desktop, Downloads or OneDrive.
         public static bool CanAdd(string path, out string why)
         {
@@ -563,7 +563,7 @@ namespace SpaceHunter
         }
     }
 
-// Folders added to the cleanup list from Find big folders.
+// Folders added to the cleanup list from the Space map.
     static class Custom
     {
         static readonly object gate = new object();
