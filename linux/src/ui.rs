@@ -873,11 +873,29 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     disp.append(&hl);
     let pbar = gtk::DrawingArea::new(); pbar.set_content_height(12);
     let frac = Rc::new(Cell::new(0.0f64));
-    let f2 = frac.clone();
-    pbar.set_draw_func(move |_, cr, w, h| {
-        cr.set_source_rgb(0.227, 0.227, 0.220); cr.rectangle(0.0, 0.0, w as f64, h as f64); let _ = cr.fill();
-        cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w as f64 * f2.get(), h as f64); let _ = cr.fill();
+    let fin = Rc::new(Cell::new(-1.0f64));   // the finish, 0..1 (below 0: not finishing)
+    let (f2, fin2) = (frac.clone(), fin.clone());
+    pbar.set_content_height(28);
+    pbar.set_draw_func(move |_, cr, w, _| {
+        let (w, h) = (w as f64, 12.0);
+        cr.set_source_rgb(0.227, 0.227, 0.220); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
+        let t = fin2.get();
+        if t >= 0.0 {
+            // the full bar breaks into pieces that drop away left to right: the space is cleared
+            let n = 28; let sw = w / n as f64;
+            for k in 0..n {
+                let local = ((t - 0.55 * k as f64 / n as f64) / 0.4).clamp(0.0, 1.0);
+                if local >= 1.0 { continue; }
+                let fall = local * local;
+                cr.set_source_rgba(1.0, 0.357, 0.122, 1.0 - fall);
+                cr.rectangle(k as f64 * sw + 1.0, fall * 16.0, sw - 2.0, h * (1.0 - fall * 0.6));
+                let _ = cr.fill();
+            }
+        } else {
+            cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w * f2.get(), h); let _ = cr.fill();
+        }
     });
+    let totals = Rc::new(Cell::new((0u64, 0u64, 0u64, 0u64)));
     disp.append(&pbar);
     v.append(&disp);
     let tv = gtk::TextView::new();
@@ -954,6 +972,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             match m {
                 Msg::Line(l) => { if lines < 3000 { batch.push_str(&l); batch.push('\n'); lines += 1; } }
                 Msg::Totals(b, t, f, s) => {
+                    totals.set((b, t, f, s));
                     let bin_only = b == 0 && t > 0;
                     let (num, unit) = split(if bin_only { t } else { b });
                     big.set_text(&num);
@@ -975,9 +994,29 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
         }
         if let Some(stopped) = finished {
             done.set(true);
-            headl.set_text(if stopped { "Stopped  \u{00B7}  nothing else will be cleaned" } else { "Done  \u{00B7}  all ticked items" });
-            if !stopped { frac.set(1.0); pbar.queue_draw(); }
-            stop.set_label("CLOSE"); stop.set_sensitive(true);
+            headl.set_text(if stopped { "Stopped  \u{00B7}  nothing else will be cleaned" } else { "Done  \u{00B7}  all ticked items cleaned" });
+            // Done closes the window; it's the one orange key once a clean has finished
+            stop.set_label(if stopped { "CLOSE" } else { "DONE" }); stop.set_sensitive(true);
+            if !stopped { stop.add_css_class("primary"); }
+            let animate = gtk::Settings::default().map(|st| st.is_gtk_enable_animations()).unwrap_or(true);
+            if !stopped && animate {   // a moment of "clearing up": the number counts up while the bar clears
+                headl.set_text("Clearing up\u{2026}");
+                let (b, t, f, s) = totals.get();
+                let bin_only = b == 0 && t > 0;
+                let start = std::time::Instant::now();
+                let (big, bigu, stat, headl, fin, pbar) = (big.clone(), bigu.clone(), stat.clone(), headl.clone(), fin.clone(), pbar.clone());
+                glib::timeout_add_local(Duration::from_millis(16), move || {
+                    let x = (start.elapsed().as_secs_f64() / 1.2).min(1.0);
+                    let ease = 1.0 - (1.0 - x).powi(3);
+                    let (num, unit) = split(((if bin_only { t } else { b }) as f64 * ease) as u64);
+                    big.set_text(&num);
+                    bigu.set_text(&format!("{} {}", unit, if bin_only { "TO TRASH" } else { "FREED" }));
+                    stat.set_text(&format!("{} files  \u{00B7}  {} skipped", (f as f64 * ease) as u64, s));
+                    fin.set(x); pbar.queue_draw();
+                    if x >= 1.0 { headl.set_text("Done  \u{00B7}  all ticked items cleaned"); return glib::ControlFlow::Break; }
+                    glib::ControlFlow::Continue
+                });
+            } else if !stopped { fin.set(1.0); pbar.queue_draw(); }
             minimise.set_visible(false);
             uu.st.borrow_mut().cleaning = false;
             uu.status.set_text("Cleaning finished. The list is being measured again.");

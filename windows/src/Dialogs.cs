@@ -117,6 +117,12 @@ namespace SpaceHunter
         System.Windows.Forms.Timer tick;
         volatile int index; volatile bool done;
         Key hideKey;
+        // the finish: for about a second the bar clears segment by segment and the number counts up to the total
+        const double FinishMs = 1200;
+        readonly Stopwatch finishClock = new Stopwatch();
+        System.Windows.Forms.Timer finishTick;
+        double FinishT { get { return !finishClock.IsRunning && finishClock.ElapsedMilliseconds == 0 ? 1 : Math.Min(1, finishClock.ElapsedMilliseconds / FinishMs); } }
+        bool Finishing { get { return done && !cnt.Cancel && finishClock.IsRunning; } }
         public bool Done { get { return done; } }
         public long FreedSoFar { get { return cnt.Bytes; } }
         public long BinnedSoFar { get { return cnt.RecycledBytes; } }
@@ -167,25 +173,42 @@ namespace SpaceHunter
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             int i = Math.Min(index, sel.Count - 1);
-            string label = done ? (cnt.Cancel ? "Stopped  ·  nothing else will be cleaned" : "Done  ·  all ticked items")
+            string label = done ? (cnt.Cancel ? "Stopped  ·  nothing else will be cleaned" : Finishing ? "Clearing up\u2026" : "Done  ·  all ticked items cleaned")
                                 : "Cleaning  ·  item " + (i + 1) + " of " + sel.Count + "  ·  " + sel[i].Name;
+            // ease-out: quick at first, settling on the real total
+            double t = done && !cnt.Cancel ? FinishT : 1, ease = 1 - Math.Pow(1 - t, 3);
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
             bool binOnly = cnt.Bytes == 0 && cnt.RecycledBytes > 0;
-            string num, unit; Theme.SizeParts(binOnly ? cnt.RecycledBytes : cnt.Bytes, out num, out unit);
+            long shown = (long)((binOnly ? cnt.RecycledBytes : cnt.Bytes) * (done && !cnt.Cancel ? ease : 1));
+            string num, unit; Theme.SizeParts(shown, out num, out unit);
             using (var b = new SolidBrush(Theme.Orange))
             {
                 var ns = g.MeasureString(num, fBig);
                 g.DrawString(num, fBig, b, pad - 5, 28);
                 g.DrawString(unit + (binOnly ? " TO RECYCLE BIN" : " FREED"), fUnit, b, pad - 5 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
             }
-            string stat = cnt.Files.ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
+            string stat = ((long)(cnt.Files * (done && !cnt.Cancel ? ease : 1))).ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
             using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
             if (cnt.RecycledBytes > 0 && !binOnly)
                 using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
             double f = Math.Min(1.0, (double)(cnt.Bytes + cnt.RecycledBytes) / expected);
-            if (done && !cnt.Cancel) f = 1;
-            using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, pad, 118, W - 2 * pad, 12);
-            using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, pad, 118, (float)((W - 2 * pad) * f), 12);
+            float bx = pad, bw = W - 2 * pad, by = 118, bh = 12;
+            using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, bx, by, bw, bh);
+            if (done && !cnt.Cancel)
+            {
+                // the full bar breaks into segments that drop away left to right: the space is cleared
+                const int N = 28; float sw = bw / N;
+                for (int k = 0; k < N; k++)
+                {
+                    double start = 0.55 * k / N, local = Math.Max(0, Math.Min(1, (t - start) / 0.4));
+                    if (local >= 1) continue;
+                    double fall = local * local;   // ease-in: each piece lets go, then falls
+                    int a = (int)(255 * (1 - fall));
+                    using (var b = new SolidBrush(Color.FromArgb(a, Theme.Orange)))
+                        g.FillRectangle(b, bx + k * sw + 1, by + (float)(fall * 16), sw - 2, bh * (float)(1 - fall * 0.6));
+                }
+            }
+            else using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, bx, by, (float)(bw * f), bh);
         }
 
         void Start()
@@ -261,10 +284,31 @@ namespace SpaceHunter
             }
             if (done && tick.Enabled && feed.IsEmpty)
             {
-                tick.Stop(); clock.Stop(); display.Invalidate();
-                stopKey.Text = "close"; stopKey.Enabled = true; hideKey.Visible = false; Text = "Space Hunter  ·  " + (cnt.Cancel ? "stopped" : "done");
+                tick.Stop(); clock.Stop();
+                // Done closes the window; it's the one orange key now
+                stopKey.Text = cnt.Cancel ? "close" : "done"; stopKey.Primary = !cnt.Cancel; stopKey.Enabled = true; stopKey.Invalidate();
+                hideKey.Visible = false; Text = "Space Hunter  ·  " + (cnt.Cancel ? "stopped" : "done");
                 stopKey.Left = ClientSize.Width - stopKey.Width - Theme.D(18); logKey.Visible = true;
-                if (SnapshotPath != null) { Program.Snap(this, SnapshotPath); Close(); }
+                if (!cnt.Cancel && SystemInformation.UIEffectsEnabled)   // a moment of "clearing up"; skipped when Windows is set to reduce effects
+                {
+                    finishClock.Restart();
+                    finishTick = new System.Windows.Forms.Timer { Interval = 16 };
+                    finishTick.Tick += (s2, e2) => { display.Invalidate(); if (finishClock.ElapsedMilliseconds >= FinishMs) { finishTick.Stop(); finishClock.Stop(); display.Invalidate(); } };
+                    finishTick.Start();
+                }
+                display.Invalidate();
+                if (SnapshotPath != null)   // test hook: one frame mid-way, then the end
+                {
+                    var snap = new System.Windows.Forms.Timer { Interval = 450 };
+                    int step = 0;
+                    snap.Tick += (s3, e3) =>
+                    {
+                        step++;
+                        if (step == 1) { using (var bmp = new Bitmap(display.Width, display.Height)) { display.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(SnapshotPath.Replace(".png", "-mid.png")); } }
+                        if (step >= 4) { snap.Stop(); Program.Snap(this, SnapshotPath); Close(); }
+                    };
+                    snap.Start();
+                }
             }
         }
     }

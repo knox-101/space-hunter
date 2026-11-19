@@ -1275,31 +1275,55 @@ struct ConfirmRow: View {
 struct ProgressSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var finishStart: Date?   // the finish: the bar clears and the number counts up, about a second
     var body: some View {
-        let binOnly = state.freed == 0 && state.trashed > 0
-        let p = Engine.parts(binOnly ? state.trashed : state.freed)
-        let fraction: CGFloat = state.cleanDone && !state.cleanStopped ? 1 : min(1, CGFloat(Double(state.freed + state.trashed) / Double(state.expected)))
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(state.cleanDone ? (state.cleanStopped ? "Stopped  ·  nothing else will be cleaned" : "Done  ·  all ticked items") : "Cleaning  ·  " + state.currentItem)
-                    .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(p.0).font(Theme.display(60))
-                    Text(p.1 + (binOnly ? " TO TRASH" : " FREED")).font(Theme.display(24))
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text("\(state.cleanedFiles) files  ·  \(state.skipped) skipped").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
-                        if state.trashed > 0 && !binOnly { Text("+ \(Engine.fmt(state.trashed)) moved to the Trash").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
-                    }
-                }.foregroundColor(Theme.orange)
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        Rectangle().fill(Theme.track)
-                        Rectangle().fill(Theme.orange).frame(width: g.size.width * fraction)
-                    }
-                }.frame(height: 12).padding(.top, 6)
+            TimelineView(.animation(paused: finishStart == nil)) { tl in
+                let finished = state.cleanDone && !state.cleanStopped
+                let t: Double = finished ? (finishStart.map { min(1, tl.date.timeIntervalSince($0) / 1.2) } ?? 1) : 1
+                let ease = 1 - pow(1 - t, 3)   // quick at first, settling on the real total
+                let binOnly = state.freed == 0 && state.trashed > 0
+                let shown = Int64(Double(binOnly ? state.trashed : state.freed) * (finished ? ease : 1))
+                let p = Engine.parts(shown)
+                let fraction = min(1, CGFloat(Double(state.freed + state.trashed) / Double(state.expected)))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(state.cleanDone ? (state.cleanStopped ? "Stopped  ·  nothing else will be cleaned" : t < 1 ? "Clearing up…" : "Done  ·  all ticked items cleaned") : "Cleaning  ·  " + state.currentItem)
+                        .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(p.0).font(Theme.display(60))
+                        Text(p.1 + (binOnly ? " TO TRASH" : " FREED")).font(Theme.display(24))
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text("\(Int64(Double(state.cleanedFiles) * (finished ? ease : 1))) files  ·  \(state.skipped) skipped").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                            if state.trashed > 0 && !binOnly { Text("+ \(Engine.fmt(state.trashed)) moved to the Trash").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
+                        }
+                    }.foregroundColor(Theme.orange)
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(Theme.track).frame(height: 12)
+                            if finished {
+                                // the full bar breaks into pieces that drop away left to right: the space is cleared
+                                HStack(spacing: 2) {
+                                    ForEach(0..<28, id: \.self) { k in
+                                        let local = max(0, min(1, (t - 0.55 * Double(k) / 28) / 0.4))
+                                        let fall = local * local
+                                        Rectangle().fill(Theme.orange)
+                                            .frame(height: 12 * (1 - fall * 0.6))
+                                            .offset(y: 16 * fall)
+                                            .opacity(1 - fall)
+                                    }
+                                }
+                                .frame(height: 12, alignment: .top)
+                            } else {
+                                Rectangle().fill(Theme.orange).frame(width: g.size.width * fraction, height: 12)
+                            }
+                        }
+                    }.frame(height: 12).padding(.top, 6)
+                }
             }
             .padding(20).background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
+            .onChange(of: state.cleanDone) { d in if d && !state.cleanStopped && !reduceMotion { finishStart = Date() } }
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -1317,7 +1341,9 @@ struct ProgressSheet: View {
                 if state.cleanDone { Button("Open log") { NSWorkspace.shared.open(Engine.logURL) }.buttonStyle(KeyStyle()) }
                 Spacer()
                 if !state.cleanDone { Button("Minimise") { NSApp.keyWindow?.miniaturize(nil) }.buttonStyle(KeyStyle()) }
-                Button(state.cleanDone ? "Close" : "Stop") { if state.cleanDone { state.finishCleaning(); dismiss() } else { state.stop() } }.buttonStyle(KeyStyle())
+                // Done closes the window; it's the one orange key once a clean has finished
+                Button(state.cleanDone ? (state.cleanStopped ? "Close" : "Done") : "Stop") { if state.cleanDone { state.finishCleaning(); dismiss() } else { state.stop() } }
+                    .buttonStyle(KeyStyle(primary: state.cleanDone && !state.cleanStopped))
             }
         }
         .padding(20)
