@@ -1051,7 +1051,7 @@ struct DetailPanel: View {
                 if c.kind != .trash { AgeControls(c: c, older: older, ageValue: $ageValue, unit: $unit) }
                 if c.isCustom, let root = c.roots.first { InsideList(root: root.path, catID: c.id) }
                 Group {
-                    section("What is it?", c.what)
+                    if c.isCustom, let root = c.roots.first { FolderAbout(root: root.path) } else { section("What is it?", c.what) }
                     section("What gets cleaned", c.deletes)
                     section("Is it safe?", c.safeText)
                     section("What happens after", c.after)
@@ -1935,5 +1935,98 @@ struct TreeMap: View {
             }
             Text(caption).font(Theme.sans(11.5)).foregroundColor(Theme.muted).lineLimit(1)
         }
+    }
+}
+
+
+// A folder you added: what's actually in it, in plain words (worked out here; nothing is sent anywhere).
+struct FolderAbout: View {
+    let root: String
+    @State private var text = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("What is it?").font(Theme.semi(12)).foregroundColor(Theme.muted).padding(.top, 4)
+            Text(text.isEmpty ? "Looking inside \((root as NSString).lastPathComponent)…" : text)
+                .font(Theme.sans(13)).foregroundColor(Theme.ink).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, 8)
+        .onAppear { load() }
+        .onChange(of: root) { _ in text = ""; load() }
+    }
+    func load() {
+        let r = root
+        DispatchQueue.global(qos: .userInitiated).async {
+            let d = FolderSummary.describe(r)
+            DispatchQueue.main.async { if r == root { text = d } }
+        }
+    }
+}
+
+enum FolderSummary {
+    static let kinds: [(String, [String])] = [
+        ("videos", ["mp4", "mov", "mkv", "avi", "wmv", "webm", "m4v", "mts"]),
+        ("photos and images", ["jpg", "jpeg", "png", "gif", "heic", "webp", "bmp", "tif", "tiff", "raw", "cr2", "nef", "arw", "dng", "psd", "svg"]),
+        ("music and audio", ["mp3", "wav", "flac", "aac", "m4a", "ogg", "aiff"]),
+        ("documents", ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "odt", "csv", "rtf", "pages", "key", "numbers"]),
+        ("3D and CAD files", ["stl", "3mf", "obj", "fbx", "blend", "step", "stp", "iges", "igs", "sldprt", "sldasm", "slddrw", "dwg", "dxf", "f3d", "gcode"]),
+        ("archives and installers", ["zip", "rar", "7z", "tar", "gz", "iso", "dmg", "pkg", "exe", "msi", "deb", "appimage"]),
+        ("code", ["swift", "js", "ts", "tsx", "jsx", "py", "java", "c", "cpp", "h", "go", "rs", "kt", "html", "css", "json", "ipynb", "m", "cs"]),
+    ]
+
+    static func describe(_ root: String) -> String {
+        var kindOf: [String: String] = [:]
+        for (k, exts) in kinds { for e in exts { kindOf[e] = k } }
+        var bytes: [String: Int64] = [:], files: [String: Int64] = [:]
+        var total: Int64 = 0, count: Int64 = 0, old30: Int64 = 0, old365: Int64 = 0
+        var newest = Date.distantPast
+        var signs: [String] = []
+        let kept = Keep.all + Keep.builtIn + Custom.skip
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey]
+        guard let e = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else { return "" }
+        func sign(_ s: String) { if !signs.contains(s) { signs.append(s) } }
+        for case let url as URL in e {
+            guard let v = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            if v.isSymbolicLink == true { continue }
+            if Keep.isKept(url.path, kept) { if v.isDirectory == true { e.skipDescendants() }; continue }
+            if v.isDirectory == true {
+                switch url.lastPathComponent.lowercased() {
+                case ".git": sign("a code project (its history is in a .git folder)")
+                case "node_modules": sign("JavaScript packages (node_modules) that reinstall with npm install")
+                case "cache", "caches", ".cache": sign("cache folders that apps rebuild")
+                case "venv", ".venv": sign("a Python environment (venv) that can be recreated")
+                case "build", "dist", "target", "deriveddata": sign("build output that is made again on the next build")
+                default: break
+                }
+                continue
+            }
+            guard v.isRegularFile == true else { continue }
+            let len = Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), t = v.contentModificationDate ?? .distantPast
+            let k = kindOf[url.pathExtension.lowercased()] ?? "other files"
+            bytes[k, default: 0] += len; files[k, default: 0] += 1
+            total += len; count += 1
+            if t > newest { newest = t }
+            let days = Date().timeIntervalSince(t) / 86400
+            if days > 30 { old30 += len }; if days > 365 { old365 += len }
+            if count >= 400_000 { break }
+        }
+        if count == 0 { return "It's empty right now." }
+        var s = "\(Engine.fmt(total)) in \(count) files" + (count >= 400_000 ? " (counted the first 400,000)" : "") + ". "
+        let top = bytes.sorted { $0.value > $1.value }.prefix(3)
+        s += (top.first!.value * 100 / max(1, total) >= 60 ? "Mostly " : "Mainly ")
+        s += top.map { "\($0.key) (\(Engine.fmt($0.value)), \(files[$0.key] ?? 0))" }.joined(separator: ", ") + ". "
+        if newest > .distantPast { s += "Last changed " + ago(newest) + ". " }
+        if old30 > 0 { s += "\(Engine.fmt(old30)) hasn't been touched for over a month" + (old365 > 0 ? ", \(Engine.fmt(old365)) for over a year" : "") + ". " }
+        if !signs.isEmpty { s += "It has " + signs.joined(separator: "; ") + "." }
+        return s.trimmingCharacters(in: .whitespaces)
+    }
+
+    static func ago(_ t: Date) -> String {
+        let h = Date().timeIntervalSince(t) / 3600
+        if h < 1 { return "within the last hour" }
+        if h < 24 { return "\(Int(h)) hours ago" }
+        let d = h / 24
+        if d < 60 { return "\(Int(d)) days ago" }
+        if d < 730 { return "\(Int(d / 30)) months ago" }
+        return "\(Int(d / 365)) years ago"
     }
 }

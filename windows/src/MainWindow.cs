@@ -453,7 +453,7 @@ namespace SpaceHunter
             insideHint = L(Theme.Sans(9.25f), Theme.Soft, 4);
             insideHint.Text = "Ticked files and folders are cleaned (older than the age above). Click a folder's name to look inside it.";
             inside = new InsideList { Margin = Theme.Pad(0, 2, 0, 14) };
-            inside.Changed += (s, e) => { if (KeepChanged != null && cat != null) KeepChanged(cat, EventArgs.Empty); };
+            inside.Changed += (s, e) => { described.Clear(); if (cat != null) Describe(cat); if (KeepChanged != null && cat != null) KeepChanged(cat, EventArgs.Empty); };
             inside.Resized += (s, e) => ScrollBy(0);
             flow.Controls.Add(inside);
             // right under the age setting, so it's the first thing you see for your own folder
@@ -530,6 +530,7 @@ namespace SpaceHunter
             ShowAge();
 
             insideHead.Visible = insideHint.Visible = inside.Visible = c.IsCustom;
+            if (c.IsCustom) Describe(c);
             if (c.IsCustom && (inside.Root == null || !string.Equals(inside.Root, c.Roots[0], StringComparison.OrdinalIgnoreCase))) inside.Open(c.Roots[0]);
             folders.Controls.Clear();
             var list = c.IsCustom ? new List<string>() : FolderList(c);
@@ -595,6 +596,21 @@ namespace SpaceHunter
         }
 
         public void RefreshStats(Category c) { if (c == cat) ShowCategory(c); }
+
+        // A folder you added: say what's actually in it (worked out here, nothing is sent anywhere).
+        readonly Dictionary<string, string> described = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        void Describe(Category c)
+        {
+            string root = c.Roots[0], text;
+            if (described.TryGetValue(root, out text)) { what.Text = text; return; }
+            what.Text = "Looking inside " + Path.GetFileName(root) + "...";
+            var t = new Thread(() =>
+            {
+                string d = FolderSummary.Describe(root);
+                try { BeginInvoke((Action)(() => { described[root] = d; if (cat != null && cat.IsCustom && string.Equals(cat.Roots[0], root, StringComparison.OrdinalIgnoreCase)) { what.Text = d; FitWidths(); ScrollBy(0); } })); } catch { }
+            }) { IsBackground = true };
+            t.Start();
+        }
     }
 
     // The item panel docks at the right and pushes the list over, so nothing gets covered.
@@ -1029,6 +1045,83 @@ namespace SpaceHunter
                 using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 30, y + RowH - 1, w, y + RowH - 1);
             }
             if (more > 0) using (var b = new SolidBrush(Theme.Soft)) g.DrawString("+ " + more + " more (open the folder in Explorer to see them all)", fSize, b, 30, y + 7);
+        }
+    }
+}
+
+namespace SpaceHunter
+{
+    // What's in a folder, in plain words: the kinds of files, how old they are, and what the folder looks like.
+    static class FolderSummary
+    {
+        static readonly KeyValuePair<string, string[]>[] Kinds = {
+            new KeyValuePair<string, string[]>("videos", new[] { ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".m4v", ".mts" }),
+            new KeyValuePair<string, string[]>("photos and images", new[] { ".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".bmp", ".tif", ".tiff", ".raw", ".cr2", ".nef", ".arw", ".dng", ".psd", ".svg" }),
+            new KeyValuePair<string, string[]>("music and audio", new[] { ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".wma" }),
+            new KeyValuePair<string, string[]>("documents", new[] { ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".odt", ".csv", ".rtf", ".pages", ".key", ".numbers" }),
+            new KeyValuePair<string, string[]>("3D and CAD files", new[] { ".stl", ".3mf", ".obj", ".fbx", ".blend", ".step", ".stp", ".iges", ".igs", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf", ".f3d", ".ipt", ".iam", ".gcode" }),
+            new KeyValuePair<string, string[]>("archives and installers", new[] { ".zip", ".rar", ".7z", ".tar", ".gz", ".iso", ".exe", ".msi", ".dmg", ".pkg", ".appimage", ".deb" }),
+            new KeyValuePair<string, string[]>("code", new[] { ".cs", ".js", ".ts", ".tsx", ".jsx", ".py", ".java", ".c", ".cpp", ".h", ".go", ".rs", ".swift", ".kt", ".html", ".css", ".json", ".ipynb", ".m" }),
+        };
+
+        public static string Describe(string root)
+        {
+            var kindOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var k in Kinds) foreach (var e in k.Value) kindOf[e] = k.Key;
+            var bytes = new Dictionary<string, long>(); var files = new Dictionary<string, long>();
+            long total = 0, count = 0, old30 = 0, old365 = 0; DateTime newest = DateTime.MinValue;
+            var signs = new List<string>(); bool capped = false;
+            var skip = Custom.Skip;
+            var stack = new Stack<DirectoryInfo>(); stack.Push(new DirectoryInfo(root));
+            while (stack.Count > 0)
+            {
+                var d = stack.Pop();
+                FileSystemInfo[] items; try { items = d.GetFileSystemInfos(); } catch { continue; }
+                foreach (var i in items)
+                {
+                    if ((i.Attributes & FileAttributes.ReparsePoint) != 0 || Keep.IsKept(i.FullName) || Custom.IsSkipped(i.FullName, skip)) continue;
+                    var sub = i as DirectoryInfo;
+                    if (sub != null)
+                    {
+                        string n = sub.Name.ToLowerInvariant();
+                        if (n == ".git" && !signs.Contains("a code project (its history is in a .git folder)")) signs.Add("a code project (its history is in a .git folder)");
+                        if (n == "node_modules" && !signs.Contains("JavaScript packages (node_modules) that reinstall with npm install")) signs.Add("JavaScript packages (node_modules) that reinstall with npm install");
+                        if ((n == "cache" || n == "caches" || n == ".cache") && !signs.Contains("cache folders that apps rebuild")) signs.Add("cache folders that apps rebuild");
+                        if ((n == "venv" || n == ".venv") && !signs.Contains("a Python environment (venv) that can be recreated")) signs.Add("a Python environment (venv) that can be recreated");
+                        if ((n == "bin" || n == "obj" || n == "build" || n == "dist" || n == "target") && !signs.Contains("build output that is made again on the next build")) signs.Add("build output that is made again on the next build");
+                        stack.Push(sub); continue;
+                    }
+                    var f = (FileInfo)i; long len; DateTime t;
+                    try { len = f.Length; t = f.LastWriteTime; } catch { continue; }
+                    string kind; if (!kindOf.TryGetValue(f.Extension, out kind)) kind = "other files";
+                    long v; bytes.TryGetValue(kind, out v); bytes[kind] = v + len; files.TryGetValue(kind, out v); files[kind] = v + 1;
+                    total += len; count++;
+                    if (t > newest) newest = t;
+                    var age = DateTime.Now - t; if (age.TotalDays > 30) old30 += len; if (age.TotalDays > 365) old365 += len;
+                    if (count >= 400000) { capped = true; break; }
+                }
+                if (capped) break;
+            }
+            if (count == 0) return "It's empty right now" + (skip.Count > 0 ? ", apart from what you unticked." : ".");
+            var sb = new System.Text.StringBuilder();
+            sb.Append(Engine.Fmt(total) + " in " + count.ToString("N0") + " files" + (capped ? " (counted the first 400,000)" : "") + ". ");
+            var top = bytes.OrderByDescending(x => x.Value).Take(3).ToList();
+            sb.Append(top[0].Value * 100 / Math.Max(1, total) >= 60 ? "Mostly " : "Mainly ");
+            sb.Append(string.Join(", ", top.Select(x => x.Key + " (" + Engine.Fmt(x.Value) + ", " + files[x.Key].ToString("N0") + ")")) + ". ");
+            if (newest > DateTime.MinValue) sb.Append("Last changed " + Ago(newest) + ". ");
+            if (old30 > 0) sb.Append(Engine.Fmt(old30) + " hasn't been touched for over a month" + (old365 > 0 ? ", " + Engine.Fmt(old365) + " for over a year" : "") + ". ");
+            if (signs.Count > 0) sb.Append("It has " + string.Join("; ", signs) + ".");
+            return sb.ToString().Trim();
+        }
+
+        static string Ago(DateTime t)
+        {
+            var d = DateTime.Now - t;
+            if (d.TotalHours < 1) return "within the last hour";
+            if (d.TotalDays < 1) return (int)d.TotalHours + " hours ago";
+            if (d.TotalDays < 60) return (int)d.TotalDays + " days ago";
+            if (d.TotalDays < 730) return (int)(d.TotalDays / 30) + " months ago";
+            return (int)(d.TotalDays / 365) + " years ago";
         }
     }
 }
