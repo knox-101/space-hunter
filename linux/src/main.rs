@@ -3,6 +3,7 @@
 // Space Hunter (Linux) - phase 1: the window, the look, the fonts and the disk numbers. Scanning and cleaning come next.
 
 mod engine;
+mod storage;
 mod ui;
 
 use gtk::prelude::*;
@@ -128,6 +129,19 @@ checkbutton check:disabled { border-color: #C3BFB6; background: transparent; }
 .confirm-title { color: #1B1B1A; font-weight: 700; font-size: 17pt; margin-bottom: 4px; }
 .confirm-head { color: #5F5C56; font-weight: 700; font-size: 9.5pt; }
 .confirm-how { color: #5F5C56; font-weight: 600; font-size: 10pt; }
+.hero-mid { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 40pt; }
+.panel-title-dark { color: #E9E6DF; font-size: 11pt; }
+button.key.drive { padding: 8px 14px; }
+.drive-text { font-weight: 600; font-size: 9.75pt; color: #1B1B1A; }
+button.place-row { background: none; border: none; box-shadow: none; padding: 8px 12px; border-radius: 3px; }
+button.place-row:hover { background: #E0DDD6; }
+button.crumb { background: none; border: none; box-shadow: none; padding: 4px 6px; color: #5F5C56; font-size: 10pt; border-radius: 3px; }
+button.crumb:hover { background: #ECEAE5; color: #1B1B1A; }
+button.crumb-now { background: none; border: none; box-shadow: none; padding: 4px 6px; color: #1B1B1A; font-weight: 700; font-size: 10pt; }
+.crumb-sep { color: #7D7972; font-size: 11pt; }
+.chart-caption { color: #5F5C56; font-size: 8.75pt; }
+.included { color: #E9E6DF; background: #1B1B1A; font-weight: 600; font-size: 8.25pt; padding: 6px 12px; border-radius: 4px; }
+button.key.primary-small { background: #FF5B1F; box-shadow: 0 2px 0 #B5400F; }
 textview.log, textview.log text { background: #E4E1DA; color: #1B1B1A; font-family: "IBM Plex Mono"; font-size: 8.5pt; }
 "#;
 
@@ -188,6 +202,9 @@ fn main() -> glib::ExitCode {
         open: args.iter().position(|a| a == "--open").and_then(|i| args.get(i + 1)).cloned(),
         confirm: args.iter().any(|a| a == "--confirm"),
         progress_dir: args.iter().position(|a| a == "--test-progress").and_then(|i| args.get(i + 1)).cloned(),
+        storage: args.iter().position(|a| a == "--storage").and_then(|i| args.get(i + 1)).cloned(),
+        drill: args.iter().position(|a| a == "--drill").and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(0),
+        protect: args.iter().any(|a| a == "--protect"),
     };
     app.connect_activate(move |app| {
         let _ui = ui::build(app, opts.clone());

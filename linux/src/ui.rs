@@ -21,6 +21,9 @@ pub struct Opts {
     pub open: Option<String>,          // test hook: open this item's panel once measured
     pub confirm: bool,                 // test hook: open the confirm window once measured
     pub progress_dir: Option<String>,  // test hook: clean this folder (to the Trash) in the cleaning window
+    pub storage: Option<String>,       // test hook: open the Storage map on this folder
+    pub drill: usize,                  // test hook: open the biggest folder this many levels down
+    pub protect: bool,                 // test hook: open Protected folders
 }
 
 struct St {
@@ -356,9 +359,9 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
             scan(&u, None);
         });
         let u = ui.clone();
-        map.connect_clicked(move |_| u.status.set_text("The Storage map comes in the next Linux preview."));
+        map.connect_clicked(move |_| open_storage(&u, None, 0));
         let u = ui.clone();
-        protect.connect_clicked(move |_| u.status.set_text("The protected folders window comes in the next Linux preview. Until then, use Keep in an item's panel."));
+        protect.connect_clicked(move |_| { let u2 = u.clone(); crate::storage::open_protect(&u.win, Rc::new(move || reload(&u2))); });
         let u = ui.clone();
         ui.clean.connect_clicked(move |_| {
             if u.st.borrow().cleaning {
@@ -376,6 +379,8 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     }
     refresh(&ui);
     ui.win.present();
+    if let Some(p) = ui.opts.storage.clone() { let d = ui.opts.drill; open_storage(&ui, Some(PathBuf::from(p)), d); }
+    if ui.opts.protect { let u2 = ui.clone(); crate::storage::open_protect(&ui.win, Rc::new(move || reload(&u2))); }
     if let Some(dir) = ui.opts.progress_dir.clone() {
         let c = test_cat(PathBuf::from(dir));
         start_clean(&ui, vec![c], true);
@@ -383,6 +388,26 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         scan(&ui, None);
     }
     ui
+}
+
+// The Storage map; when it closes after you've added or removed something, the list is built and measured again.
+fn open_storage(u: &Rc<Ui>, start: Option<PathBuf>, drill: usize) {
+    let cats = u.st.borrow().cats.clone();
+    let u2 = u.clone();
+    crate::storage::open(&u.win, cats, Rc::new(move || { reload(&u2); u2.status.set_text("Cleanup list updated. What you added is in Personal & work items, unticked."); }), start, drill);
+}
+
+// Build the list again (after the cleanup list or protected folders changed) and measure it.
+fn reload(u: &Rc<Ui>) {
+    {
+        let mut st = u.st.borrow_mut();
+        let mut cats = engine::build();
+        engine::settings::load(&mut cats);
+        st.cats = cats;
+        st.open = None;
+    }
+    u.panel_rev.set_reveal_child(false);
+    scan(u, None);
 }
 
 fn test_cat(dir: PathBuf) -> Cat {

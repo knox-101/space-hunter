@@ -132,7 +132,23 @@ pub mod keep {
     pub fn all() -> Vec<String> { lines("keep.txt") }
     pub fn add(p: &str) { let mut a = all(); if !a.iter().any(|x| x == p) { a.push(p.to_string()); } write_lines("keep.txt", &a); }
     pub fn remove(p: &str) { let a: Vec<String> = all().into_iter().filter(|x| x != p).collect(); write_lines("keep.txt", &a); }
-    pub fn is_kept(path: &Path, list: &[String]) -> bool { list.iter().any(|k| path.starts_with(k)) }
+    pub fn is_kept(path: &Path, list: &[String]) -> bool { list.iter().any(|k| path.starts_with(k)) || is_builtin(path) }
+    // Space Hunter itself: its settings, its history, and the program (or AppImage). Always protected, can't be removed.
+    pub fn builtin() -> Vec<String> {
+        static B: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        B.get_or_init(builtin_now).clone()
+    }
+    fn builtin_now() -> Vec<String> {
+        let mut v = vec![config_dir().to_string_lossy().to_string(), glib::user_data_dir().join("space-hunter").to_string_lossy().to_string(),
+                         glib::user_cache_dir().join("space-hunter").to_string_lossy().to_string()];
+        if let Some(a) = std::env::var_os("APPIMAGE") { v.push(PathBuf::from(a).to_string_lossy().to_string()); }
+        if let Ok(e) = std::env::current_exe() { v.push(e.to_string_lossy().to_string()); }
+        v
+    }
+    pub fn is_builtin(path: &Path) -> bool {
+        static B: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        B.get_or_init(builtin_now).iter().any(|k| path.starts_with(k))
+    }
 }
 
 // Folders added to the cleanup list from the Space map.
@@ -291,12 +307,26 @@ pub fn build() -> Vec<Cat> {
     for p in custom::all() {
         let path = PathBuf::from(&p);
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
+        // a single file you picked goes whatever its age
+        if fs::symlink_metadata(&path).map(|m| m.is_file()).unwrap_or(false) {
+            list.push(Cat {
+                id: format!("custom:{}", p), name: format!("{}  (your file)", name), level: Level::Caution, kind: Kind::Contents,
+                admin: false, roots: vec![path], exclude: HashSet::new(), extensions: None, top_level_only: false, is_custom: true,
+                default_age: 0, age_minutes: 0, last_age: 30 * DAY, checked: false, files: 0, bytes: 0, scanned: false, blocked: false,
+                short: "This one file goes".into(),
+                what: format!("A file you added from the Storage map: {}", p),
+                deletes: "Just this file, whatever its age.".into(),
+                safe_text: "Only you know. Open it and check before ticking.".into(),
+                after: "The file is gone, unless you choose Trash in the confirm window.".into(),
+            });
+            continue;
+        }
         list.push(Cat {
             id: format!("custom:{}", p), name: format!("{}  (your folder)", name), level: Level::Caution, kind: Kind::Contents,
             admin: false, roots: vec![path], exclude: HashSet::new(), extensions: None, top_level_only: false, is_custom: true,
             default_age: 30 * DAY, age_minutes: 30 * DAY, last_age: 30 * DAY, checked: false, files: 0, bytes: 0, scanned: false, blocked: false,
             short: "Everything inside goes; the folder itself stays".into(),
-            what: format!("A folder you added from the Space map: {}", p),
+            what: format!("A folder you added from the Storage map: {}", p),
             deletes: "Every file inside it (older than the age you set) and the sub-folders that end up empty. The folder itself stays.".into(),
             safe_text: "Only you know. Open it and check before ticking. Protected folders inside it are skipped.".into(),
             after: "The files are gone, unless you choose Trash in the confirm window.".into(),
@@ -367,7 +397,8 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
         return;
     }
     let cutoff = SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
-    let kept = keep::all();
+    let mut kept = keep::all();
+    kept.extend(keep::builtin());   // Space Hunter itself, always
     let me = uid();
     let root_user = is_root();
     let trash_it = to_trash && c.kind != Kind::Trash && !c.admin;   // emptying the Trash can't go to the Trash
@@ -390,6 +421,10 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
     for root in &c.roots {
         if cnt.cancelled() { break; }
         let m = match fs::symlink_metadata(root) { Ok(m) => m, Err(_) => continue };
+        if c.is_custom && m.is_file() {   // a single file you added
+            if c.refused().is_none() { handle(root, &m, cutoff, cnt); }
+            continue;
+        }
         if !m.is_dir() { continue; }   // a linked root is never followed
         if !is_safe_root(root, c.admin, c.extensions.is_some() && c.top_level_only) { continue; }
         if keep::is_kept(root, &kept) { continue; }
@@ -519,7 +554,7 @@ pub mod history {
 
 impl Cat {
     // something you added that the safety rules refuse: listed so it can be removed, never cleaned
-    pub fn refused(&self) -> Option<&str> { if self.is_custom && !is_safe_root(&self.roots[0], false, false) { Some("likely your own files") } else { None } }
+    pub fn refused(&self) -> Option<String> { if self.is_custom { can_add(&self.roots[0], true).err() } else { None } }
 }
 
 pub fn fmt_age(m: u32) -> String {
@@ -538,4 +573,35 @@ pub fn tier_explain(l: Level) -> &'static str {
         Level::Review => "Things that come back by downloading them again, or history you might still want. Read each one before you tick it.",
         Level::Caution => "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes.",
     }
+}
+
+// Can a folder or file from the Storage map go on the cleanup list? Ok, or the reason it can't.
+// existing: checking something already on the list (so "already on the cleanup list" doesn't count).
+pub fn can_add(p: &Path, existing: bool) -> Result<(), String> {
+    let h = home();
+    if !p.is_absolute() || has_dots(p) { return Err("not a plain path".into()); }
+    if keep::is_builtin(p) { return Err("it's Space Hunter's own folder".into()); }
+    if !p.starts_with(&h) || p == h { return Err("outside your home folder".into()); }
+    for b in [h.join(".config"), h.join(".local"), h.join(".local/share"), h.join(".cache")] {
+        if b == p { return Err("it holds settings for all your apps".into()); }
+    }
+    if let Some(k) = personal_folder_of(p) { return Err(format!("it's inside your personal files ({})", k.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())); }
+    if personal().iter().any(|k| k.starts_with(p)) { return Err("it holds your personal folders".into()); }
+    // a folder made right in your home (like ~/Work) usually holds your own files; hidden ones (~/.gradle) are app data
+    if p.parent() == Some(h.as_path()) && !p.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+        return Err("likely your own files (a folder right in your home)".into());
+    }
+    if keep::is_kept(p, &keep::all()) { return Err("it's a protected folder".into()); }
+    if !existing && custom::all().iter().any(|c| p.starts_with(c)) { return Err("it's already on the cleanup list".into()); }
+    Ok(())
+}
+
+// Which cleanup items already clean a path (it's inside one), or sit inside it.
+pub fn coverage(p: &Path, cats: &[Cat]) -> (Option<String>, bool) {
+    for c in cats { if !c.is_custom && c.roots.iter().any(|r| p.starts_with(r)) { return (Some(c.name.clone()), true); } }
+    let holds: Vec<String> = cats.iter().filter(|c| !c.is_custom && c.roots.iter().any(|r| r.starts_with(p) && r != p)).map(|c| c.name.clone()).collect();
+    if holds.is_empty() { return (None, false); }
+    let mut t = holds.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+    if holds.len() > 2 { t.push_str(&format!(" +{}", holds.len() - 2)); }
+    (Some(t), false)
 }
