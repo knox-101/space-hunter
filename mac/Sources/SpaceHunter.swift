@@ -120,7 +120,7 @@ enum Engine {
             var c = Cat(id: "custom:" + p.lowercased(), name: (p as NSString).lastPathComponent + (isFile ? "  (your file)" : "  (your folder)"), level: .caution,
                         kind: .contents, roots: [URL(fileURLWithPath: p)], defaultAge: isFile ? 0 : 30 * day, ageMinutes: isFile ? 0 : 30 * day, lastAge: 30 * day, checked: false)
             c.isCustom = true
-            c.short = "Everything inside goes; the folder itself stays"
+            c.short = "Ticked contents go; the folder itself stays"
             c.what = "A folder you added from the Storage map: " + p
             c.deletes = "Every file inside it (older than the age you set) and the sub-folders that end up empty, except what you untick under \u{201C}Inside this folder\u{201D}. The folder itself stays."
             c.safeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped."
@@ -1297,6 +1297,7 @@ struct ProgressSheet: View {
                         VStack(alignment: .trailing, spacing: 4) {
                             Text("\(Int64(Double(state.cleanedFiles) * (finished ? ease : 1))) files  ·  \(state.skipped) skipped").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
                             if state.trashed > 0 && !binOnly { Text("+ \(Engine.fmt(state.trashed)) moved to the Trash").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
+                            if binOnly && state.cleanDone { Text("Empty the Trash to get this space back").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
                         }
                     }.foregroundColor(Theme.orange)
                     GeometryReader { g in

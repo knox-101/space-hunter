@@ -189,6 +189,8 @@ namespace SpaceHunter
             }
             string stat = ((long)(cnt.Files * (done && !cnt.Cancel ? ease : 1))).ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
             using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
+            if (binOnly && done)   // honest about where the space is: it comes back when the bin is emptied
+                using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "Empty the Recycle Bin to get this space back"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
             if (cnt.RecycledBytes > 0 && !binOnly)
                 using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
             double f = Math.Min(1.0, (double)(cnt.Bytes + cnt.RecycledBytes) / expected);

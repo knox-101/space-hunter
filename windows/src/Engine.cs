@@ -107,7 +107,7 @@ namespace SpaceHunter
                 c.Roots.Add(p);
                 c.IsCustom = true; c.Checked = false;   // your folders start unticked, older than 30 days
                 c.Note = "A folder you added";
-                c.Short = "Everything inside goes; the folder itself stays";
+                c.Short = "Ticked contents go; the folder itself stays";
                 c.What = "A folder you added from the Storage map: " + p;
                 c.Deletes = "Every file inside it (older than the age you set), and the sub-folders that end up empty, except what you untick under \u201cInside this folder\u201d below. The folder itself stays.";
                 c.SafeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped.";

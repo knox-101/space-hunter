@@ -523,7 +523,9 @@ fn refresh_top(u: &Rc<Ui>) {
     let (free, total) = crate::disk("/");
     u.disk_text.set_text(&format!("{} free of {}", fmt(free), fmt(total)));
     let binned = engine::history::trashed();
-    u.freed_text.set_text(&if freed.1 > 0 { format!("Freed so far: {}{} in {} clean{}", fmt(freed.0), if binned > 0 { format!(" + {} to the Trash", fmt(binned)) } else { String::new() }, freed.1, if freed.1 == 1 { "" } else { "s" }) } else { String::new() });
+    // no "0 MB + ..." : say only what happened
+    let parts: Vec<String> = [(freed.0, "freed".to_string()), (binned, "moved to the Trash".to_string())].iter().filter(|(b, _)| *b > 0).map(|(b, w)| format!("{} {}", fmt(*b), w)).collect();
+    u.freed_text.set_text(&if freed.1 > 0 && !parts.is_empty() { format!("So far: {} in {} clean{}", parts.join(" + "), freed.1, if freed.1 == 1 { "" } else { "s" }) } else { String::new() });
     if total > 0 {
         let t = total as f64;
         let used = (total - free) as f64 / t;
@@ -832,7 +834,7 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         row.add_css_class("rowline");
         let chk = gtk::CheckButton::new();
         chk.set_active(!off); chk.set_sensitive(!inherited);
-        if !c.checked { chk.set_opacity(0.5); }
+        if !c.checked { chk.add_css_class("dim"); }   // grey until the item itself is ticked
         let (uu, ps) = (u.clone(), p.to_string_lossy().to_string());
         let id = c.id.clone();
         chk.connect_toggled(move |b| { engine::custom::set_skipped(&ps, !b.is_active()); uu.described.borrow_mut().clear(); scan(&uu, Some(vec![id.clone()])); });
@@ -1166,7 +1168,11 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                     bigu.set_text(&format!("{} {}", unit, if bin_only { "TO TRASH" } else { "FREED" }));
                     stat.set_text(&format!("{} files  \u{00B7}  {} skipped", (f as f64 * ease) as u64, s));
                     fin.set(x); pbar.queue_draw();
-                    if x >= 1.0 { headl.set_text("Done  \u{00B7}  all ticked items cleaned"); return glib::ControlFlow::Break; }
+                    if x >= 1.0 {
+                        headl.set_text("Done  \u{00B7}  all ticked items cleaned");
+                        if bin_only { stat.set_text(&format!("{} files  \u{00B7}  empty the Trash to get this space back", f)); }
+                        return glib::ControlFlow::Break;
+                    }
                     glib::ControlFlow::Continue
                 });
             } else if !stopped { fin.set(1.0); pbar.queue_draw(); }

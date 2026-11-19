@@ -118,6 +118,7 @@ button.row-btn.open { background: #E9E6E0; }
 .group-note { color: #7D7972; font-size: 9pt; }
 checkbutton check { min-width: 17px; min-height: 17px; border-radius: 2px; border: 2px solid #1B1B1A; background: transparent; background-image: none; box-shadow: none; }
 checkbutton check:checked { background: #FF5B1F; border-color: #FF5B1F; color: #1B1B1A; }
+checkbutton.dim check:checked { background: #C3BFB6; border-color: #C3BFB6; }
 checkbutton check:disabled { border-color: #C3BFB6; background: transparent; }
 .panel { background: #E4E1DA; border-left: 1px solid #C3BFB6; }
 .panel-tag { color: #5F5C56; font-weight: 600; font-size: 9.5pt; }

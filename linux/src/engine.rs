@@ -333,7 +333,7 @@ pub fn build() -> Vec<Cat> {
             id: format!("custom:{}", p), name: format!("{}  (your folder)", name), level: Level::Caution, kind: Kind::Contents,
             admin: false, roots: vec![path], exclude: HashSet::new(), extensions: None, top_level_only: false, is_custom: true,
             default_age: 30 * DAY, age_minutes: 30 * DAY, last_age: 30 * DAY, checked: false, files: 0, bytes: 0, scanned: false, blocked: false,
-            short: "Everything inside goes; the folder itself stays".into(),
+            short: "Ticked contents go; the folder itself stays".into(),
             what: format!("A folder you added from the Storage map: {}", p),
             deletes: "Every file inside it (older than the age you set) and the sub-folders that end up empty. The folder itself stays.".into(),
             safe_text: "Only you know. Open it and check before ticking. Protected folders inside it are skipped.".into(),
