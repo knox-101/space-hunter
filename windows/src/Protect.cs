@@ -89,7 +89,7 @@ namespace SpaceHunter
 
         static readonly string[] BuiltIn = {
             "Documents, Desktop, Pictures, Videos, Music, Favorites and OneDrive",
-            "Downloads, except old installers and archives, and those only when you tick that item",
+            "Downloads (only old installers and archives can be cleaned, and only if you tick that item)",
             "Your code and project folders (source, Projects)",
             "Keys and sign-in settings (.ssh, .gnupg, .aws, .azure, .kube, .docker)",
             "AI agents' memory folders (for example Claude Code's memory)",

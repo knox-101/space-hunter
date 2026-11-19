@@ -1333,7 +1333,7 @@ struct ProtectView: View {
     @EnvironmentObject var state: AppState
     @State private var tick = 0
     let always = ["Documents, Desktop, Pictures, Movies, Music, Public and iCloud Drive",
-                  "Downloads, except old installers and archives, and those only when you tick that item",
+                  "Downloads (only old installers and archives can be cleaned, and only if you tick that item)",
                   "Your code and project folders (Projects, Developer)",
                   "Keys and sign-in settings (.ssh, .gnupg, .aws, .kube, .docker)",
                   "AI agents' memory folders (for example Claude Code's memory)",
