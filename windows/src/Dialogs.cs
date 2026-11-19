@@ -28,7 +28,6 @@ namespace SpaceHunter
         public ConfirmForm(List<Category> sel)
         {
             total = sel.Sum(c => c.Bytes);
-            // Quick clean is always deleted for good: caches rebuild, so the Recycle Bin would only fill up
             safeBytes = sel.Where(c => c.Safe).Sum(c => c.Bytes); otherBytes = total - safeBytes;
             onlySafe = sel.All(c => c.Safe);
             var lines = new List<Line>();
@@ -50,8 +49,8 @@ namespace SpaceHunter
             Theme.Window(this, "Space Hunter", 560, 282 + listH);
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            // the safe choice first: anything beyond "Quick clean" goes to the Recycle Bin unless you choose otherwise
-            Recycle = sel.Any(c => !c.Safe);
+            // permanently delete is chosen to start with; the Recycle Bin is one click away, for any clean
+            Recycle = false;
 
             var h = new Label { Text = "Clean " + Engine.Fmt(total) + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = Theme.P(26, 22), UseMnemonic = false };
             var lst = new CanvasPanel { Location = Theme.P(26, 70), Size = Theme.D(508, listH) };
@@ -71,14 +70,13 @@ namespace SpaceHunter
                     y += RowH;
                 }
             };
-            how = new Label { Text = "How to clean the rest", Font = Theme.Semi(10f), ForeColor = Theme.Muted, AutoSize = true, Location = Theme.P(28, 82 + listH), UseMnemonic = false };
+            how = new Label { Text = "How to clean", Font = Theme.Semi(10f), ForeColor = Theme.Muted, AutoSize = true, Location = Theme.P(28, 82 + listH), UseMnemonic = false };
             delKey.Location = Theme.P(26, 106 + listH); binKey.Location = new Point(delKey.Right + Theme.D(4), delKey.Top);
             hint = new Label { Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, Location = Theme.P(28, 150 + listH), AutoSize = true, MaximumSize = Theme.D(508, 0), UseMnemonic = false };
             delKey.Click += (s, e) => { Recycle = false; ShowHow(); };
             binKey.Click += (s, e) => { Recycle = true; ShowHow(); };
             cancel = new Key("cancel"); ok = new Key("clean", true);
             ShowHow();
-            if (onlySafe) { how.Visible = delKey.Visible = binKey.Visible = false; hint.Top = how.Top; }   // nothing to choose
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             ok.Click += (s, e) => { DialogResult = DialogResult.OK; Close(); };
             Controls.AddRange(new Control[] { h, lst, how, delKey, binKey, hint, cancel, ok });
@@ -102,19 +100,15 @@ namespace SpaceHunter
             delKey.Toggled = !Recycle; binKey.Toggled = Recycle;
             delKey.Invalidate(); binKey.Invalidate();
             // the key says what will actually happen
-            ok.Text = onlySafe || !Recycle ? "permanently delete " + Engine.Fmt(total)
-                    : safeBytes > 0 ? "clean " + Engine.Fmt(total) : "move " + Engine.Fmt(total) + " to recycle bin";
+            ok.Text = !Recycle ? "permanently delete " + Engine.Fmt(total) : "move " + Engine.Fmt(total) + " to recycle bin";
             ok.FitWidth();
             ok.Location = new Point(ClientSize.Width - ok.Width - Theme.D(26), ClientSize.Height - Theme.D(58));
             cancel.Location = new Point(ok.Left - cancel.Width - Theme.D(8), ok.Top);
-            if (onlySafe)
-                hint.Text = "Quick clean is deleted for good: these are caches and leftovers that rebuild, so the Recycle Bin would only fill up. The space comes back straight away.";
-            else if (!Recycle)
-                hint.Text = "Everything is deleted permanently and can't be restored. The space comes back straight away.";
+            if (!Recycle)
+                hint.Text = (onlySafe ? "These are caches and leftovers that rebuild. " : "") +
+                            "Everything is deleted permanently and can't be restored. The space comes back straight away.";
             else
-                hint.Text = (safeBytes > 0 ? "Quick clean (" + Engine.Fmt(safeBytes) + ") is deleted for good; the rest (" + Engine.Fmt(otherBytes) + ") goes to the Recycle Bin, so you can restore it. "
-                                           : "Everything goes to the Recycle Bin, so you can restore it. ") +
-                            "That space comes back only when you empty the bin. A file too big for the bin is kept, not deleted.";
+                hint.Text = "Everything goes to the Recycle Bin, so you can restore it. That space comes back only when you empty the bin. A file too big for the bin is kept, not deleted.";
         }
     }
 

@@ -1085,7 +1085,7 @@ namespace SpaceHunter
                 if (cf.ShowDialog(this) != DialogResult.OK) return;
                 recycle = cf.Recycle;
             }
-            foreach (var c in sel) c.Recycle = recycle && !c.Safe;   // the confirm window's choice, for this clean; Quick clean is always deleted for good
+            foreach (var c in sel) c.Recycle = recycle;   // the confirm window's choice, for this clean
             // the cleaning window doesn't block: you can keep looking around; Clean waits until this one is done
             cleaning = true; Refresh_();
             var pf = new ProgressForm(sel, total) { StartPosition = FormStartPosition.Manual };

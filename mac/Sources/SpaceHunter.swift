@@ -813,7 +813,7 @@ final class AppState: ObservableObject {
             for (i, c) in sel.enumerated() where !cnt.cancel {
                 DispatchQueue.main.async { self.currentItem = "ITEM \(i + 1) OF \(sel.count)  ·  \(c.name.uppercased())" }
                 lock.lock(); let b0 = cnt.bytes, t0 = cnt.trashedBytes, f0 = cnt.files; lock.unlock()
-                Engine.process(c, delete: true, toTrash: toTrash && !c.isSafe, cnt: cnt)   // Quick clean is always deleted for good
+                Engine.process(c, delete: true, toTrash: toTrash, cnt: cnt)   // the confirm window's choice applies to every item
                 lock.lock(); let b1 = cnt.bytes, t1 = cnt.trashedBytes, f1 = cnt.files; lock.unlock()
                 summary.append("\(c.name): freed \(Engine.fmt(b1 - b0))" + (t1 > t0 ? " + \(Engine.fmt(t1 - t0)) to Trash" : "") + ", \(f1 - f0) files")
                 lines.append("\(c.name)   ·   " + (b1 > b0 || t1 == t0 ? "\(Engine.fmt(b1 - b0)) freed" : "") + (t1 > t0 ? (b1 > b0 ? " + " : "") + "\(Engine.fmt(t1 - t0)) to the Trash" : ""))
@@ -1533,12 +1533,9 @@ struct ConfirmSheet: View {
         // frozen copies: an item with files picked by hand counts only those, named "… (your picks)"
         let sel = state.cleanSelection()
         let total = sel.reduce(Int64(0)) { $0 + $1.bytes }
-        // Quick clean is always deleted for good (caches rebuild, so the Trash would only fill up); the choice is for
-        // the rest, and the safe choice comes first: Trash, unless you choose otherwise
+        // one choice for every ticked item, Quick clean included; it starts on Permanently delete every time
         let onlySafe = sel.allSatisfy { $0.isSafe }
-        let safeBytes = sel.filter { $0.isSafe }.reduce(Int64(0)) { $0 + $1.bytes }
-        let otherBytes = total - safeBytes
-        let trashing = !onlySafe && (chosen ? toTrash : true)
+        let trashing = chosen && toTrash
         VStack(alignment: .leading, spacing: 8) {
             Text("Clean \(Engine.fmt(total))?").font(Theme.bold(24)).foregroundColor(Theme.ink)
             // grouped by risk, so it's plain which ticked items need care
@@ -1550,24 +1547,20 @@ struct ConfirmSheet: View {
                     if items.count > 4 { ConfirmRow(name: "+ \(items.count - 4) more", bytes: items.dropFirst(4).reduce(Int64(0)) { $0 + $1.bytes }, level: lvl) }
                 }
             }
-            if !onlySafe {
-                Text("How to clean the rest").font(Theme.semi(13)).foregroundColor(Theme.muted).padding(.top, 8)
-                HStack(spacing: 4) {
-                    Button("Permanently delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
-                    Button("Move to Trash") { toTrash = true; chosen = true }.buttonStyle(KeyStyle(toggled: trashing))
-                }
+            Text("How to clean").font(Theme.semi(13)).foregroundColor(Theme.muted).padding(.top, 8)
+            HStack(spacing: 4) {
+                Button("Permanently delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
+                Button("Move to Trash") { toTrash = true; chosen = true }.buttonStyle(KeyStyle(toggled: trashing))
             }
-            Text(onlySafe ? "Quick clean is deleted for good: these are caches and leftovers that rebuild, so the Trash would only fill up. The space comes back straight away."
-                 : !trashing ? "Everything is deleted permanently and can't be restored. The space comes back straight away."
-                 : (safeBytes > 0 ? "Quick clean (\(Engine.fmt(safeBytes))) is deleted for good; the rest (\(Engine.fmt(otherBytes))) goes to the Trash, so you can restore it. "
-                                  : "Everything goes to the Trash, so you can restore it. ") + "That space comes back only when you empty the Trash.")
+            Text(!trashing ? (onlySafe ? "These are caches and leftovers that rebuild. " : "") + "Everything is deleted permanently and can't be restored. The space comes back straight away."
+                 : "Everything goes to the Trash, so you can restore it. That space comes back only when you empty the Trash.")
                 .font(Theme.sans(12)).foregroundColor(Theme.soft).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             HStack(spacing: 8) {
                 Spacer()
                 Button("Cancel") { confirm = false }.buttonStyle(KeyStyle()).keyboardShortcut(.cancelAction)
                 // the key says what will actually happen
-                Button(!trashing ? "Permanently delete \(Engine.fmt(total))" : safeBytes > 0 ? "Clean \(Engine.fmt(total))" : "Move \(Engine.fmt(total)) to Trash") {
+                Button(!trashing ? "Permanently delete \(Engine.fmt(total))" : "Move \(Engine.fmt(total)) to Trash") {
                     confirm = false
                     let trash = trashing
                     let chosenSel = sel   // exactly what this sheet showed
@@ -1577,6 +1570,7 @@ struct ConfirmSheet: View {
             }
         }
         .padding(26).frame(width: 560).frame(minHeight: 320).background(Theme.chassis)
+        .onAppear { toTrash = false; chosen = false }   // starts on Permanently delete every time
     }
 }
 

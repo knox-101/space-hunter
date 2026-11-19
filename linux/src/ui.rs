@@ -20,7 +20,7 @@ const ORDER: [Level; 3] = [Level::Safe, Level::Review, Level::Caution];
 pub struct Opts {
     pub open: Option<String>,          // test hook: open this item's panel once measured
     pub confirm: bool,                 // test hook: open the confirm window once measured
-    pub progress_dir: Option<String>,  // test hook: clean this folder (to the Trash) in the cleaning window
+    pub progress_dir: Option<String>,  // test hook: clean this folder (deleted) in the cleaning window
     pub storage: Option<String>,       // test hook: open the Storage map on this folder
     pub drill: usize,                  // test hook: open the biggest folder this many levels down
     pub protect: bool,                 // test hook: open Protected folders
@@ -446,7 +446,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     if ui.opts.protect { let u2 = ui.clone(); crate::storage::open_protect(&ui.win, Rc::new(move || reload(&u2))); }
     if let Some(dir) = ui.opts.progress_dir.clone() {
         let c = test_cat(PathBuf::from(dir));
-        start_clean(&ui, vec![c], true);
+        start_clean(&ui, vec![c], false);   // deleted, as the screenshot has always shown
     } else {
         scan(&ui, None);
     }
@@ -1299,20 +1299,16 @@ fn confirm(u: &Rc<Ui>) {
             v.append(&confirm_row(&format!("+ {} more", items.len() - 4), &fmt(rest)));
         }
     }
-    // Quick clean is always deleted for good (caches rebuild, so the Trash would only fill up); the choice is for the
-    // rest, and the safe choice comes first: Trash, unless you choose otherwise
+    // how everything ticked goes, Quick clean included: deleted for good unless you choose the Trash
     let only_safe = sel.iter().all(|c| c.is_safe());
-    let safe_bytes: u64 = sel.iter().filter(|c| c.is_safe()).map(|c| c.bytes).sum();
-    let other_bytes = total - safe_bytes;
-    let to_trash = Rc::new(Cell::new(!only_safe));
-    let how = label("How to clean the rest", "confirm-how"); how.set_margin_top(14);
+    let to_trash = Rc::new(Cell::new(false));
+    let how = label("How to clean", "confirm-how"); how.set_margin_top(14);
     v.append(&how);
     let toggles = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let del = key("permanently delete", &[]);
     let bin = key("trash", &[]);
     toggles.append(&del); toggles.append(&bin);
     v.append(&toggles);
-    if only_safe { how.set_visible(false); toggles.set_visible(false); }   // nothing to choose
     let hint = body_text(""); hint.set_max_width_chars(64); hint.set_margin_top(6);
     v.append(&hint);
     if sel.iter().any(|c| c.admin) {
@@ -1333,11 +1329,10 @@ fn confirm(u: &Rc<Ui>) {
         Rc::new(move || {
             let trash = t.get();
             if trash { bin.add_css_class("on"); del.remove_css_class("on"); } else { del.add_css_class("on"); bin.remove_css_class("on"); }
-            hint.set_text(&if only_safe { "Quick clean is deleted for good: these are caches and leftovers that rebuild, so the Trash would only fill up. The space comes back straight away.".to_string() }
-                          else if !trash { "Everything is deleted permanently and can't be restored. The space comes back straight away.".to_string() }
-                          else if safe_bytes > 0 { format!("Quick clean ({}) is deleted for good; the rest ({}) goes to the Trash, so you can restore it. That space comes back only when you empty the Trash.", fmt(safe_bytes), fmt(other_bytes)) }
-                          else { "Everything goes to the Trash, so you can restore it. That space comes back only when you empty the Trash.".to_string() });
-            ok.set_label(&if !trash { format!("PERMANENTLY DELETE {}", fmt(total)) } else if safe_bytes > 0 { format!("CLEAN {}", fmt(total)) } else { format!("MOVE {} TO TRASH", fmt(total)) });
+            hint.set_text(&if trash { "Everything goes to the Trash, so you can restore it. That space comes back only when you empty the Trash.".to_string() }
+                          else { format!("{}Everything is deleted permanently and can't be restored. The space comes back straight away.",
+                                         if only_safe { "These are caches and leftovers that rebuild. " } else { "" }) });
+            ok.set_label(&if !trash { format!("PERMANENTLY DELETE {}", fmt(total)) } else { format!("MOVE {} TO TRASH", fmt(total)) });
         })
     };
     (*show)();
@@ -1479,7 +1474,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 let head = if !ok { "skip".to_string() } else if bin { format!("trash {:>8}", fmt(size)) } else { format!("del  {:>8}", fmt(size)) };
                 let _ = t2.send(Msg::Line(format!("{}  {}", head, home_short(p))));
             }));
-            engine::process(c, true, to_trash && !c.is_safe(), &mut cnt);   // Quick clean is always deleted for good
+            engine::process(c, true, to_trash, &mut cnt);   // Quick clean too; the engine keeps the Trash item and journal deleting
             bytes += cnt.bytes; trashed += cnt.trashed; files += cnt.files; skipped += cnt.skipped;
             let _ = tx.send(Msg::Totals(bytes, trashed, files, skipped));
             let _ = tx.send(Msg::Line(format!("\u{2014} {}: freed {}{}, {} files", c.name, fmt(cnt.bytes), if cnt.trashed > 0 { format!(" + {} to the Trash", fmt(cnt.trashed)) } else { String::new() }, cnt.files)));

@@ -3,6 +3,13 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.5.2 (2026-11-20)
+
+- **Permanently delete is chosen to start with**, every time you press Clean, and **Recycle Bin / Trash** is still
+  one click away. It's now offered for Quick clean too: choose it and everything you ticked goes to the bin.
+- **Storage map: the wheel scrolls the list wherever the pointer is on a row**, including over the bar, the size and
+  the percentage, not only over the folder name.
+
 ## 1.5.1 (2026-11-20)
 
 - **The item panel stays where you are.** Ticking a file or folder in What's inside, changing the age or keeping a

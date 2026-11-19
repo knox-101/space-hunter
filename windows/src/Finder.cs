@@ -14,7 +14,7 @@ using System.Windows.Forms;
 
 namespace SpaceHunter
 {
-    class FinderForm : Form
+    class FinderForm : Form, IMessageFilter
     {
         readonly CanvasPanel head = new CanvasPanel();
         readonly FolderListView list;
@@ -40,6 +40,9 @@ namespace SpaceHunter
             MinimumSize = SizeFromClientSize(Theme.Fit(660, 480));
             StartPosition = FormStartPosition.CenterParent;
             list = new FolderListView(cats);
+            // the wheel goes to the list wherever the pointer is on it (bar and percentage included), not to whatever has focus
+            Application.AddMessageFilter(this);
+            FormClosed += (s, e) => Application.RemoveMessageFilter(this);
             map = new TreeMapView(cats) { Dock = DockStyle.Top, Height = Theme.D(220) };
             Resize += (s, e) => map.Height = Math.Max(Theme.D(110), Math.Min(Theme.D(240), (ClientSize.Height - Theme.D(176 + 60 + 46 + 30)) / 2));
 
@@ -77,6 +80,14 @@ namespace SpaceHunter
             tick.Tick += (s, e) => { sweep++; head.Invalidate(); };
             Shown += (s, e) => StartScan(startPath ?? Path.GetPathRoot(Engine.W));
             FormClosed += (s, e) => BigFolders.Cancel = true;   // closing the map stops its scan
+        }
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg != 0x020A || picker != null || !Visible || !IsHandleCreated || Form.ActiveForm != this) return false;   // WM_MOUSEWHEEL
+            if (!list.RectangleToScreen(list.ClientRectangle).Contains(Cursor.Position)) return false;
+            list.Wheel((short)(((long)m.WParam >> 16) & 0xFFFF));
+            return true;
         }
 
         // test hook: draw the window off-screen (no focus needed) and save it
@@ -278,7 +289,9 @@ namespace SpaceHunter
 
         float MaxScroll { get { return Math.Max(0, rows.Count * RowH - LH); } }
         void ScrollTo(float v) { scroll = Math.Max(0, Math.Min(MaxScroll, v)); Invalidate(); }
-        protected override void OnMouseWheel(MouseEventArgs e) { ScrollTo(scroll - e.Delta / 120f * RowH * 2); }
+        protected override void OnMouseWheel(MouseEventArgs e) { Wheel(e.Delta); }
+        public void Wheel(int delta) { ScrollTo(scroll - delta / 120f * RowH * 2); }
+        public float ScrollPos { get { return scroll; } }   // test hook
         RectangleF Thumb()
         {
             if (MaxScroll <= 0) return RectangleF.Empty;
