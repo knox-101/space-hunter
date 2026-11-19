@@ -454,7 +454,7 @@ fn refresh_top(u: &Rc<Ui>) {
                         else { format!("{} of {} ticked{}", n_ticked, n_items, if ticked > 0 { format!("  \u{00B7}  {}", fmt(ticked)) } else { String::new() }) });
         count.remove_css_class("some"); count.remove_css_class("none");
         if n_items > 0 { count.add_css_class(if n_ticked > 0 { "some" } else { "none" }); }
-        if let Some(m) = count.prev_sibling() { m.queue_draw(); }
+        if let Some(m) = count.prev_sibling() { m.set_visible(n_items > 0); m.queue_draw(); }
         if st.tier == lvl { b.add_css_class("on"); } else { b.remove_css_class("on"); }
     }
     u.title.set_text(&engine::tier_name(st.tier).to_uppercase());
