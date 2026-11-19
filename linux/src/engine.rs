@@ -407,7 +407,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
     let cutoff = SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
     let mut kept = keep::all();
     kept.extend(keep::builtin());   // Space Hunter itself, always
-    if c.is_custom { kept.extend(custom::skip()); }   // what you unticked inside a folder you added
+    if !c.admin { kept.extend(custom::skip()); }   // what you unticked under "What's inside"
     let me = uid();
     let root_user = is_root();
     let trash_it = to_trash && c.kind != Kind::Trash && !c.admin;   // emptying the Trash can't go to the Trash

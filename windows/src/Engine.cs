@@ -229,7 +229,7 @@ namespace SpaceHunter
 
             if (c.Refused != null) return;   // the safety rules refuse it now
             var bin = delete && c.Recycle ? new RecycleBatch(cnt) : null;
-            skipNow = c.IsCustom ? Custom.Skip : null;   // what you unticked inside a folder you added
+            skipNow = Custom.Skip;   // what you unticked under "What's inside" (or inside a folder you added)
             foreach (var root in c.Roots)
             {
                 if (cnt.Cancel) break;

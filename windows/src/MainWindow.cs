@@ -530,19 +530,23 @@ namespace SpaceHunter
             removeRow.Visible = c.IsCustom;
             ShowAge();
 
-            insideHead.Visible = insideHint.Visible = inside.Visible = c.IsCustom && c.Refused == null && Directory.Exists(c.Roots[0]);
+            // every item that cleans folders shows what's in them (a single file you added has nothing inside)
+            bool hasInside = files && c.Refused == null && !(c.IsCustom && File.Exists(c.Roots[0]));
+            insideHead.Visible = insideHint.Visible = inside.Visible = hasInside;
             if (c.Refused != null) whatHead.Visible = modeRow.Visible = ageRow.Visible = ageHint.Visible = false;
             if (c.IsCustom) Describe(c);
-            if (c.IsCustom && (inside.Root == null || !string.Equals(inside.Root, c.Roots[0], StringComparison.OrdinalIgnoreCase))) inside.Open(c.Roots[0]);
-            if (c.IsCustom)
+            if (hasInside)
             {
+                inside.Open(c);
                 inside.Active = c.Checked; inside.AgeMinutes = c.AgeMinutes; inside.Invalidate();
-                insideHint.Text = c.Checked
-                    ? "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it."
-                    : "Nothing in here is cleaned until you tick \u201c" + c.Name.Replace("  (your folder)", "") + "\u201d in the list. Untick anything that should always stay.";
+                insideHead.Text = (c.IsCustom ? "Inside this folder" : "What's inside") + "  \u00b7  untick what should stay";
+                insideHint.Text = !c.Checked
+                    ? "Nothing here is cleaned until you tick \u201c" + c.Name.Replace("  (your folder)", "") + "\u201d in the list. Untick anything that should always stay."
+                    : c.IsCustom ? "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it."
+                    : "What this item cleans, with the folder each one comes from. Untick anything that should stay; you don't need to. Click a folder's name to look inside it.";
             }
             folders.Controls.Clear();
-            var list = c.IsCustom ? new List<string>() : FolderList(c);
+            var list = hasInside || c.IsCustom ? new List<string>() : FolderList(c);   // the list above already shows the folders
             foldersHead.Visible = folders.Visible = list.Count > 0;
             foreach (var path in list.Take(14))
             {
@@ -938,7 +942,7 @@ namespace SpaceHunter
                 if (cf.ShowDialog(this) != DialogResult.OK) return;
                 recycle = cf.Recycle;
             }
-            foreach (var c in sel) c.Recycle = recycle;   // the confirm window's choice, for this clean
+            foreach (var c in sel) c.Recycle = recycle && !c.Safe;   // the confirm window's choice, for this clean; Quick clean is always deleted for good
             // the cleaning window doesn't block: you can keep looking around; Clean waits until this one is done
             cleaning = true; Refresh_();
             var pf = new ProgressForm(sel, total) { StartPosition = FormStartPosition.Manual };
@@ -968,40 +972,63 @@ namespace SpaceHunter
 
 namespace SpaceHunter
 {
-    // Inside a folder you added: its files and sub-folders, each with a tick box. Unticked ones stay; clicking a
-    // folder's name opens it, and the top line goes back up (never above the folder you added).
+    // What an item cleans: the files and folders in its folders, each with a tick box and, at the top, a small line
+    // saying which folder it comes from. Unticked ones stay; clicking a folder opens it, and Back goes up (never above
+    // the item's own folders). It follows the item's rules: only installer files in Downloads, no "memory" folders.
     class InsideList : Canvas
     {
-        class Entry { public string Path, Name; public bool Dir; public long Size = -1; public DateTime Modified; }   // a folder's size is -1 until measured
+        class Entry { public string Path, Name, Sub; public bool Dir; public long Size = -1; public DateTime Modified; }   // a folder's size is -1 until measured
         int token;
         readonly List<Entry> rows = new List<Entry>();
-        public string Root, Here;
+        List<string> roots = new List<string>();
+        HashSet<string> exts, exclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool topOnly;
+        public string Key, Here;     // Here: null = the top, all of the item's folders at once
         public bool Active = true;   // the item itself is ticked; otherwise every tick here is shown dimmed
         public int AgeMinutes;       // files newer than this stay, whatever is ticked
-        int hover = -1, hoverBox = -1, more;
-        const float RowH = 30, Max = 60;
+        int hover = -1, more;
+        const float Max = 60;
         public event EventHandler Changed, Resized;
-        Font fName = Theme.CSans(9.75f), fSize = Theme.CSans(8.75f), fUp = Theme.CSemi(9.5f);
+        Font fName = Theme.CSans(9.75f), fSize = Theme.CSans(8.75f), fSub = Theme.CSans(8.25f), fUp = Theme.CSemi(9.5f);
 
         public InsideList() { BackColor = Theme.Pane; }
 
-        public void Open(string root) { Root = root.TrimEnd('\\'); Go(Root); }
+        float RowH { get { return Here == null ? 42 : 30; } }   // at the top, each row also names the folder it's in
+
+        public void Open(Category c)
+        {
+            bool same = Key == c.Id;
+            Key = c.Id;
+            roots = Engine.ExistingRoots(c).Select(r => r.TrimEnd('\\')).ToList();
+            exts = c.Extensions; topOnly = c.TopLevelOnly;
+            exclude = new HashSet<string>(c.ExcludeDirs ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            Go(same && Here != null && roots.Any(r => Under(Here, r)) ? Here : null);
+        }
+
+        static bool Under(string p, string root) { return p.Equals(root, StringComparison.OrdinalIgnoreCase) || p.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase); }
+        string RootOf(string p) { return roots.FirstOrDefault(r => Under(p, r)); }
+
+        void List(string dir, string sub)
+        {
+            try
+            {
+                var items = new DirectoryInfo(dir).GetFileSystemInfos().Where(i => (i.Attributes & FileAttributes.ReparsePoint) == 0).ToList();
+                if (!topOnly)
+                    foreach (var i in items.OfType<DirectoryInfo>().Where(d => !exclude.Contains(d.Name)).OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase))
+                        rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true, Size = -1, Sub = sub });
+                foreach (var f in items.OfType<FileInfo>().Where(f => exts == null || exts.Contains(f.Extension)).OrderByDescending(x => { try { return x.Length; } catch { return 0L; } }))
+                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = f.LastWriteTime, Sub = sub });
+            }
+            catch { }
+        }
 
         void Go(string dir)
         {
-            Here = dir; rows.Clear(); hover = hoverBox = -1; more = 0;
-            try
-            {
-                var d = new DirectoryInfo(dir);
-                var items = d.GetFileSystemInfos().Where(i => (i.Attributes & FileAttributes.ReparsePoint) == 0).ToList();
-                foreach (var i in items.OfType<DirectoryInfo>().OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase))
-                    rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true, Size = -1 });
-                foreach (var f in items.OfType<FileInfo>().OrderByDescending(x => { try { return x.Length; } catch { return 0L; } }))
-                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = f.LastWriteTime });
-            }
-            catch { }
+            Here = dir; rows.Clear(); hover = -1; more = 0;
+            if (dir == null) foreach (var r in roots) List(r, "in " + Theme.MidPath(r, 52));
+            else List(dir, null);
             if (rows.Count > Max) { more = rows.Count - (int)Max; rows.RemoveRange((int)Max, more); }
-            Height = Theme.D((int)(RowH * (rows.Count + (Deeper ? 1 : 0) + (more > 0 ? 1 : 0) + (rows.Count == 0 ? 1 : 0)) + 4));
+            Height = Theme.D((int)(RowH * rows.Count + 30 * ((Here != null ? 1 : 0) + (more > 0 ? 1 : 0) + (rows.Count == 0 ? 1 : 0)) + 4));
             Invalidate();
             // each folder's size, measured in the background and filled in as it's known
             int my = ++token; var dirs = rows.Where(r => r.Dir).ToList();
@@ -1028,55 +1055,64 @@ namespace SpaceHunter
             if (Resized != null) Resized(this, EventArgs.Empty);
         }
 
-        bool Deeper { get { return Here != null && Root != null && !string.Equals(Here, Root, StringComparison.OrdinalIgnoreCase); } }
-        float Top0 { get { return Deeper ? RowH : 0; } }
+        float Top0 { get { return Here != null ? 30 : 0; } }
         int At(float y) { int i = (int)((y - Top0) / RowH); return y >= Top0 && i >= 0 && i < rows.Count ? i : -1; }
-        bool InheritedSkip(string p) { var s = Custom.Skip; return Custom.IsSkipped(System.IO.Path.GetDirectoryName(p), s) && !string.Equals(p, Root, StringComparison.OrdinalIgnoreCase); }
+        bool InheritedSkip(string p)
+        {
+            string parent = System.IO.Path.GetDirectoryName(p);
+            return !roots.Any(r => string.Equals(r, parent, StringComparison.OrdinalIgnoreCase)) && Custom.IsSkipped(parent, Custom.Skip);
+        }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            float x = X(e), y = Y(e); int h = Deeper && y < RowH ? -2 : At(y), hb = h >= 0 && x < 30 ? h : -1;
-            if (h != hover || hb != hoverBox) { hover = h; hoverBox = hb; Cursor = h == -2 || hb >= 0 || (h >= 0 && rows[h].Dir) ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            float x = X(e), y = Y(e); int h = Here != null && y < 30 ? -2 : At(y);
+            if (h != hover) { hover = h; Cursor = h == -2 || (h >= 0 && (x < 30 || rows[h].Dir)) ? Cursors.Hand : Cursors.Default; Invalidate(); }
         }
-        protected override void OnMouseLeave(EventArgs e) { hover = hoverBox = -1; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { hover = -1; Invalidate(); }
         protected override void OnMouseClick(MouseEventArgs e)
         {
             float x = X(e), y = Y(e);
-            if (Deeper && y < RowH) { Go(System.IO.Path.GetDirectoryName(Here)); return; }
+            if (Here != null && y < 30)   // back: up a folder, or to the top from one of the item's own folders
+            {
+                Go(roots.Any(r => string.Equals(r, Here, StringComparison.OrdinalIgnoreCase)) ? null : System.IO.Path.GetDirectoryName(Here));
+                return;
+            }
             int i = At(y); if (i < 0) return;
-            var r = rows[i];
+            var row = rows[i];
             if (x < 30)
             {
-                if (InheritedSkip(r.Path)) return;   // the folder around it is unticked
-                Custom.SetSkipped(r.Path, !Custom.IsSkipped(r.Path, Custom.Skip));
+                if (InheritedSkip(row.Path)) return;   // the folder around it is unticked
+                Custom.SetSkipped(row.Path, !Custom.IsSkipped(row.Path, Custom.Skip));
                 Invalidate(); if (Changed != null) Changed(this, EventArgs.Empty);
                 return;
             }
-            if (r.Dir) Go(r.Path);
+            if (row.Dir) Go(row.Path);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = Begin(e); g.Clear(Theme.Pane);
-            float w = LW, y = 0;
+            float w = LW, y = 0, rh = RowH;
             var skip = Custom.Skip;
-            var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisPath, FormatFlags = StringFormatFlags.NoWrap };
-            if (Deeper)
+            var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+            if (Here != null)
             {
-                if (hover == -2) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 0, 0, w, RowH - 1);
+                if (hover == -2) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 0, 0, w, 29);
                 using (var pen = new Pen(Theme.Ink, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLines(pen, new[] { new PointF(14, 9), new PointF(9, 14.5f), new PointF(14, 20) });
-                string rel = Here.Substring(Root.Length).TrimStart('\\').Replace("\\", "  \u203a  ");
-                using (var b = new SolidBrush(Theme.Ink)) g.DrawString("Back  \u00b7  " + System.IO.Path.GetFileName(Root) + "  \u203a  " + rel, fUp, b, new RectangleF(24, 6, w - 30, 20), nowrap);
-                using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 0, RowH - 1, w, RowH - 1);
-                y = RowH;
+                string root = RootOf(Here) ?? Here;
+                string rel = Here.Substring(root.Length).TrimStart('\\').Replace("\\", "  \u203a  ");
+                string trail = System.IO.Path.GetFileName(root) + (rel.Length > 0 ? "  \u203a  " + rel : "");
+                using (var b = new SolidBrush(Theme.Ink)) g.DrawString("Back  \u00b7  " + trail, fUp, b, new RectangleF(24, 6, w - 30, 20), nowrap);
+                using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 0, 29, w, 29);
+                y = 30;
             }
-            if (rows.Count == 0) using (var b = new SolidBrush(Theme.Soft)) g.DrawString("Empty", fName, b, 30, y + 6);
-            for (int i = 0; i < rows.Count; i++, y += RowH)
+            if (rows.Count == 0) using (var b = new SolidBrush(Theme.Soft)) g.DrawString(roots.Count == 0 ? "Nothing to show: its folders aren't on this PC, or Windows only lets an administrator look inside." : "Empty", fName, b, new RectangleF(30, y + 6, w - 30, 20), nowrap);
+            for (int i = 0; i < rows.Count; i++, y += rh)
             {
                 var r = rows[i];
                 bool inherited = InheritedSkip(r.Path), off = inherited || Custom.IsSkipped(r.Path, skip);
-                if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 0, y, w, RowH - 1);
+                if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 0, y, w, rh - 1);
                 var box = new RectangleF(6, y + 7, 15, 15);
                 if (!off)
                 {
@@ -1087,12 +1123,14 @@ namespace SpaceHunter
                 bool tooNew = !r.Dir && AgeMinutes > 0 && r.Modified > DateTime.Now.AddMinutes(-AgeMinutes);
                 string size = r.Dir ? (r.Size >= 0 ? Engine.Fmt(r.Size) + "  \u00b7  folder" : "folder") : tooNew ? "too new, stays" : r.Size < 1024 ? "under 1 KB" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
                 using (var b = new SolidBrush(Theme.Ink))
-                    g.DrawString(r.Name, fName, b, new RectangleF(30, y + 6, w - 30 - sm.Width - (r.Dir ? 26 : 10), 20), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
+                    g.DrawString(r.Name, fName, b, new RectangleF(30, y + 6, w - 30 - sm.Width - (r.Dir ? 26 : 10), 20), nowrap);
+                if (r.Sub != null)   // which folder it comes from
+                    using (var b = new SolidBrush(Theme.Soft)) g.DrawString(r.Sub, fSub, b, new RectangleF(30, y + 23, w - 40, 16), nowrap);
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(size, fSize, b, w - sm.Width - (r.Dir ? 20 : 4), y + 8);
                 if (r.Dir)
                     using (var pen = new Pen(i == hover ? Theme.Ink : Theme.Soft, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                    { float cx = w - 8, cy = y + RowH / 2; g.DrawLines(pen, new[] { new PointF(cx - 3, cy - 5), new PointF(cx + 2, cy), new PointF(cx - 3, cy + 5) }); }
-                using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 30, y + RowH - 1, w, y + RowH - 1);
+                    { float cx = w - 8, cy = y + 15; g.DrawLines(pen, new[] { new PointF(cx - 3, cy - 5), new PointF(cx + 2, cy), new PointF(cx - 3, cy + 5) }); }
+                using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 30, y + rh - 1, w, y + rh - 1);
             }
             if (more > 0) using (var b = new SolidBrush(Theme.Soft)) g.DrawString("+ " + more + " more (open the folder in Explorer to see them all)", fSize, b, 30, y + 7);
         }

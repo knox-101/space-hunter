@@ -690,7 +690,8 @@ fn fill_panel(u: &Rc<Ui>) {
     let s = label(&stats, "panel-stats"); s.set_wrap(true); s.set_max_width_chars(46);
     u.panel.append(&s);
 
-    if c.is_custom && c.refused().is_none() && c.roots[0].is_dir() { inside_list(u, &c); }
+    // every item that cleans folders shows what's in them (a single file you added has nothing inside)
+    if matches!(c.kind, Kind::Contents | Kind::Subfolders) && c.refused().is_none() && c.roots.iter().any(|r| r.is_dir()) { inside_list(u, &c); }
     if matches!(c.kind, Kind::Contents | Kind::Subfolders) && c.refused().is_none() {
         u.panel.append(&head("What to clean"));
         let older = c.age_minutes > 0;
@@ -753,7 +754,7 @@ fn fill_panel(u: &Rc<Ui>) {
     }
     // the item's folders, each with a keep switch (kept folders are protected)
     let roots: Vec<PathBuf> = c.roots.iter().filter(|r| r.is_dir()).cloned().collect();
-    if !roots.is_empty() && !c.admin && c.kind != Kind::Journal {
+    if !roots.is_empty() && !c.admin && c.kind == Kind::Trash {   // other items show their folders in the list above
         u.panel.append(&head("Folders  \u{00B7}  keep one to never clean it"));
         let kept = engine::keep::all();
         for r in roots.iter().take(14) {
@@ -798,54 +799,81 @@ fn fill_panel(u: &Rc<Ui>) {
 // Inside a folder you added: its files and sub-folders, each with a tick box. Unticked ones stay; a folder's name
 // opens it, and Back goes up (never above the folder you added).
 fn inside_list(u: &Rc<Ui>, c: &Cat) {
-    let root = c.roots[0].clone();
-    let here = match u.inside_here.borrow().as_ref() { Some((id, h)) if id == &c.id && h.starts_with(&root) => h.clone(), _ => root.clone() };
+    let roots: Vec<PathBuf> = c.roots.iter().filter(|r| r.is_dir()).cloned().collect();
+    // where the list is looking: empty = the top, all of the item's folders at once
+    let here = match u.inside_here.borrow().as_ref() {
+        Some((id, h)) if id == &c.id && (h.as_os_str().is_empty() || roots.iter().any(|r| h.starts_with(r))) => h.clone(),
+        _ => PathBuf::new(),
+    };
     *u.inside_here.borrow_mut() = Some((c.id.clone(), here.clone()));
-    u.panel.append(&head("Inside this folder  \u{00B7}  untick what should stay"));
+    let top = here.as_os_str().is_empty();
+    u.panel.append(&head(&format!("{}  \u{00B7}  untick what should stay", if c.is_custom { "Inside this folder" } else { "What's inside" })));
     let name = c.name.replace("  (your folder)", "");
-    u.panel.append(&body_text(&if c.checked { "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it.".to_string() }
-                              else { format!("Nothing in here is cleaned until you tick \u{201C}{}\u{201D} in the list. Untick anything that should always stay.", name) }));
-    if here != root {
+    u.panel.append(&body_text(&if c.admin { "A system folder: after your password it's cleaned as a whole, so this list is just to look at.".to_string() }
+                              else if !c.checked { format!("Nothing here is cleaned until you tick \u{201C}{}\u{201D} in the list. Untick anything that should always stay.", name) }
+                              else if c.is_custom { "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it.".to_string() }
+                              else { "What this item cleans, with the folder each one comes from. Untick anything that should stay; you don't need to. Click a folder's name to look inside it.".to_string() }));
+    if !top {
+        let root = roots.iter().find(|r| here.starts_with(r)).cloned().unwrap_or(here.clone());
         let rel = here.strip_prefix(&root).map(|r| r.to_string_lossy().replace('/', "  \u{203A}  ")).unwrap_or_default();
-        let b = gtk::Button::with_label(&format!("\u{2190}  Back  \u{00B7}  {}  \u{203A}  {}", name, rel));
+        let rname = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let b = gtk::Button::with_label(&format!("\u{2190}  Back  \u{00B7}  {}{}", rname, if rel.is_empty() { String::new() } else { format!("  \u{203A}  {}", rel) }));
         b.add_css_class("crumb");
-        let (uu, up) = (u.clone(), here.parent().map(|p| p.to_path_buf()).unwrap_or(root.clone()));
-        let id = c.id.clone();
+        let up = if roots.contains(&here) { PathBuf::new() } else { here.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
+        let (uu, id) = (u.clone(), c.id.clone());
         b.connect_clicked(move |_| { *uu.inside_here.borrow_mut() = Some((id.clone(), up.clone())); fill_panel(&uu); });
         u.panel.append(&b);
     }
     let skip = engine::custom::skip();
-    let mut entries: Vec<(String, PathBuf, bool, u64, std::time::SystemTime)> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&here) {
-        for e in rd.flatten() {
-            if let Ok(m) = std::fs::symlink_metadata(e.path()) {
+    // name, path, folder?, size, changed, which folder it comes from (at the top)
+    let mut entries: Vec<(String, PathBuf, bool, u64, std::time::SystemTime, Option<String>)> = Vec::new();
+    let mut list = |dir: &std::path::Path, sub: Option<String>| {
+        let mut dirs = Vec::new(); let mut files = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let m = match std::fs::symlink_metadata(e.path()) { Ok(m) => m, Err(_) => continue };
                 if m.file_type().is_symlink() { continue; }
-                entries.push((e.file_name().to_string_lossy().to_string(), e.path(), m.is_dir(), m.len(), m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
+                let n = e.file_name().to_string_lossy().to_string();
+                let item = (n.clone(), e.path(), m.is_dir(), m.len(), m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), sub.clone());
+                if m.is_dir() {
+                    if c.top_level_only || c.exclude.contains(&n) { continue; }   // the item's own rules
+                    dirs.push(item);
+                } else {
+                    if let Some(x) = &c.extensions { if !x.contains(&e.path().extension().map(|v| v.to_string_lossy().to_lowercase()).unwrap_or_default()) { continue; } }
+                    files.push(item);
+                }
             }
         }
-    }
-    entries.sort_by(|a, b| b.2.cmp(&a.2).then(if a.2 { a.0.to_lowercase().cmp(&b.0.to_lowercase()) } else { b.3.cmp(&a.3) }));
+        dirs.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        files.sort_by(|a, b| b.3.cmp(&a.3));
+        entries.extend(dirs); entries.extend(files);
+    };
+    if top { for r in &roots { list(r, Some(format!("in {}", home_short(r)))); } } else { list(&here, None); }
     if entries.is_empty() { u.panel.append(&label("Empty", "group-note")); }
     let cutoff = std::time::SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
-    for (n, p, dir, len, modified) in entries.iter().take(60) {
-        let inherited = p.parent().map(|pp| engine::custom::is_skipped(pp, &skip)).unwrap_or(false) && p.parent() != Some(root.as_path());
+    for (n, p, dir, len, modified, sub) in entries.iter().take(60) {
+        let parent = p.parent().map(|x| x.to_path_buf()).unwrap_or_default();
+        let inherited = !roots.contains(&parent) && engine::custom::is_skipped(&parent, &skip);
         let off = inherited || engine::custom::is_skipped(p, &skip);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("rowline");
         let chk = gtk::CheckButton::new();
-        chk.set_active(!off); chk.set_sensitive(!inherited);
+        chk.set_active(!off); chk.set_sensitive(!inherited && !c.admin);
+        chk.set_valign(gtk::Align::Center);
         if !c.checked { chk.add_css_class("dim"); }   // grey until the item itself is ticked
-        let (uu, ps) = (u.clone(), p.to_string_lossy().to_string());
-        let id = c.id.clone();
+        let (uu, ps, id) = (u.clone(), p.to_string_lossy().to_string(), c.id.clone());
         chk.connect_toggled(move |b| { engine::custom::set_skipped(&ps, !b.is_active()); uu.described.borrow_mut().clear(); scan(&uu, Some(vec![id.clone()])); });
         row.append(&chk);
         let nb = gtk::Button::new(); nb.add_css_class("row-btn"); nb.set_hexpand(true);
+        let col = gtk::Box::new(gtk::Orientation::Vertical, 1);
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let nl = label(n, "row-name"); nl.set_hexpand(true); nl.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         line.append(&nl);
         let too_new = !*dir && c.age_minutes > 0 && *modified > cutoff;
         line.append(&label(&if *dir { "folder  \u{203A}".to_string() } else if too_new { "too new, stays".to_string() } else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) }, "row-sub"));
-        nb.set_child(Some(&line));
+        col.append(&line);
+        if let Some(sb) = sub { let sl = label(sb, "row-sub"); sl.set_ellipsize(gtk::pango::EllipsizeMode::Middle); col.append(&sl); }   // which folder it comes from
+        nb.set_child(Some(&col));
         if *dir {
             let (uu, pp, id) = (u.clone(), p.clone(), c.id.clone());
             nb.connect_clicked(move |_| { *uu.inside_here.borrow_mut() = Some((id.clone(), pp.clone())); fill_panel(&uu); });
@@ -943,14 +971,20 @@ fn confirm(u: &Rc<Ui>) {
             v.append(&confirm_row(&format!("+ {} more", items.len() - 4), &fmt(rest)));
         }
     }
-    let to_trash = Rc::new(Cell::new(sel.iter().any(|c| !c.is_safe())));   // the safe choice first for anything beyond Quick clean
-    let how = label("How to clean", "confirm-how"); how.set_margin_top(14);
+    // Quick clean is always deleted for good (caches rebuild, so the Trash would only fill up); the choice is for the
+    // rest, and the safe choice comes first: Trash, unless you choose otherwise
+    let only_safe = sel.iter().all(|c| c.is_safe());
+    let safe_bytes: u64 = sel.iter().filter(|c| c.is_safe()).map(|c| c.bytes).sum();
+    let other_bytes = total - safe_bytes;
+    let to_trash = Rc::new(Cell::new(!only_safe));
+    let how = label("How to clean the rest", "confirm-how"); how.set_margin_top(14);
     v.append(&how);
     let toggles = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let del = key("permanently delete", &[]);
     let bin = key("trash", &[]);
     toggles.append(&del); toggles.append(&bin);
     v.append(&toggles);
+    if only_safe { how.set_visible(false); toggles.set_visible(false); }   // nothing to choose
     let hint = body_text(""); hint.set_max_width_chars(64); hint.set_margin_top(6);
     v.append(&hint);
     if sel.iter().any(|c| c.admin) {
@@ -971,9 +1005,11 @@ fn confirm(u: &Rc<Ui>) {
         Rc::new(move || {
             let trash = t.get();
             if trash { bin.add_css_class("on"); del.remove_css_class("on"); } else { del.add_css_class("on"); bin.remove_css_class("on"); }
-            hint.set_text(if trash { "Everything goes to the Trash, so you can restore it. The space comes back only when you empty the Trash. If the Trash item is ticked, the old Trash is emptied first." }
-                          else { "Everything is deleted permanently and can't be restored. The space comes back straight away." });
-            ok.set_label(&if trash { format!("MOVE {} TO TRASH", fmt(total)) } else { format!("PERMANENTLY DELETE {}", fmt(total)) });
+            hint.set_text(&if only_safe { "Quick clean is deleted for good: these are caches and leftovers that rebuild, so the Trash would only fill up. The space comes back straight away.".to_string() }
+                          else if !trash { "Everything is deleted permanently and can't be restored. The space comes back straight away.".to_string() }
+                          else if safe_bytes > 0 { format!("Quick clean ({}) is deleted for good; the rest ({}) goes to the Trash, so you can restore it. That space comes back only when you empty the Trash.", fmt(safe_bytes), fmt(other_bytes)) }
+                          else { "Everything goes to the Trash, so you can restore it. That space comes back only when you empty the Trash.".to_string() });
+            ok.set_label(&if !trash { format!("PERMANENTLY DELETE {}", fmt(total)) } else if safe_bytes > 0 { format!("CLEAN {}", fmt(total)) } else { format!("MOVE {} TO TRASH", fmt(total)) });
         })
     };
     (*show)();
@@ -1097,7 +1133,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 let head = if !ok { "skip".to_string() } else if bin { format!("trash {:>8}", fmt(size)) } else { format!("del  {:>8}", fmt(size)) };
                 let _ = t2.send(Msg::Line(format!("{}  {}", head, home_short(p))));
             }));
-            engine::process(c, true, to_trash, &mut cnt);
+            engine::process(c, true, to_trash && !c.is_safe(), &mut cnt);   // Quick clean is always deleted for good
             bytes += cnt.bytes; trashed += cnt.trashed; files += cnt.files; skipped += cnt.skipped;
             let _ = tx.send(Msg::Totals(bytes, trashed, files, skipped));
             let _ = tx.send(Msg::Line(format!("\u{2014} {}: freed {}{}, {} files", c.name, fmt(cnt.bytes), if cnt.trashed > 0 { format!(" + {} to the Trash", fmt(cnt.trashed)) } else { String::new() }, cnt.files)));

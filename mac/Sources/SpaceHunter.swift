@@ -205,7 +205,7 @@ enum Engine {
 
     static func process(_ c: Cat, delete: Bool, toTrash: Bool, cnt: Counter) {
         let cutoff = Date().addingTimeInterval(-Double(c.ageMinutes) * 60)
-        let kept = Keep.all + Keep.builtIn + (c.isCustom ? Custom.skip : [])
+        let kept = Keep.all + Keep.builtIn + Custom.skip   // what you unticked under "What's inside"
         let trashIt = toTrash && c.kind != .trash   // emptying the Trash can't go to the Trash
         func handle(_ url: URL, _ size: Int64, _ date: Date, _ cut: Date) {
             if let ext = c.extensions, !ext.contains(url.pathExtension.lowercased()) { return }
@@ -612,7 +612,7 @@ final class AppState: ObservableObject {
             for (i, c) in sel.enumerated() where !cnt.cancel {
                 DispatchQueue.main.async { self.currentItem = "ITEM \(i + 1) OF \(sel.count)  ·  \(c.name.uppercased())" }
                 lock.lock(); let b0 = cnt.bytes, t0 = cnt.trashedBytes, f0 = cnt.files; lock.unlock()
-                Engine.process(c, delete: true, toTrash: toTrash, cnt: cnt)
+                Engine.process(c, delete: true, toTrash: toTrash && !c.isSafe, cnt: cnt)   // Quick clean is always deleted for good
                 lock.lock(); let b1 = cnt.bytes, t1 = cnt.trashedBytes, f1 = cnt.files; lock.unlock()
                 summary.append("\(c.name): freed \(Engine.fmt(b1 - b0))" + (t1 > t0 ? " + \(Engine.fmt(t1 - t0)) to Trash" : "") + ", \(f1 - f0) files")
             }
@@ -1068,7 +1068,12 @@ struct DetailPanel: View {
                 }
                 Text(c.name).font(Theme.bold(19)).foregroundColor(Theme.ink).lineLimit(2)
                 Text(c.refused != nil ? "Space Hunter won't clean this: \(c.refused!). Use \u{201C}Remove from cleanup list\u{201D} below." : c.scanned ? "\(Engine.fmt(c.bytes))   ·   \(c.files) file" + (c.files == 1 ? "" : "s") : "Scanning…").font(Theme.sans(13)).foregroundColor(Theme.ink).padding(.bottom, 10)
-                if c.isCustom, c.refused == nil, let root = c.roots.first, (try? root.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { InsideList(root: root.path, catID: c.id, active: c.checked, ageMinutes: c.ageMinutes, itemName: c.name.replacingOccurrences(of: "  (your folder)", with: "")) }
+                // every item that cleans folders shows what's in them (a single file you added has nothing inside)
+                let folders = c.roots.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }.map { $0.path }
+                if c.kind != .trash, c.refused == nil, !folders.isEmpty {
+                    InsideList(roots: folders, catID: c.id, active: c.checked, ageMinutes: c.ageMinutes, itemName: c.name.replacingOccurrences(of: "  (your folder)", with: ""),
+                               isCustom: c.isCustom, exts: c.extensions, topOnly: c.topLevelOnly, exclude: c.exclude)
+                }
                 if c.kind != .trash && c.refused == nil { AgeControls(c: c, older: older, ageValue: $ageValue, unit: $unit) }
                 Group {
                     if c.isCustom, let root = c.roots.first { FolderAbout(root: root.path) } else { section("What is it?", c.what) }
@@ -1076,7 +1081,7 @@ struct DetailPanel: View {
                     section("Is it safe?", c.safeText)
                     section("What happens after", c.after)
                 }
-                if !c.isCustom { FolderKeeps(cat: c) }
+                if !c.isCustom && c.kind == .trash { FolderKeeps(cat: c) }   // the list above already shows the folders
                 if c.isCustom {
                     Button("Remove from cleanup list") {
                         for r in c.roots { Custom.remove(r.path) }
@@ -1195,8 +1200,12 @@ struct ConfirmSheet: View {
     @State private var chosen = false
     var body: some View {
         let sel = state.cats.filter { $0.checked && ($0.bytes > 0 || $0.files > 0) }
-        // the safe choice first: anything beyond "Quick clean" goes to the Trash unless you choose otherwise
-        let trashing = chosen ? toTrash : sel.contains { !$0.isSafe }
+        // Quick clean is always deleted for good (caches rebuild, so the Trash would only fill up); the choice is for
+        // the rest, and the safe choice comes first: Trash, unless you choose otherwise
+        let onlySafe = sel.allSatisfy { $0.isSafe }
+        let safeBytes = sel.filter { $0.isSafe }.reduce(Int64(0)) { $0 + $1.bytes }
+        let otherBytes = state.selectedBytes - safeBytes
+        let trashing = !onlySafe && (chosen ? toTrash : true)
         VStack(alignment: .leading, spacing: 8) {
             Text("Clean \(Engine.fmt(state.selectedBytes))?").font(Theme.bold(24)).foregroundColor(Theme.ink)
             // grouped by risk, so it's plain which ticked items need care
@@ -1208,20 +1217,24 @@ struct ConfirmSheet: View {
                     if items.count > 4 { ConfirmRow(name: "+ \(items.count - 4) more", bytes: items.dropFirst(4).reduce(Int64(0)) { $0 + $1.bytes }, level: lvl) }
                 }
             }
-            Text("How to clean").font(Theme.semi(13)).foregroundColor(Theme.muted).padding(.top, 8)
-            HStack(spacing: 4) {
-                Button("Permanently delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
-                Button("Move to Trash") { toTrash = true; chosen = true }.buttonStyle(KeyStyle(toggled: trashing))
+            if !onlySafe {
+                Text("How to clean the rest").font(Theme.semi(13)).foregroundColor(Theme.muted).padding(.top, 8)
+                HStack(spacing: 4) {
+                    Button("Permanently delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
+                    Button("Move to Trash") { toTrash = true; chosen = true }.buttonStyle(KeyStyle(toggled: trashing))
+                }
             }
-            Text(trashing ? "Everything goes to the Trash, so you can restore it. The space comes back only when you empty the Trash. If the Trash item is ticked, the old Trash is emptied first."
-                         : "Everything is deleted permanently and can't be restored. The space comes back straight away.")
+            Text(onlySafe ? "Quick clean is deleted for good: these are caches and leftovers that rebuild, so the Trash would only fill up. The space comes back straight away."
+                 : !trashing ? "Everything is deleted permanently and can't be restored. The space comes back straight away."
+                 : (safeBytes > 0 ? "Quick clean (\(Engine.fmt(safeBytes))) is deleted for good; the rest (\(Engine.fmt(otherBytes))) goes to the Trash, so you can restore it. "
+                                  : "Everything goes to the Trash, so you can restore it. ") + "That space comes back only when you empty the Trash.")
                 .font(Theme.sans(12)).foregroundColor(Theme.soft).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             HStack(spacing: 8) {
                 Spacer()
                 Button("Cancel") { confirm = false }.buttonStyle(KeyStyle()).keyboardShortcut(.cancelAction)
                 // the key says what will actually happen
-                Button(trashing ? "Move \(Engine.fmt(state.selectedBytes)) to Trash" : "Permanently delete \(Engine.fmt(state.selectedBytes))") {
+                Button(!trashing ? "Permanently delete \(Engine.fmt(state.selectedBytes))" : safeBytes > 0 ? "Clean \(Engine.fmt(state.selectedBytes))" : "Move \(Engine.fmt(state.selectedBytes)) to Trash") {
                     confirm = false
                     let trash = trashing
                     // let the confirm sheet finish closing before the progress sheet opens
@@ -1750,47 +1763,58 @@ struct PathBar: View {
 // folder's name opens it, and Back goes up (never above the folder you added).
 struct InsideList: View {
     @EnvironmentObject var state: AppState
-    let root: String
+    let roots: [String]
     let catID: String
     var active = true        // the item itself is ticked; otherwise every tick here is shown dimmed
     var ageMinutes = 0       // files newer than this stay, whatever is ticked
     var itemName = ""
-    @State private var here = ""
+    var isCustom = false
+    var exts: Set<String>? = nil   // only these files (old installers in Downloads)
+    var topOnly = false
+    var exclude: Set<String> = []  // folders never touched (an agent's memory)
+    @State private var here = ""   // "" = the top, all of the item's folders at once
     @State private var tick = 0
     @State private var sizes: [String: Int64] = [:]   // each folder's size, filled in as it's measured
-    struct Entry: Identifiable { let id: String; let name: String; let dir: Bool; let size: Int64; var modified = Date.distantPast }
+    struct Entry: Identifiable { let id: String; let name: String; let dir: Bool; let size: Int64; var modified = Date.distantPast; var sub: String? = nil }
+
+    func rootOf(_ p: String) -> String? { roots.first { p == $0 || p.hasPrefix($0 + "/") } }
 
     var body: some View {
-        let cur = here.isEmpty ? root : here
         let skip = Custom.skip
-        let entries = list(cur)
+        let entries = here.isEmpty ? roots.flatMap { r in list(r, sub: "in " + r.replacingOccurrences(of: Engine.home.path, with: "~")) } : list(here, sub: nil)
         VStack(alignment: .leading, spacing: 0) {
-            Text("Inside this folder  ·  untick what should stay").font(Theme.semi(12)).foregroundColor(Theme.muted).padding(.top, 4)
-            Text(active ? "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it."
-                        : "Nothing in here is cleaned until you tick \u{201C}\(itemName)\u{201D} in the list. Untick anything that should always stay.")
+            Text((isCustom ? "Inside this folder" : "What's inside") + "  ·  untick what should stay").font(Theme.semi(12)).foregroundColor(Theme.muted).padding(.top, 4)
+            Text(!active ? "Nothing here is cleaned until you tick \u{201C}\(itemName)\u{201D} in the list. Untick anything that should always stay."
+                 : isCustom ? "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it."
+                 : "What this item cleans, with the folder each one comes from. Untick anything that should stay; you don't need to. Click a folder's name to look inside it.")
                 .font(Theme.sans(12)).foregroundColor(Theme.soft).fixedSize(horizontal: false, vertical: true).padding(.bottom, 6)
-            if cur != root {
-                Button { here = (cur as NSString).deletingLastPathComponent } label: {
+            if !here.isEmpty {
+                let root = rootOf(here) ?? here
+                Button { here = roots.contains(here) ? "" : (here as NSString).deletingLastPathComponent } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold))
-                        Text("Back  ·  " + (root as NSString).lastPathComponent + String(cur.dropFirst(root.count)).replacingOccurrences(of: "/", with: "  \u{203A}  ")).lineLimit(1).truncationMode(.middle)
+                        Text("Back  ·  " + (root as NSString).lastPathComponent + String(here.dropFirst(root.count)).replacingOccurrences(of: "/", with: "  \u{203A}  ")).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .buttonStyle(.plain).font(Theme.semi(12)).foregroundColor(Theme.ink).padding(.vertical, 6)
             }
             if entries.isEmpty { Text("Empty").font(Theme.sans(12)).foregroundColor(Theme.soft).padding(.vertical, 6) }
             ForEach(Array(entries.prefix(60))) { e in
-                let inherited = Custom.isSkipped((e.id as NSString).deletingLastPathComponent, skip)
+                let parent = (e.id as NSString).deletingLastPathComponent
+                let inherited = !roots.contains(parent) && Custom.isSkipped(parent, skip)
                 let off = inherited || Custom.isSkipped(e.id, skip)
                 HStack(spacing: 10) {
-                    Button { if !inherited { Custom.setSkipped(e.id, !off); tick += 1; state.scan([catID]) } } label: { Check(on: !off, empty: inherited).opacity(active || off ? 1 : 0.45) }
+                    Button { if !inherited { Custom.setSkipped(e.id, !off); tick += 1; state.scan([catID]) } } label: { Check(on: !off, empty: inherited).saturation(active || off ? 1 : 0).opacity(active || off ? 1 : 0.6) }
                         .buttonStyle(.plain)
                     Button { if e.dir { here = e.id } } label: {
-                        HStack(spacing: 8) {
-                            Text(e.name).lineLimit(1).truncationMode(.middle)
-                            Spacer()
-                            Text(e.dir ? (sizes[e.id].map { Engine.fmt($0) + "  ·  folder" } ?? "folder") : (ageMinutes > 0 && e.modified > Date().addingTimeInterval(-Double(ageMinutes) * 60)) ? "too new, stays" : e.size < 1024 ? "under 1 KB" : Engine.fmt(e.size)).foregroundColor(Theme.soft)
-                            if e.dir { Chevron(color: Theme.soft) }
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 8) {
+                                Text(e.name).lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                Text(e.dir ? (sizes[e.id].map { Engine.fmt($0) + "  ·  folder" } ?? "folder") : (ageMinutes > 0 && e.modified > Date().addingTimeInterval(-Double(ageMinutes) * 60)) ? "too new, stays" : e.size < 1024 ? "under 1 KB" : Engine.fmt(e.size)).foregroundColor(Theme.soft)
+                                if e.dir { Chevron(color: Theme.soft) }
+                            }
+                            if let sub = e.sub { Text(sub).font(Theme.sans(10.5)).foregroundColor(Theme.soft).lineLimit(1).truncationMode(.middle) }   // which folder it comes from
                         }
                         .contentShape(Rectangle())
                     }
@@ -1803,13 +1827,13 @@ struct InsideList: View {
         }
         .id(tick)
         .padding(.bottom, 12)
-        .onChange(of: root) { _ in here = "" }
-        .onAppear { measure(here.isEmpty ? root : here) }
-        .onChange(of: here) { h in measure(h.isEmpty ? root : h) }
+        .onChange(of: catID) { _ in here = "" }
+        .onAppear { measure(here) }
+        .onChange(of: here) { h in measure(h) }
     }
 
     func measure(_ dir: String) {
-        let dirs = list(dir).filter { $0.dir }.map { $0.id }
+        let dirs = (dir.isEmpty ? roots.flatMap { list($0, sub: nil) } : list(dir, sub: nil)).filter { $0.dir }.map { $0.id }
         DispatchQueue.global(qos: .utility).async {
             for d in dirs {
                 var sum: Int64 = 0
@@ -1823,14 +1847,19 @@ struct InsideList: View {
         }
     }
 
-    func list(_ dir: String) -> [Entry] {
+    func list(_ dir: String, sub: String?) -> [Entry] {
         let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey]
         let items = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: keys)) ?? []
         var dirs: [Entry] = [], files: [Entry] = []
         for u in items {
             guard let v = try? u.resourceValues(forKeys: Set(keys)), v.isSymbolicLink != true else { continue }
-            if v.isDirectory == true { dirs.append(Entry(id: u.path, name: u.lastPathComponent, dir: true, size: 0)) }
-            else { files.append(Entry(id: u.path, name: u.lastPathComponent, dir: false, size: Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), modified: v.contentModificationDate ?? .distantPast)) }
+            if v.isDirectory == true {
+                if topOnly || exclude.contains(u.lastPathComponent) { continue }
+                dirs.append(Entry(id: u.path, name: u.lastPathComponent, dir: true, size: 0, sub: sub))
+            } else {
+                if let x = exts, !x.contains(u.pathExtension.lowercased()) { continue }
+                files.append(Entry(id: u.path, name: u.lastPathComponent, dir: false, size: Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), modified: v.contentModificationDate ?? .distantPast, sub: sub))
+            }
         }
         return dirs.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } + files.sorted { $0.size > $1.size }
     }

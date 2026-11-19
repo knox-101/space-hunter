@@ -19,8 +19,10 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
   history** (big caches that download again, or old history) and **Personal & work items** (can hold your work or
   history; check before cleaning).
 - **Explains each one**: click a row to see what it is, what gets deleted, whether it's safe and what happens after,
-  and choose "only files older than N days" or "everything".
-- **Asks before cleaning**, with a choice of **Permanently delete** or **Recycle Bin / Trash**, and shows each file as it
+  and choose "only files older than N days" or "everything". **What's inside** lists the folders and files it would
+  clean, with the folder each comes from; untick anything that should stay.
+- **Asks before cleaning**. Quick clean is deleted for good (caches rebuild, so the bin would only fill up); for
+  everything else you choose **Permanently delete** or **Recycle Bin / Trash**, and shows each file as it
   goes. Cleaning runs in its own window, so you can keep looking around. On Linux, system folders such as downloaded
   updates ask for your password once.
 - **Storage map**: see how your whole disk is split up, folder by folder, on any drive (about 10 seconds for a full

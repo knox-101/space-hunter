@@ -211,7 +211,8 @@ namespace SpaceHunter
             {
                 var fm = new Form { ClientSize = Theme.D(440, 300), BackColor = Theme.Pane, StartPosition = FormStartPosition.CenterScreen, Text = "Inside" };
                 var il = new InsideList { Location = Theme.P(20, 16), Width = Theme.D(400) };
-                fm.Controls.Add(il); il.Open(insideDir);
+                var tc = new Category { Id = "test-inside", Name = "Test", Kind = Kind.Contents, Level = Level.Caution, IsCustom = true }; tc.Roots.Add(insideDir);
+                fm.Controls.Add(il); il.Open(tc);
                 if (Arg(args, "--go") != null) il.GetType().GetMethod("Go", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).Invoke(il, new object[] { Arg(args, "--go") });
                 if (snap != null) fm.Shown += (s, e) => { Application.DoEvents(); Snap(fm, snap); fm.Close(); };
                 Application.Run(fm);
