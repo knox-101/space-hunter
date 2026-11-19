@@ -3,6 +3,26 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.1.0 (unreleased)
+
+- **Clearer sections**: **Quick clean** (caches and leftovers that rebuild), **History & re-downloads** and
+  **Personal & work items**. Each tile shows how much of it is ticked, such as "12 of 12 ticked · 236 MB".
+- **Cleaning no longer blocks the app**: the cleaning window runs on its own and you can keep looking around. Clean
+  is ready again once it's done.
+- **Space Hunter never cleans itself**: its own folder, settings and log are always protected.
+- **Space map**:
+  - A **Back** key and the folder trail sit right above the chart; click any folder in the trail to jump there.
+    Backspace or Alt+Left also go back.
+  - Every file in the open folder is listed under its folders, and single files can be added to the cleanup list.
+  - "+ Add this folder" adds the folder you're in.
+  - A large spinner shows while it measures. On Mac, measuring is much faster.
+- **Folders you add**: their panel describes what's inside (kinds of files, how old they are, what the folder looks
+  like). You can open them and untick the files and sub-folders that should stay.
+- Anything added before the safety rules refused it, such as a folder made right on a drive, is listed but never
+  cleaned, and can be removed.
+- The update notice is a card at the bottom, in place of the status line.
+- Fixed: the cleaning window showed "Â·" in place of "·" (1.0.2).
+
 ## 1.0.2 (2026-11-19)
 
 - **Safety fix:** the Space map no longer offers to add a folder made right on a drive (like `C:\Personal`), which

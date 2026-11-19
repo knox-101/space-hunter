@@ -4,9 +4,9 @@
 
 | Section | Ticked at start | Examples |
 |---|---|---|
-| **Safe to clean**: rebuilds or isn't needed | yes | Temp folders, Windows Update leftovers, Windows logs, crash dumps, thumbnail cache, graphics shader caches (including Steam's), graphics driver installer leftovers, browser caches (Chrome, Edge, Brave, Vivaldi, Opera, Firefox), chat app caches, app logs (e.g. OneDrive, Zoom), game launcher caches (e.g. Epic, Battle.net), Adobe media cache, AI app caches and logs (e.g. Claude), code editor and IDE caches (e.g. VS Code, JetBrains), npm / Yarn / pip / uv / Go build caches, Win+R history |
-| **Review first**: comes back by re-downloading, or is history | no | The previous Windows installation (`Windows.old`), Prefetch, Steam and Spotify caches, AI agent VM images (e.g. Claude Cowork), downloaded AI models (e.g. Hugging Face), AI tool runtimes (e.g. Codex), npx packages, browser-automation browsers, Gradle, Maven, NuGet, Cargo, Go module, pnpm and conda caches, game engine caches (e.g. Unity, Unreal), Android emulator snapshots, the Recycle Bin |
-| **Caution**: can hold your history or work | no | Old AI agent chat history (Claude Code, Codex), old AI agent workspaces, old installers and archives in Downloads, and any folder you add yourself |
+| **Quick clean**: caches and leftovers that rebuild | yes | Temp folders, Windows Update leftovers, Windows logs, crash dumps, thumbnail cache, graphics shader caches (including Steam's), graphics driver installer leftovers, browser caches (Chrome, Edge, Brave, Vivaldi, Opera, Firefox), chat app caches, app logs (e.g. OneDrive, Zoom), game launcher caches (e.g. Epic, Battle.net), Adobe media cache, AI app caches and logs (e.g. Claude), code editor and IDE caches (e.g. VS Code, JetBrains), npm / Yarn / pip / uv / Go build caches, Win+R history |
+| **History & re-downloads**: downloads again when needed, or old history | no | The previous Windows installation (`Windows.old`), Prefetch, Steam and Spotify caches, AI agent VM images (e.g. Claude Cowork), downloaded AI models (e.g. Hugging Face), AI tool runtimes (e.g. Codex), npx packages, browser-automation browsers, Gradle, Maven, NuGet, Cargo, Go module, pnpm and conda caches, game engine caches (e.g. Unity, Unreal), Android emulator snapshots, the Recycle Bin |
+| **Personal & work items**: can hold your work or history | no | Old AI agent chat history (Claude Code, Codex), old AI agent workspaces, old installers and archives in Downloads, and any folder or file you add yourself |
 
 There are 43 items on Windows and 33 on Mac; the Mac has the macOS equivalents (app caches, logs, Mail attachment
 copies, Xcode DerivedData, simulator caches, old iPhone and iPad backups, the Trash). Every clean is logged in
@@ -30,7 +30,7 @@ SpaceHunter.exe --auto                  :: clean the ticked Safe-to-delete items
 SpaceHunter.exe --version > version.txt
 ```
 
-`--auto` uses the ticks and ages you last set in the app, and only ever touches **Safe to clean** items. To run it
+`--auto` uses the ticks and ages you last set in the app, and only ever touches **Quick clean** items. To run it
 at sign-in, create a task in Task Scheduler with **Run with highest privileges** checked.
 
 ## Build from source
