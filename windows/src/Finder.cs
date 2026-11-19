@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Space Hunter (Windows) - Space map: drill down from a drive to whatever is big, see whether the cleanup
+// Space Hunter (Windows) - Storage map: drill down from a drive to whatever is big, see whether the cleanup
 // list already covers it, and add a folder to the cleanup list. Nothing is deleted here.
 using System;
 using System.Collections.Generic;
@@ -35,7 +35,7 @@ namespace SpaceHunter
         public FinderForm(List<Category> cats, string start = null)
         {
             startPath = start;
-            Theme.Window(this, "Space Hunter  ·  Space map", 940, 760);
+            Theme.Window(this, "Space Hunter  ·  Storage map", 940, 760);
             MinimumSize = SizeFromClientSize(Theme.Fit(660, 480));
             StartPosition = FormStartPosition.CenterParent;
             list = new FolderListView(cats);
@@ -152,8 +152,8 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             string phase = BigFolders.Phase;
             bool waiting = scanning && (phase == "starting" || phase == "sorting" || BigFolders.Scanned == 0);
-            string label = !scanning ? "Space map  ·  just looking, nothing is deleted here"
-                         : "Space map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
+            string label = !scanning ? "Storage map  ·  just looking, nothing is deleted here"
+                         : "Storage map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
                                                                      : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
             if (scanning)   // a large turning ring at the right for the whole scan: impossible to miss
@@ -508,7 +508,7 @@ namespace SpaceHunter
 
 namespace SpaceHunter
 {
-    // Where you are in the Space map: a Back key, then every folder from the drive down, each one clickable.
+    // Where you are in the Storage map: a Back key, then every folder from the drive down, each one clickable.
     class PathBar : Canvas
     {
         FolderNode node; int hover = -1;

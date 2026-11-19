@@ -125,8 +125,8 @@ namespace SpaceHunter
         public static Font CMonoSemi(float s) { return Make(monoSemi, s / A, FontStyle.Regular); }
 
         // Names a newcomer can act on without opening anything: the first is the no-worry clean.
-        public static string TierName(Level l) { return l == Level.Safe ? "Quick clean" : l == Level.Review ? "History & re-downloads" : "Personal & work items"; }
-        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Downloads again when needed, or old history" : "Can hold your work or history. Check before cleaning"; }
+        public static string TierName(Level l) { return l == Level.Safe ? "Quick clean" : l == Level.Review ? "Big caches & history" : "Personal & work items"; }
+        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Big caches that download again, or old history" : "Can hold your work or history. Check before cleaning"; }
         // one plain line under each section's heading, so nobody has to guess what's in it
         public static string TierExplain(Level l)
         {
@@ -254,7 +254,7 @@ namespace SpaceHunter
     class Key : Control
     {
         public bool Primary, Toggled;
-        bool accent;   // a tool of its own (the Space map): an orange outline and a small block icon
+        bool accent;   // a tool of its own (the Storage map): an orange outline and a small block icon
         public bool Accent { get { return accent; } set { accent = value; FitWidth(); Invalidate(); } }
         bool hover, down;
         public Key(string text, bool primary = false)

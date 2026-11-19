@@ -5,12 +5,12 @@ for fixes, the middle number is for new features, and the first number is for bi
 
 ## 1.1.0 (unreleased)
 
-- **Clearer sections**: **Quick clean** (caches and leftovers that rebuild), **History & re-downloads** and
+- **Clearer sections**: **Quick clean** (caches and leftovers that rebuild), **Big caches & history** and
   **Personal & work items**. Each tile shows how much of it is ticked, such as "12 of 12 ticked · 236 MB".
 - **Cleaning no longer blocks the app**: the cleaning window runs on its own and you can keep looking around. Clean
   is ready again once it's done.
 - **Space Hunter never cleans itself**: its own folder, settings and log are always protected.
-- **Space map**:
+- **Storage map** (the Space map, renamed):
   - A **Back** key and the folder trail sit right above the chart; click any folder in the trail to jump there.
     Backspace or Alt+Left also go back.
   - Every file in the open folder is listed under its folders, and single files can be added to the cleanup list.

@@ -67,7 +67,7 @@ enum Keep {   // protected folders: never shown, counted or cleaned
     static var builtIn: [String] { [Bundle.main.bundlePath, Store2.dir.path] }
 }
 
-enum Custom {   // folders added to the cleanup list from the Space map
+enum Custom {   // folders added to the cleanup list from the Storage map
     static var all: [String] { Store2.lines("your-folders.txt") }
     static func add(_ p: String) { var a = all; if !a.contains(p) { a.append(p) }; Store2.write("your-folders.txt", a) }
     static func remove(_ p: String) { Store2.write("your-folders.txt", all.filter { $0 != p }) }
@@ -121,12 +121,12 @@ enum Engine {
                         kind: .contents, roots: [URL(fileURLWithPath: p)], defaultAge: isFile ? 0 : 30 * day, ageMinutes: isFile ? 0 : 30 * day, lastAge: 30 * day, checked: false)
             c.isCustom = true
             c.short = "Everything inside goes; the folder itself stays"
-            c.what = "A folder you added from the Space map: " + p
+            c.what = "A folder you added from the Storage map: " + p
             c.deletes = "Every file inside it (older than the age you set) and the sub-folders that end up empty, except what you untick under \u{201C}Inside this folder\u{201D}. The folder itself stays."
             c.safeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped."
             c.after = "The files are gone, unless you choose Trash in the confirm window."
             if isFile {
-                c.short = "This one file goes"; c.what = "A file you added from the Space map: " + p
+                c.short = "This one file goes"; c.what = "A file you added from the Storage map: " + p
                 c.deletes = "Just this file, whatever its age."; c.safeText = "Only you know. Open it and check before ticking."
                 c.after = "The file is gone, unless you choose Trash in the confirm window."
             }
@@ -255,7 +255,7 @@ enum Engine {
         }
     }
 
-    // Can a folder from the Space map be added to the cleanup list? nil = yes, otherwise the reason.
+    // Can a folder from the Storage map be added to the cleanup list? nil = yes, otherwise the reason.
     static func canAdd(_ path: String, existing: Bool = false) -> String? {
         let p = (path as NSString).standardizingPath
         if p == "/" { return "a whole disk" }
@@ -418,8 +418,8 @@ enum Theme {
     static func monoSemi(_ s: CGFloat) -> Font { .custom("IBMPlexMono-SemiBold", size: s) }
 
     // Names a newcomer can act on without opening anything: the first is the no-worry clean.
-    static func tierName(_ l: Level) -> String { l == .safe ? "Quick clean" : l == .review ? "History & re-downloads" : "Personal & work items" }
-    static func tierDesc(_ l: Level) -> String { l == .safe ? "Caches and leftovers that rebuild" : l == .review ? "Downloads again when needed, or old history" : "Can hold your work or history. Check before cleaning" }
+    static func tierName(_ l: Level) -> String { l == .safe ? "Quick clean" : l == .review ? "Big caches & history" : "Personal & work items" }
+    static func tierDesc(_ l: Level) -> String { l == .safe ? "Caches and leftovers that rebuild" : l == .review ? "Big caches that download again, or old history" : "Can hold your work or history. Check before cleaning" }
     // one plain line under each section's heading, so nobody has to guess what's in it
     static func tierExplain(_ l: Level) -> String {
         l == .safe ? "Caches, temp files and leftovers that apps and macOS rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once."
@@ -433,7 +433,7 @@ struct KeyStyle: ButtonStyle {
     var primary = false
     var toggled = false
     var big = false
-    var accent = false   // a tool of its own (the Space map): an orange outline
+    var accent = false   // a tool of its own (the Storage map): an orange outline
     @Environment(\.isEnabled) var enabled
     func makeBody(configuration: Configuration) -> some View {
         let pressed = configuration.isPressed
@@ -451,7 +451,7 @@ struct KeyStyle: ButtonStyle {
     }
 }
 
-// four blocks of different sizes: a tiny picture of the Space map
+// four blocks of different sizes: a tiny picture of the Storage map
 struct MapIcon: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -769,7 +769,7 @@ struct SpaceHunterApp: App {
             MainView().environmentObject(state).frame(minWidth: 1000, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
-        Window("Space map", id: "finder") {
+        Window("Storage map", id: "finder") {
             FinderView().environmentObject(state)
         }
         .defaultSize(width: 940, height: 760)
@@ -795,7 +795,7 @@ struct MainView: View {
         VStack(spacing: 0) {
             DisplayView().padding(.horizontal, 18).padding(.top, 34)
             HStack(spacing: 8) {
-                Button { openWindow(id: "finder") } label: { HStack(spacing: 8) { MapIcon(); Text("Space map") } }.buttonStyle(KeyStyle(accent: true))
+                Button { openWindow(id: "finder") } label: { HStack(spacing: 8) { MapIcon(); Text("Storage map") } }.buttonStyle(KeyStyle(accent: true))
                 Spacer()
                 Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0 || state.cleanRunning)
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
@@ -964,7 +964,7 @@ struct TierTile: View {
                     }
                 }
                 Spacer()
-                Text(Engine.fmt(total)).font(Theme.semi(17)).foregroundColor(ink)
+                Text(Engine.fmt(total) + " found").font(Theme.semi(17)).foregroundColor(ink)
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1381,7 +1381,7 @@ struct ProtectView: View {
     }
 }
 
-// MARK: - Space map
+// MARK: - Storage map
 
 final class FolderNode: Identifiable {
     let id = UUID()
@@ -1457,7 +1457,7 @@ final class Scanner: ObservableObject {
     }
 }
 
-// The places the Space map can measure: your home folder, then every disk (internal and external).
+// The places the Storage map can measure: your home folder, then every disk (internal and external).
 struct VolumeChoice: Identifiable, Equatable {
     let id: String          // the path measured
     let name: String
@@ -1633,7 +1633,7 @@ struct FinderHeader: View {
     let target: Int64
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(scanner.running ? "Space map  ·  counting files" : "Space map  ·  just looking, nothing is deleted here")
+            Text(scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
                 .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA))
             if scanner.running {
                 Text("\(scanner.scanned) FILES").font(Theme.display(52)).foregroundColor(Theme.orange)
@@ -1670,7 +1670,7 @@ struct SpinRing: View {
     }
 }
 
-// Where you are in the Space map: a Back key, then every folder from the top down, each one clickable.
+// Where you are in the Storage map: a Back key, then every folder from the top down, each one clickable.
 struct PathBar: View {
     let node: FolderNode
     var canAdd = false
@@ -1726,6 +1726,7 @@ struct InsideList: View {
     var itemName = ""
     @State private var here = ""
     @State private var tick = 0
+    @State private var sizes: [String: Int64] = [:]   // each folder's size, filled in as it's measured
     struct Entry: Identifiable { let id: String; let name: String; let dir: Bool; let size: Int64; var modified = Date.distantPast }
 
     var body: some View {
@@ -1741,7 +1742,7 @@ struct InsideList: View {
                 Button { here = (cur as NSString).deletingLastPathComponent } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold))
-                        Text("Back  ·  " + (root as NSString).lastPathComponent + String(cur.dropFirst(root.count))).lineLimit(1).truncationMode(.middle)
+                        Text("Back  ·  " + (root as NSString).lastPathComponent + String(cur.dropFirst(root.count)).replacingOccurrences(of: "/", with: "  \u{203A}  ")).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .buttonStyle(.plain).font(Theme.semi(12)).foregroundColor(Theme.ink).padding(.vertical, 6)
@@ -1757,7 +1758,7 @@ struct InsideList: View {
                         HStack(spacing: 8) {
                             Text(e.name).lineLimit(1).truncationMode(.middle)
                             Spacer()
-                            Text(e.dir ? "folder" : (ageMinutes > 0 && e.modified > Date().addingTimeInterval(-Double(ageMinutes) * 60)) ? "too new, stays" : e.size < 1024 ? "under 1 KB" : Engine.fmt(e.size)).foregroundColor(Theme.soft)
+                            Text(e.dir ? (sizes[e.id].map { Engine.fmt($0) + "  ·  folder" } ?? "folder") : (ageMinutes > 0 && e.modified > Date().addingTimeInterval(-Double(ageMinutes) * 60)) ? "too new, stays" : e.size < 1024 ? "under 1 KB" : Engine.fmt(e.size)).foregroundColor(Theme.soft)
                             if e.dir { Chevron(color: Theme.soft) }
                         }
                         .contentShape(Rectangle())
@@ -1772,6 +1773,23 @@ struct InsideList: View {
         .id(tick)
         .padding(.bottom, 12)
         .onChange(of: root) { _ in here = "" }
+        .onAppear { measure(here.isEmpty ? root : here) }
+        .onChange(of: here) { h in measure(h.isEmpty ? root : h) }
+    }
+
+    func measure(_ dir: String) {
+        let dirs = list(dir).filter { $0.dir }.map { $0.id }
+        DispatchQueue.global(qos: .utility).async {
+            for d in dirs {
+                var sum: Int64 = 0
+                if let e = FileManager.default.enumerator(at: URL(fileURLWithPath: d), includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey], options: [], errorHandler: { _, _ in true }) {
+                    for case let u as URL in e {
+                        if let v = try? u.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]), v.isRegularFile == true { sum += Int64(v.totalFileAllocatedSize ?? 0) }
+                    }
+                }
+                DispatchQueue.main.async { sizes[d] = sum }
+            }
+        }
     }
 
     func list(_ dir: String) -> [Entry] {

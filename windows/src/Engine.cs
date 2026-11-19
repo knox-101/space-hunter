@@ -30,7 +30,7 @@ namespace SpaceHunter
         public bool Checked;
         public bool Recycle;                            // send to the Recycle Bin instead of deleting
         public bool AdminOnly;                          // a system folder: needs admin rights (the app starts with them)
-        public bool IsCustom;                           // a folder the user added from the Space map
+        public bool IsCustom;                           // a folder the user added from the Storage map
         public string Refused;                          // something you added that the safety rules now refuse: never cleaned
         public string What, Deletes, SafeText, After;   // expanded notes
         public string Short;                            // one line: what happens if cleared
@@ -97,7 +97,7 @@ namespace SpaceHunter
             // the items live in cleaners.json; only apps that are on this PC get a row
             var list = Cleaners.Load().Where(Cleaners.Installed).ToList();
 
-            // folders the user sent here from the Space map
+            // folders the user sent here from the Storage map
             Custom.Load();
             foreach (var p in Custom.All)
             {
@@ -108,7 +108,7 @@ namespace SpaceHunter
                 c.IsCustom = true; c.Checked = false;   // your folders start unticked, older than 30 days
                 c.Note = "A folder you added";
                 c.Short = "Everything inside goes; the folder itself stays";
-                c.What = "A folder you added from the Space map: " + p;
+                c.What = "A folder you added from the Storage map: " + p;
                 c.Deletes = "Every file inside it (older than the age you set), and the sub-folders that end up empty, except what you untick under \u201cInside this folder\u201d below. The folder itself stays.";
                 c.SafeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped.";
                 c.After = "The files are gone, unless you choose Recycle Bin in the confirm window.";
@@ -116,7 +116,7 @@ namespace SpaceHunter
                 {
                     c.Note = "A file you added";
                     c.Short = "This one file goes";
-                    c.What = "A file you added from the Space map: " + p;
+                    c.What = "A file you added from the Storage map: " + p;
                     c.Deletes = "Just this file, whatever its age.";
                     c.SafeText = "Only you know. Open it and check before ticking.";
                     c.After = "The file is gone, unless you choose Recycle Bin in the confirm window.";
@@ -443,7 +443,7 @@ namespace SpaceHunter
         static string Norm(string p) { try { return Path.GetFullPath(p).TrimEnd('\\'); } catch { return (p ?? "").TrimEnd('\\'); } }
         static bool Under(string child, string parent) { return child.Equals(parent, StringComparison.OrdinalIgnoreCase) || child.StartsWith(parent + "\\", StringComparison.OrdinalIgnoreCase); }
 
-        // Can a folder from the Space map be added to the cleanup list? Never a drive, Windows, Program Files,
+        // Can a folder from the Storage map be added to the cleanup list? Never a drive, Windows, Program Files,
         // or anything that holds the profile, AppData, Documents, Desktop, Downloads or OneDrive.
         public static bool CanAdd(string path, out string why) { return CanAdd(path, out why, false); }
         // existing: checking something already on the list (so "already on the cleanup list" doesn't count)
@@ -632,7 +632,7 @@ namespace SpaceHunter
         }
     }
 
-// Folders added to the cleanup list from the Space map.
+// Folders added to the cleanup list from the Storage map.
     static class Custom
     {
         static readonly object gate = new object();

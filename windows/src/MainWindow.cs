@@ -170,7 +170,7 @@ namespace SpaceHunter
                 using (var b = new SolidBrush(ink)) g.DrawString(name, fName, b, x, r.Y + 10);
                 bool roomy = r.Height >= 80;
                 using (var b = new SolidBrush(soft)) g.DrawString(Theme.TierDesc(lvl), fDesc, b, x, r.Y + (roomy ? 33 : 30));
-                string size = Engine.Fmt(total); var ss = g.MeasureString(size, fSize);
+                string size = Engine.Fmt(total) + " found"; var ss = g.MeasureString(size, fSize);   // the ticked line says what gets cleaned
                 using (var b = new SolidBrush(ink)) g.DrawString(size, fSize, b, r.Right - 14 - ss.Width, r.Y + 9);
                 // how much of it is ticked, at a glance: a small box (filled when anything is ticked) and "3 of 10 ticked"
                 int nItems = items.Count(c => c.Blocked || c.Bytes > 0 || c.Files > 0);
@@ -694,7 +694,7 @@ namespace SpaceHunter
             disp.Dock = DockStyle.Top; disp.Height = Theme.D(disp.DesignHeight);
             var top = new Panel { Dock = DockStyle.Top, Height = Theme.D(disp.DesignHeight + 18 + 64), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            scanKey = new Key("scan again"); finderKey = new Key("space map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
+            scanKey = new Key("scan again"); finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
             keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
@@ -781,7 +781,7 @@ namespace SpaceHunter
 
         void PlaceKeys(Control keys)
         {
-            // The Space map is a tool of its own, alone at the left. The cleaning keys sit together at the right:
+            // The Storage map is a tool of its own, alone at the left. The cleaning keys sit together at the right:
             // scan again, protected folders and reset to default lead into the one big Clean key.
             int y = Theme.D(14);
             cleanKey.Location = new Point(keys.Width - cleanKey.Width - Theme.D(18), Theme.D(10));
@@ -957,7 +957,8 @@ namespace SpaceHunter
     // folder's name opens it, and the top line goes back up (never above the folder you added).
     class InsideList : Canvas
     {
-        class Entry { public string Path, Name; public bool Dir; public long Size; public DateTime Modified; }
+        class Entry { public string Path, Name; public bool Dir; public long Size = -1; public DateTime Modified; }   // a folder's size is -1 until measured
+        int token;
         readonly List<Entry> rows = new List<Entry>();
         public string Root, Here;
         public bool Active = true;   // the item itself is ticked; otherwise every tick here is shown dimmed
@@ -979,7 +980,7 @@ namespace SpaceHunter
                 var d = new DirectoryInfo(dir);
                 var items = d.GetFileSystemInfos().Where(i => (i.Attributes & FileAttributes.ReparsePoint) == 0).ToList();
                 foreach (var i in items.OfType<DirectoryInfo>().OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase))
-                    rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true });
+                    rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true, Size = -1 });
                 foreach (var f in items.OfType<FileInfo>().OrderByDescending(x => { try { return x.Length; } catch { return 0L; } }))
                     rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = f.LastWriteTime });
             }
@@ -987,6 +988,28 @@ namespace SpaceHunter
             if (rows.Count > Max) { more = rows.Count - (int)Max; rows.RemoveRange((int)Max, more); }
             Height = Theme.D((int)(RowH * (rows.Count + (Deeper ? 1 : 0) + (more > 0 ? 1 : 0) + (rows.Count == 0 ? 1 : 0)) + 4));
             Invalidate();
+            // each folder's size, measured in the background and filled in as it's known
+            int my = ++token; var dirs = rows.Where(r => r.Dir).ToList();
+            new System.Threading.Thread(() =>
+            {
+                foreach (var r in dirs)
+                {
+                    if (my != token) return;
+                    long sum = 0; var st = new Stack<DirectoryInfo>(); st.Push(new DirectoryInfo(r.Path));
+                    while (st.Count > 0 && my == token)
+                    {
+                        FileSystemInfo[] items; try { items = st.Pop().GetFileSystemInfos(); } catch { continue; }
+                        foreach (var i in items)
+                        {
+                            if ((i.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                            var d = i as DirectoryInfo; if (d != null) { st.Push(d); continue; }
+                            try { sum += ((FileInfo)i).Length; } catch { }
+                        }
+                    }
+                    r.Size = sum;
+                    try { BeginInvoke((Action)Invalidate); } catch { return; }
+                }
+            }) { IsBackground = true }.Start();
             if (Resized != null) Resized(this, EventArgs.Empty);
         }
 
@@ -1028,8 +1051,8 @@ namespace SpaceHunter
                 if (hover == -2) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 0, 0, w, RowH - 1);
                 using (var pen = new Pen(Theme.Ink, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLines(pen, new[] { new PointF(14, 9), new PointF(9, 14.5f), new PointF(14, 20) });
-                string rel = Here.Substring(Root.Length).TrimStart('\\');
-                using (var b = new SolidBrush(Theme.Ink)) g.DrawString("Back  \u00b7  " + System.IO.Path.GetFileName(Root) + "\\" + rel, fUp, b, new RectangleF(24, 6, w - 30, 20), nowrap);
+                string rel = Here.Substring(Root.Length).TrimStart('\\').Replace("\\", "  \u203a  ");
+                using (var b = new SolidBrush(Theme.Ink)) g.DrawString("Back  \u00b7  " + System.IO.Path.GetFileName(Root) + "  \u203a  " + rel, fUp, b, new RectangleF(24, 6, w - 30, 20), nowrap);
                 using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 0, RowH - 1, w, RowH - 1);
                 y = RowH;
             }
@@ -1047,7 +1070,7 @@ namespace SpaceHunter
                 }
                 else using (var p = Theme.Round(box, 2)) using (var pen = new Pen(inherited ? Theme.Line : Theme.Ink, 1.5f)) g.DrawPath(pen, p);
                 bool tooNew = !r.Dir && AgeMinutes > 0 && r.Modified > DateTime.Now.AddMinutes(-AgeMinutes);
-                string size = r.Dir ? "folder" : tooNew ? "too new, stays" : r.Size < 1024 ? "under 1 KB" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
+                string size = r.Dir ? (r.Size >= 0 ? Engine.Fmt(r.Size) + "  \u00b7  folder" : "folder") : tooNew ? "too new, stays" : r.Size < 1024 ? "under 1 KB" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
                 using (var b = new SolidBrush(Theme.Ink))
                     g.DrawString(r.Name, fName, b, new RectangleF(30, y + 6, w - 30 - sm.Width - (r.Dir ? 26 : 10), 20), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(size, fSize, b, w - sm.Width - (r.Dir ? 20 : 4), y + 8);
