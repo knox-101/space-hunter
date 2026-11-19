@@ -246,7 +246,7 @@ namespace SpaceHunter
                 }
                 // folders you added earlier show as "added", so they can be taken off again here
                 var mine = new HashSet<string>(Custom.All.Select(p => p.TrimEnd(Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
-                foreach (var r in rows.Where(r => r.Parent != null && !r.IsFile))
+                foreach (var r in rows.Where(r => r.Parent != null || r.IsFile))
                 {
                     if (mine.Contains(r.Path.TrimEnd(Path.DirectorySeparatorChar))) { added.Add(r); continue; }
                     bool ins; var c = Engine.Coverage(r.Path, cats, out ins);
@@ -270,7 +270,7 @@ namespace SpaceHunter
 
         // the "add to cleanup list" key sits between the name and the bar
         RectangleF Chip(int i) { float w = LW - 14; return new RectangleF(w * 0.38f, i * RowH - scroll + 12, 162, 26); }
-        bool CanAddRow(FolderNode r) { return r.Parent != null && !added.Contains(r) && !refusal.ContainsKey(r) && !(inside.ContainsKey(r) && inside[r]); }
+        bool CanAddRow(FolderNode r) { return (r.Parent != null || r.IsFile) && !added.Contains(r) && !refusal.ContainsKey(r) && !(inside.ContainsKey(r) && inside[r]); }
         bool HasChip(FolderNode r) { return CanAddRow(r) || added.Contains(r); }   // "added" chips can be clicked to undo
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -324,9 +324,9 @@ namespace SpaceHunter
             {
                 var r = rows[i]; float top = i * RowH - scroll;
                 if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 10, top, w - 6, RowH - 1);
-                bool own = r.Parent == null;
+                bool own = r.Parent == null && !r.IsFile;   // the folder's own summary rows
                 float nameW = w * 0.38f - 30;
-                using (var b = new SolidBrush(own && !r.IsFile ? Theme.Soft : Theme.Ink)) g.DrawString(r.Name, fName, b, new RectangleF(22, top + 7, nameW, 20), nowrap);
+                using (var b = new SolidBrush(own ? Theme.Soft : Theme.Ink)) g.DrawString(r.Name, fName, b, new RectangleF(22, top + 7, nameW, 20), nowrap);
                 string sub = r.IsFile ? FileKind(r.Name) : r.Files.ToString("N0") + (r.Files == 1 ? " file" : " files") + (r.Denied ? "  ·  partly unreadable" : "");
                 if (!own && cover.ContainsKey(r)) sub = (inside[r] ? "Cleaned by: " : "Has cleanup items: ") + cover[r];
                 else if (!own && refusal.ContainsKey(r) && !added.Contains(r)) sub = "Can't add: " + refusal[r];

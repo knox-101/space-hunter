@@ -25,6 +25,7 @@ struct Cat: Identifiable {
     var extensions: Set<String>? = nil      // only files with these extensions (Downloads)
     var topLevelOnly = false                 // only files directly in the folder
     var isCustom = false
+    var refused: String? = nil               // something you added that the safety rules now refuse: never cleaned
     let defaultAge: Int
     var ageMinutes: Int
     var lastAge: Int
@@ -114,16 +115,25 @@ enum Engine {
         }
 
         for p in Custom.all {
-            var c = Cat(id: "custom:" + p.lowercased(), name: (p as NSString).lastPathComponent + "  (your folder)", level: .caution,
-                        kind: .contents, roots: [URL(fileURLWithPath: p)], defaultAge: 30 * day, ageMinutes: 30 * day, lastAge: 30 * day, checked: false)
+            var isDir: ObjCBool = false
+            let isFile = fm.fileExists(atPath: p, isDirectory: &isDir) && !isDir.boolValue   // a single file you picked: it goes whatever its age
+            var c = Cat(id: "custom:" + p.lowercased(), name: (p as NSString).lastPathComponent + (isFile ? "  (your file)" : "  (your folder)"), level: .caution,
+                        kind: .contents, roots: [URL(fileURLWithPath: p)], defaultAge: isFile ? 0 : 30 * day, ageMinutes: isFile ? 0 : 30 * day, lastAge: 30 * day, checked: false)
             c.isCustom = true
             c.short = "Everything inside goes; the folder itself stays"
             c.what = "A folder you added from the Space map: " + p
             c.deletes = "Every file inside it (older than the age you set) and the sub-folders that end up empty, except what you untick under \u{201C}Inside this folder\u{201D}. The folder itself stays."
             c.safeText = "Only you know. Open it and check before ticking. Protected folders inside it are skipped."
             c.after = "The files are gone, unless you choose Trash in the confirm window."
+            if isFile {
+                c.short = "This one file goes"; c.what = "A file you added from the Space map: " + p
+                c.deletes = "Just this file, whatever its age."; c.safeText = "Only you know. Open it and check before ticking."
+                c.after = "The file is gone, unless you choose Trash in the confirm window."
+            }
             if d.object(forKey: "v4.age.\(c.id)") != nil { c.ageMinutes = d.integer(forKey: "v4.age.\(c.id)") }
             if d.object(forKey: "v4.checked.\(c.id)") != nil { c.checked = d.bool(forKey: "v4.checked.\(c.id)") }
+            // added before the safety rules caught it: listed so it can be removed, never cleaned
+            if let why = canAdd(p, existing: true) { c.refused = why; c.checked = false; c.short = "Not cleaned: \(why). Remove it from the list" }
             list.append(c)
         }
         return list
@@ -209,8 +219,16 @@ enum Engine {
             if ok { cnt.files += 1; if trashIt { cnt.trashedBytes += size } else { cnt.bytes += size } } else { cnt.skipped += 1 }
             cnt.onItem?(url.path, size, ok, trashIt)
         }
+        if c.refused != nil { return }   // the safety rules refuse it now
         for root in c.roots {
             if cnt.cancel { return }
+            var isDir: ObjCBool = false
+            if c.isCustom, fm.fileExists(atPath: root.path, isDirectory: &isDir), !isDir.boolValue {   // a single file you added
+                if let v = try? root.resourceValues(forKeys: Set(keys)), v.isSymbolicLink != true, !Keep.isKept(root.path, kept) {
+                    handle(root, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), v.contentModificationDate ?? .distantPast, cutoff)
+                }
+                continue
+            }
             guard fm.fileExists(atPath: root.path), isSafeRoot(root, allowPersonal: c.extensions != nil && c.topLevelOnly) else { continue }
             if (try? root.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }   // never follow a linked root
             if Keep.isKept(root.path, kept) { continue }
@@ -238,7 +256,7 @@ enum Engine {
     }
 
     // Can a folder from the Space map be added to the cleanup list? nil = yes, otherwise the reason.
-    static func canAdd(_ path: String) -> String? {
+    static func canAdd(_ path: String, existing: Bool = false) -> String? {
         let p = (path as NSString).standardizingPath
         if p == "/" { return "a whole disk" }
         // a folder made right at the top of the disk (like /Personal) or a whole user folder: likely your own files
@@ -252,7 +270,7 @@ enum Engine {
         if let k = personalFolderOf(p) { return "it's inside your personal files (\((k as NSString).lastPathComponent))" }
         if Keep.isKept(p, Keep.builtIn) { return "it's Space Hunter's own folder" }
         if Keep.isKept(p, Keep.all) { return "it's a protected folder" }
-        if Custom.all.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) { return "it's already on the cleanup list" }
+        if !existing && Custom.all.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) { return "it's already on the cleanup list" }
         return nil
     }
 
@@ -988,7 +1006,7 @@ struct CategoryList: View {
         .background(Theme.chassis)
     }
 
-    func isEmpty(_ c: Cat) -> Bool { c.scanned && c.bytes == 0 && c.files == 0 }
+    func isEmpty(_ c: Cat) -> Bool { c.refused == nil && c.scanned && c.bytes == 0 && c.files == 0 }
     func setAll(_ on: Bool, _ idx: [Int]) {
         for i in idx where !isEmpty(state.cats[i]) { state.cats[i].checked = on; state.save(state.cats[i]) }
     }
@@ -1001,7 +1019,7 @@ struct Row: View {
     @State private var hovering = false
     var body: some View {
         let c = state.cats[index]
-        let empty = c.scanned && c.bytes == 0 && c.files == 0
+        let empty = c.refused != nil || (c.scanned && c.bytes == 0 && c.files == 0)
         let isOpen = state.openID == c.id
         let age = c.kind == .trash ? "" : (c.ageMinutes > 0 ? "  ·  older than " + Engine.fmtAge(c.ageMinutes) : "  ·  all files, any age")
         HStack(alignment: .center, spacing: 14) {
@@ -1047,9 +1065,9 @@ struct DetailPanel: View {
                     Button("Close") { state.openID = nil }.buttonStyle(KeyStyle())
                 }
                 Text(c.name).font(Theme.bold(19)).foregroundColor(Theme.ink).lineLimit(2)
-                Text(c.scanned ? "\(Engine.fmt(c.bytes))   ·   \(c.files) files" : "Scanning…").font(Theme.sans(13)).foregroundColor(Theme.ink).padding(.bottom, 10)
-                if c.isCustom, let root = c.roots.first { InsideList(root: root.path, catID: c.id, active: c.checked, ageMinutes: c.ageMinutes, itemName: c.name.replacingOccurrences(of: "  (your folder)", with: "")) }
-                if c.kind != .trash { AgeControls(c: c, older: older, ageValue: $ageValue, unit: $unit) }
+                Text(c.refused != nil ? "Space Hunter won't clean this: \(c.refused!). Use \u{201C}Remove from cleanup list\u{201D} below." : c.scanned ? "\(Engine.fmt(c.bytes))   ·   \(c.files) file" + (c.files == 1 ? "" : "s") : "Scanning…").font(Theme.sans(13)).foregroundColor(Theme.ink).padding(.bottom, 10)
+                if c.isCustom, c.refused == nil, let root = c.roots.first, (try? root.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { InsideList(root: root.path, catID: c.id, active: c.checked, ageMinutes: c.ageMinutes, itemName: c.name.replacingOccurrences(of: "  (your folder)", with: "")) }
+                if c.kind != .trash && c.refused == nil { AgeControls(c: c, older: older, ageValue: $ageValue, unit: $unit) }
                 Group {
                     if c.isCustom, let root = c.roots.first { FolderAbout(root: root.path) } else { section("What is it?", c.what) }
                     section("What gets cleaned", c.deletes)
@@ -1992,6 +2010,13 @@ enum FolderSummary {
     ]
 
     static func describe(_ root: String) -> String {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: root, isDirectory: &isDir), !isDir.boolValue {
+            let a = try? FileManager.default.attributesOfItem(atPath: root)
+            let size = (a?[.size] as? NSNumber)?.int64Value ?? 0, t = (a?[.modificationDate] as? Date) ?? .distantPast
+            let e = (root as NSString).pathExtension.uppercased()
+            return "A single file: " + (e.isEmpty ? "" : "a \(e) file of ") + Engine.fmt(size) + ", last changed " + ago(t) + "."
+        }
         var kindOf: [String: String] = [:]
         for (k, exts) in kinds { for e in exts { kindOf[e] = k } }
         var bytes: [String: Int64] = [:], files: [String: Int64] = [:]
@@ -2052,8 +2077,10 @@ enum FolderSummary {
 
 // The files directly in the open folder, one row each, under its folders (read only for this folder).
 struct FileRows: View {
+    @EnvironmentObject var state: AppState
     let path: String
     let parentSize: Int64
+    @State private var tick = 0
     @State private var files: [(name: String, path: String, size: Int64)] = []
     var body: some View {
         Group {
@@ -2065,7 +2092,14 @@ struct FileRows: View {
                         Text(kind(f.name)).font(Theme.sans(11.5)).foregroundColor(Theme.soft)
                     }
                     .frame(width: 250, alignment: .leading)
-                    Spacer().frame(width: 180)
+                    let isAdded = Custom.all.contains(f.path)
+                    if isAdded {
+                        Button("Added  ·  remove") { Custom.remove(f.path); tick += 1; state.reload() }.buttonStyle(KeyStyle(toggled: true)).frame(width: 180, alignment: .leading)
+                    } else if Engine.canAdd(f.path) == nil {
+                        Button("+ Add to list") { Custom.add(f.path); tick += 1; state.reload() }.buttonStyle(KeyStyle()).frame(width: 180, alignment: .leading)
+                    } else {
+                        Spacer().frame(width: 180)
+                    }
                     GeometryReader { g in
                         ZStack(alignment: .leading) {
                             Rectangle().fill(Theme.line)
@@ -2087,6 +2121,7 @@ struct FileRows: View {
                 Text("+ \(files.count - 400) smaller files").font(Theme.sans(12)).foregroundColor(Theme.soft).padding(12)
             }
         }
+        .id(tick)
         .onAppear { load() }
         .onChange(of: path) { _ in load() }
     }

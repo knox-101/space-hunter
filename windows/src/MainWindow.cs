@@ -229,7 +229,7 @@ namespace SpaceHunter
             Invalidate();
         }
 
-        static bool IsEmpty(Category c) { return !c.Blocked && c.Scanned && c.Bytes == 0 && c.Files == 0; }
+        static bool IsEmpty(Category c) { return c.Refused == null && !c.Blocked && c.Scanned && c.Bytes == 0 && c.Files == 0; }
 
         float MaxScroll { get { return Math.Max(0, totalH - LH); } }
         void ScrollTo(float v) { scroll = Math.Max(0, Math.Min(MaxScroll, v)); Invalidate(); }
@@ -259,7 +259,7 @@ namespace SpaceHunter
 
         void Toggle(Category c)
         {
-            if (IsEmpty(c)) return;
+            if (IsEmpty(c) || c.Refused != null) return;
             c.Checked = !c.Checked; Invalidate();
             if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
         }
@@ -338,7 +338,7 @@ namespace SpaceHunter
 
                 // checkbox: filled orange with a dark tick, an ink outline, or grey when there's nothing to clear
                 var box = new RectangleF(24, top + (r.H - 17) / 2f, 17, 17);
-                if (empty) using (var path = Theme.Round(box, 2)) using (var pen = new Pen(Theme.Line, 1.6f)) g.DrawPath(pen, path);
+                if (empty || c.Refused != null) using (var path = Theme.Round(box, 2)) using (var pen = new Pen(Theme.Line, 1.6f)) g.DrawPath(pen, path);
                 else if (c.Checked)
                 {
                     using (var path = Theme.Round(box, 2)) using (var br = new SolidBrush(Theme.Orange)) g.FillPath(br, path);
@@ -521,7 +521,8 @@ namespace SpaceHunter
             tag.Text = Theme.TierName(c.Level);
             title.Text = c.Name;
             stats.Text = !c.Scanned ? "Scanning..." : c.Kind == Kind.RunHistory ? c.Files + " entries" :
-                         Engine.Fmt(c.Bytes) + "   ·   " + c.Files.ToString("N0") + " files";
+                         Engine.Fmt(c.Bytes) + "   ·   " + c.Files.ToString("N0") + (c.Files == 1 ? " file" : " files");
+            if (c.Refused != null) stats.Text = "Space Hunter won't clean this: " + c.Refused + ". Use “Remove from cleanup list” below.";
             what.Text = c.What; deletes.Text = c.Deletes; safe.Text = c.SafeText; after.Text = c.After;
 
             bool files = c.Kind == Kind.Contents || c.Kind == Kind.Subfolders;
@@ -529,7 +530,8 @@ namespace SpaceHunter
             removeRow.Visible = c.IsCustom;
             ShowAge();
 
-            insideHead.Visible = insideHint.Visible = inside.Visible = c.IsCustom;
+            insideHead.Visible = insideHint.Visible = inside.Visible = c.IsCustom && c.Refused == null && Directory.Exists(c.Roots[0]);
+            if (c.Refused != null) whatHead.Visible = modeRow.Visible = ageRow.Visible = ageHint.Visible = false;
             if (c.IsCustom) Describe(c);
             if (c.IsCustom && (inside.Root == null || !string.Equals(inside.Root, c.Roots[0], StringComparison.OrdinalIgnoreCase))) inside.Open(c.Roots[0]);
             if (c.IsCustom)
@@ -1076,6 +1078,11 @@ namespace SpaceHunter
 
         public static string Describe(string root)
         {
+            if (File.Exists(root))
+            {
+                var fi = new FileInfo(root); string e = fi.Extension.TrimStart('.').ToUpperInvariant();
+                return "A single file: " + (e.Length > 0 ? "a " + e + " file of " : "") + Engine.Fmt(fi.Length) + ", last changed " + Ago(fi.LastWriteTime) + ".";
+            }
             var kindOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var k in Kinds) foreach (var e in k.Value) kindOf[e] = k.Key;
             var bytes = new Dictionary<string, long>(); var files = new Dictionary<string, long>();
