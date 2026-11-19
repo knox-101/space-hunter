@@ -1,0 +1,18 @@
+[package]
+name = "space-hunter"
+# the real version number comes from ../VERSION, shared by all three apps
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "A lightweight, offline disk cleaner"
+publish = false
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.9" }
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

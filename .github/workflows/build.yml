@@ -82,6 +82,46 @@ jobs:
           name: SpaceHunter-windows
           path: windows/SpaceHunter.exe
 
+  linux:
+    name: Linux app (preview)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install GTK 4 and a virtual screen
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libgtk-4-dev xvfb imagemagick
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: linux
+      - name: Build space-hunter
+        working-directory: linux
+        run: cargo build --release
+      - name: Version check
+        working-directory: linux
+        run: |
+          ./target/release/space-hunter --version
+          ./target/release/space-hunter --version | grep -qx "Space Hunter $(tr -d '[:space:]' < ../VERSION)"
+      - name: Launch it on a virtual screen and take a screenshot
+        working-directory: linux
+        env:
+          GSK_RENDERER: cairo
+        run: |
+          xvfb-run -a -s "-screen 0 1200x800x24" sh -c '
+            ./target/release/space-hunter --quit-after 10 & APP=$!
+            sleep 7
+            import -window root screenshot-main.png
+            kill -0 $APP || { echo "App did not stay running"; exit 1; }
+            wait $APP'
+          ls -l target/release/space-hunter screenshot-main.png
+      - uses: actions/upload-artifact@v5
+        with:
+          name: SpaceHunter-linux-preview
+          path: |
+            linux/target/release/space-hunter
+            linux/screenshot-main.png
+            linux/Cargo.lock
+
   release:
     name: Publish the release
     if: startsWith(github.ref, 'refs/tags/v')

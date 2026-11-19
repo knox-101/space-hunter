@@ -5,3 +5,4 @@ mac/build/
 # private working files (design job, critic reviews, product brief): kept locally, never published
 design/
 PRODUCT.md
+linux/target/
