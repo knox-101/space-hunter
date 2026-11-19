@@ -68,7 +68,7 @@ namespace SpaceHunter
         public static readonly Color DisplayUsed = Color.FromArgb(0x6F, 0x6C, 0x66);
         public static readonly Color Ink = Color.FromArgb(0x1B, 0x1B, 0x1A);
         public static readonly Color Muted = Color.FromArgb(0x5F, 0x5C, 0x56);
-        public static readonly Color Soft = Color.FromArgb(0x7D, 0x79, 0x72);
+        public static readonly Color Soft = Color.FromArgb(0x60, 0x5C, 0x56);   // readable on the chassis (4.5:1)
         public static readonly Color Line = Color.FromArgb(0xC3, 0xBF, 0xB6);
         public static readonly Color Orange = Color.FromArgb(0xFF, 0x5B, 0x1F);
         public static readonly Color OrangeDeep = Color.FromArgb(0xB5, 0x40, 0x0F);

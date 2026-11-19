@@ -83,11 +83,11 @@ button.key.primary:disabled { background: #D0CDC6; color: #9A968F; box-shadow: 0
 .tile.on { background: #1B1B1A; box-shadow: 0 3px 0 #000000; }
 .tile-name { color: #1B1B1A; font-weight: 700; font-size: 11.5pt; }
 .tile.on .tile-name { color: #E9E6DF; }
-.tile-desc { color: #7D7972; font-size: 9pt; }
+.tile-desc { color: #605C56; font-size: 9pt; }
 .tile.on .tile-desc { color: #8A8A86; }
 .section-title { color: #1B1B1A; font-weight: 700; font-size: 10pt; }
 .explain { color: #5F5C56; font-size: 9pt; }
-.note { color: #7D7972; font-size: 9.5pt; }
+.note { color: #605C56; font-size: 9.5pt; }
 .status { color: #5F5C56; font-size: 9pt; padding: 10px 22px; border-top: 1px solid #C3BFB6; }
 .legend-ink { color: #E9E6DF; font-weight: 600; font-size: 10.5pt; }
 button.key.on { background: #1B1B1A; color: #E9E6DF; box-shadow: 0 2px 0 #000000; }
@@ -100,7 +100,7 @@ button.tile label.tile-name { color: #1B1B1A; font-weight: 700; font-size: 11.5p
 button.tile.on label.tile-name { color: #E9E6DF; }
 button.tile label.tile-size { color: #1B1B1A; font-weight: 600; font-size: 12.5pt; }
 button.tile.on label.tile-size { color: #E9E6DF; }
-button.tile label.tile-desc { color: #7D7972; font-size: 9pt; }
+button.tile label.tile-desc { color: #605C56; font-size: 9pt; }
 button.tile.on label.tile-desc { color: #8A8A86; }
 button.tile label.tile-count { color: #5F5C56; font-weight: 600; font-size: 9pt; }
 button.tile.on label.tile-count { color: #E9E6DF; }
@@ -110,12 +110,12 @@ button.row-btn { background: none; background-image: none; border: none; box-sha
 button.row-btn:hover { background: #E0DDD6; }
 button.row-btn.open { background: #E9E6E0; }
 .row-name { color: #1B1B1A; font-weight: 600; font-size: 10.5pt; }
-.row-name-dim { color: #7D7972; font-size: 10pt; }
-.row-sub { color: #7D7972; font-size: 9pt; }
+.row-name-dim { color: #605C56; font-size: 10pt; }
+.row-sub { color: #605C56; font-size: 9pt; }
 .row-size { color: #1B1B1A; font-weight: 600; font-size: 11pt; }
-.chevron { color: #7D7972; font-size: 16pt; }
+.chevron { color: #605C56; font-size: 16pt; }
 .chevron-open { color: #FF5B1F; font-size: 16pt; font-weight: 700; }
-.group-note { color: #7D7972; font-size: 9pt; }
+.group-note { color: #605C56; font-size: 9pt; }
 checkbutton check { min-width: 17px; min-height: 17px; border-radius: 2px; border: 2px solid #1B1B1A; background: transparent; background-image: none; box-shadow: none; }
 checkbutton check:checked { background: #FF5B1F; border-color: #FF5B1F; color: #1B1B1A; }
 checkbutton.dim check:checked { background: #C3BFB6; border-color: #C3BFB6; }
@@ -140,7 +140,7 @@ button.place-row:hover { background: #E0DDD6; }
 button.crumb { background: none; border: none; box-shadow: none; padding: 4px 6px; color: #5F5C56; font-size: 10pt; border-radius: 3px; }
 button.crumb:hover { background: #ECEAE5; color: #1B1B1A; }
 button.crumb-now { background: none; border: none; box-shadow: none; padding: 4px 6px; color: #1B1B1A; font-weight: 700; font-size: 10pt; }
-.crumb-sep { color: #7D7972; font-size: 11pt; }
+.crumb-sep { color: #605C56; font-size: 11pt; }
 .chart-caption { color: #5F5C56; font-size: 8.75pt; }
 .included { color: #E9E6DF; background: #1B1B1A; font-weight: 600; font-size: 8.25pt; padding: 6px 12px; border-radius: 4px; }
 button.key.primary-small { background: #FF5B1F; box-shadow: 0 2px 0 #B5400F; }

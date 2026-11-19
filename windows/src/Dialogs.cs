@@ -128,6 +128,7 @@ namespace SpaceHunter
         CanvasPanel display; Label current; ListBox log; Key stopKey, logKey;
         System.Windows.Forms.Timer tick;
         volatile int index; volatile bool done;
+        readonly List<string> results = new List<string>();   // one plain line per item, shown when the clean is done
         Key hideKey;
         // the finish: for about a second the bar clears segment by segment and the number counts up to the total
         const double FinishMs = 1200;
@@ -240,6 +241,10 @@ namespace SpaceHunter
                     catch (Exception ex) { if (cnt.OnNote != null) cnt.OnNote(sel[i].Name + ": stopped early (" + ex.Message + ")"); }   // the rest still runs
                     summary.Add(sel[i].Name + ": freed " + Engine.Fmt(cnt.Bytes - b0) + (cnt.RecycledBytes > r0 ? " + " + Engine.Fmt(cnt.RecycledBytes - r0) + " to Recycle Bin" : "") +
                                 ", " + (cnt.Files - f0).ToString("N0") + " files, skipped " + (cnt.Skipped - s0).ToString("N0"));
+                    long fb = cnt.Bytes - b0, rb = cnt.RecycledBytes - r0, sk = cnt.Skipped - s0;
+                    lock (results) results.Add(sel[i].Name.PadRight(44).Substring(0, 44) + "  " +
+                        (fb > 0 || rb == 0 ? Engine.Fmt(fb) + " freed" : "") + (rb > 0 ? (fb > 0 ? " + " : "") + Engine.Fmt(rb) + " to the Recycle Bin" : "") +
+                        (sk > 0 ? "   (" + sk.ToString("N0") + " kept: in use or too new)" : ""));
                 }
                 var sys = sel.Where(c => c.Blocked).ToList();
                 if (sys.Count > 0 && !cnt.Cancel)
@@ -299,6 +304,18 @@ namespace SpaceHunter
             }
             if (done && tick.Enabled && feed.IsEmpty)
             {
+                // the list becomes a plain summary; every single file is still in the log (Open log file)
+                lock (results)
+                    if (results.Count > 0)
+                    {
+                        log.BeginUpdate(); log.Items.Clear();
+                        log.Items.Add("What was cleaned");
+                        log.Items.Add("");
+                        foreach (var r in results) log.Items.Add(r);
+                        log.Items.Add("");
+                        log.Items.Add("Every file is listed in the log: press Open log file.");
+                        log.TopIndex = 0; log.EndUpdate();
+                    }
                 tick.Stop(); clock.Stop();
                 // Done closes the window; it's the one orange key now
                 stopKey.Text = cnt.Cancel ? "close" : "done"; stopKey.Primary = !cnt.Cancel; stopKey.Enabled = true; stopKey.Invalidate();

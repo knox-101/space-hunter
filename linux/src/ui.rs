@@ -60,6 +60,8 @@ pub struct Ui {
     prog_win: RefCell<Option<gtk::Window>>,
     opts: Opts,
     bottom: gtk::Box,
+    scan_gen: RefCell<std::collections::HashMap<String, u64>>,     // per item: which measurement is the newest
+    dir_sizes: RefCell<std::collections::HashMap<PathBuf, u64>>,   // folder sizes for "What's inside", measured once
     inside_here: RefCell<Option<(String, PathBuf)>>,                       // a folder you added: where its panel list is looking
     described: RefCell<std::collections::HashMap<String, String>>,       // what's inside folders you added, worked out once
 }
@@ -290,8 +292,14 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     root.append(&body);
 
     let status = label("", "status");
+    status.set_hexpand(true);
     let bottom = gtk::Box::new(gtk::Orientation::Vertical, 0);   // the status line, or the update card in its place
-    bottom.append(&status);
+    let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    status_row.append(&status);
+    let ver = label(&format!("Space Hunter {}", crate::VERSION.trim()), "status");   // which version this is
+    ver.set_xalign(1.0);
+    status_row.append(&ver);
+    bottom.append(&status_row);
     root.append(&bottom);
     win.set_child(Some(&root));
 
@@ -300,7 +308,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
         legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel, status,
         prog_win: RefCell::new(None), opts,
-        bottom, inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
+        bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
     });
 
     {
@@ -459,7 +467,7 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
     let page = r.page.clone();
     news.connect_clicked(move |_| { if let Some(p) = &page { let _ = gtk::gio::AppInfo::launch_default_for_uri(p, None::<&gtk::gio::AppLaunchContext>); } });
     let (uu, c2) = (u.clone(), card.clone());
-    later.connect_clicked(move |_| { uu.bottom.remove(&c2); uu.status.set_visible(true); });
+    later.connect_clicked(move |_| { uu.bottom.remove(&c2); if let Some(p) = uu.status.parent() { p.set_visible(true); } });
     if can_install {
         let go = key("update & relaunch", &["primary"]);
         card.append(&go);
@@ -487,7 +495,7 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
             });
         });
     }
-    u.status.set_visible(false);
+    if let Some(p) = u.status.parent() { p.set_visible(false); }
     u.bottom.append(&card);
 }
 
@@ -534,7 +542,7 @@ fn refresh_top(u: &Rc<Ui>) {
     let binned = engine::history::trashed();
     // no "0 MB + ..." : say only what happened
     let parts: Vec<String> = [(freed.0, "freed".to_string()), (binned, "moved to the Trash".to_string())].iter().filter(|(b, _)| *b > 0).map(|(b, w)| format!("{} {}", fmt(*b), w)).collect();
-    u.freed_text.set_text(&if freed.1 > 0 && !parts.is_empty() { format!("So far: {} in {} clean{}", parts.join(" + "), freed.1, if freed.1 == 1 { "" } else { "s" }) } else { String::new() });
+    u.freed_text.set_text(&if freed.1 > 0 && !parts.is_empty() { format!("Freed so far: {} in {} clean{}", parts.join(" + "), freed.1, if freed.1 == 1 { "" } else { "s" }) } else { String::new() });
     if total > 0 {
         let t = total as f64;
         let used = (total - free) as f64 / t;
@@ -848,7 +856,7 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
                 // other people's and the system's files are never cleaned, so they aren't listed as if they were
                 if !engine::is_root() && std::os::unix::fs::MetadataExt::uid(&m) != unsafe { libc::geteuid() } && !c.admin { continue; }
                 let n = e.file_name().to_string_lossy().to_string();
-                let item = (n.clone(), e.path(), m.is_dir(), m.len(), m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), sub.clone());
+                let item = (n.clone(), e.path(), m.is_dir(), m.len(), engine::age_time(&m), sub.clone());
                 if m.is_dir() {
                     if c.top_level_only || c.exclude.contains(&n) { continue; }   // the item's own rules
                     dirs.push(item);
@@ -884,7 +892,8 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         let nl = label(n, "row-name"); nl.set_hexpand(true); nl.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         line.append(&nl);
         let too_new = !*dir && c.age_minutes > 0 && *modified > cutoff;
-        line.append(&label(&if *dir { "folder  \u{203A}".to_string() } else if too_new { "too new, stays".to_string() } else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) }, "row-sub"));
+        let dsize = if *dir { u.dir_sizes.borrow().get(p).cloned() } else { None };
+        line.append(&label(&if *dir { match dsize { Some(sz) if sz < u64::MAX => format!("{}  \u{00B7}  folder  \u{203A}", fmt(sz)), _ => "folder  \u{203A}".to_string() } } else if too_new { "too new, stays".to_string() } else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) }, "row-sub"));
         col.append(&line);
         if let Some(sb) = sub { let sl = label(sb, "row-sub"); sl.set_ellipsize(gtk::pango::EllipsizeMode::Middle); col.append(&sl); }   // which folder it comes from
         nb.set_child(Some(&col));
@@ -896,6 +905,29 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         u.panel.append(&row);
     }
     if entries.len() > 60 { u.panel.append(&label(&format!("+ {} more (open the folder in Files to see them all)", entries.len() - 60), "group-note")); }
+    // folder sizes not known yet: measure them once in the background, then show them
+    let unknown: Vec<PathBuf> = entries.iter().take(60).filter(|e| e.2 && !u.dir_sizes.borrow().contains_key(&e.1)).map(|e| e.1.clone()).collect();
+    if !unknown.is_empty() {
+        for d in &unknown { u.dir_sizes.borrow_mut().insert(d.clone(), u64::MAX); }   // "being measured"
+        let (tx, rx) = mpsc::channel::<(PathBuf, u64)>();
+        std::thread::spawn(move || for d in unknown {
+            let mut sum = 0u64; let mut st = vec![d.clone()];
+            while let Some(x) = st.pop() {
+                if let Ok(rd) = std::fs::read_dir(&x) { for e in rd.flatten() { if let Ok(m) = std::fs::symlink_metadata(e.path()) {
+                    if m.is_dir() { st.push(e.path()); } else if m.is_file() { sum += std::os::unix::fs::MetadataExt::blocks(&m) * 512; } } } }
+            }
+            if tx.send((d, sum)).is_err() { break; }
+        });
+        let uu = u.clone();
+        glib::timeout_add_local(Duration::from_millis(300), move || {
+            let mut any = false;
+            loop { match rx.try_recv() {
+                Ok((d, sz)) => { uu.dir_sizes.borrow_mut().insert(d, sz); any = true; }
+                Err(mpsc::TryRecvError::Empty) => { if any { fill_panel(&uu); } return glib::ControlFlow::Continue; }
+                Err(_) => { if any { fill_panel(&uu); } return glib::ControlFlow::Break; }
+            } }
+        });
+    }
 }
 
 // Measure items in the background, a few at once, and fill the numbers in as they arrive.
@@ -914,6 +946,9 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
     refresh(u);
     if targets.is_empty() { return; }
     let n = targets.len();
+    let gens: std::collections::HashMap<String, u64> = targets.iter().map(|c| {
+        let mut g = u.scan_gen.borrow_mut(); let e = g.entry(c.id.clone()).or_insert(0); *e += 1; (c.id.clone(), *e)
+    }).collect();
     let queue = Arc::new(Mutex::new(VecDeque::from(targets)));
     let (tx, rx) = mpsc::channel::<(String, String, u64, u64)>();
     for _ in 0..n.min(4) {
@@ -932,8 +967,9 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
         let mut last = String::new();
         while let Ok((id, name, files, bytes)) = rx.try_recv() {
             any = true; got.set(got.get() + 1); last = name;
+            let newest = uu.scan_gen.borrow().get(&id) == gens.get(&id);
             let mut st = uu.st.borrow_mut();
-            if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) { c.files = files; c.bytes = bytes; c.scanned = true; }
+            if newest { if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) { c.files = files; c.bytes = bytes; c.scanned = true; } }
             st.pending = st.pending.saturating_sub(1);
         }
         if any {
@@ -1054,7 +1090,7 @@ fn confirm_row(name: &str, size: &str) -> gtk::Box {
     r
 }
 
-enum Msg { Line(String), Totals(u64, u64, u64, u64), Current(String), Done(bool) }
+enum Msg { Line(String), Result(String), Totals(u64, u64, u64, u64), Current(String), Done(bool) }
 
 // The cleaning window: it doesn't block the main window, and it can be minimised while it works.
 fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
@@ -1151,6 +1187,8 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             bytes += cnt.bytes; trashed += cnt.trashed; files += cnt.files; skipped += cnt.skipped;
             let _ = tx.send(Msg::Totals(bytes, trashed, files, skipped));
             let _ = tx.send(Msg::Line(format!("\u{2014} {}: freed {}{}, {} files", c.name, fmt(cnt.bytes), if cnt.trashed > 0 { format!(" + {} to the Trash", fmt(cnt.trashed)) } else { String::new() }, cnt.files)));
+            let _ = tx.send(Msg::Result(format!("{}   \u{00B7}   {}{}", c.name, if cnt.bytes > 0 || cnt.trashed == 0 { format!("{} freed", fmt(cnt.bytes)) } else { String::new() },
+                                                 if cnt.trashed > 0 { format!("{}{} to the Trash", if cnt.bytes > 0 { " + " } else { "" }, fmt(cnt.trashed)) } else { String::new() })));
         }
         if !admin.is_empty() && !c3.load(Ordering::Relaxed) {
             let _ = tx.send(Msg::Current("Waiting for your password to clean system folders\u{2026}".into()));
@@ -1158,6 +1196,8 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 Some(res) => for r in res {
                     bytes += r.bytes; files += r.files; skipped += r.skipped;
                     let _ = tx.send(Msg::Line(format!("\u{2014} {}: freed {}, {} files", r.id, fmt(r.bytes), r.files)));
+                    let name = admin.iter().find(|c| c.id == r.id).map(|c| c.name.clone()).unwrap_or(r.id.clone());
+                    let _ = tx.send(Msg::Result(format!("{}   \u{00B7}   {} freed", name, fmt(r.bytes))));
                 },
                 None => { let _ = tx.send(Msg::Line("\u{2014} System folders skipped: the password wasn't given.".into())); }
             }
@@ -1170,6 +1210,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     let buf = tv.buffer();
     let uu = u.clone();
     let mut lines = 0usize;
+    let mut results: Vec<String> = Vec::new();
     glib::timeout_add_local(Duration::from_millis(120), move || {
         let mut finished = None;
         let mut batch = String::new();
@@ -1189,6 +1230,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 }
                 Msg::Current(c) => headl.set_text(&c),
                 Msg::Done(stopped) => finished = Some(stopped),
+                Msg::Result(r) => results.push(r),
             }
         }
         if !batch.is_empty() {
@@ -1199,6 +1241,11 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
         }
         if let Some(stopped) = finished {
             done.set(true);
+            if !results.is_empty() {   // what was cleaned, item by item, above every single file
+                let mut start = buf.start_iter();
+                buf.insert(&mut start, &format!("What was cleaned\n\n{}\n\nEvery file:\n", results.join("\n")));
+                tv.scroll_to_iter(&mut buf.start_iter(), 0.0, false, 0.0, 0.0);
+            }
             headl.set_text(if stopped { "Stopped  \u{00B7}  nothing else will be cleaned" } else { "Done  \u{00B7}  all ticked items cleaned" });
             // Done closes the window; it's the one orange key once a clean has finished
             stop.set_label(if stopped { "CLOSE" } else { "DONE" }); stop.set_sensitive(true);

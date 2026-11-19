@@ -379,7 +379,17 @@ fn newest(dir: &Path) -> SystemTime {
     n
 }
 
-fn remove_empty_dirs(root: &Path, keep_root: bool, exclude: &HashSet<String>, kept: &[String], owner: u32) {
+// A file's age: the newer of "last changed" and "arrived here" (copying or unzipping sets a new status-change time),
+// so photos copied in today count as new, whatever their own date.
+pub fn age_time(m: &fs::Metadata) -> SystemTime {
+    let changed = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let arrived = SystemTime::UNIX_EPOCH + Duration::from_secs(m.ctime().max(0) as u64);
+    if arrived > changed { arrived } else { changed }
+}
+
+// Removes the empty folders this clean emptied, and empty folders older than the age rule; a folder a program made a
+// moment ago stays.
+fn remove_empty_dirs(root: &Path, keep_root: bool, exclude: &HashSet<String>, kept: &[String], owner: u32, cutoff: SystemTime, touched: &HashSet<PathBuf>) {
     let dev = match fs::symlink_metadata(root) { Ok(m) => m.dev(), Err(_) => return };
     let mut all = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -395,7 +405,13 @@ fn remove_empty_dirs(root: &Path, keep_root: bool, exclude: &HashSet<String>, ke
     }
     if !keep_root { all.push(root.to_path_buf()); }
     all.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
-    for d in all { let _ = fs::remove_dir(&d); }   // only removes folders that are empty
+    let mut emptied = touched.clone();
+    for d in all {
+        let old = fs::symlink_metadata(&d).map(|m| m.modified().map(|t| t < cutoff).unwrap_or(false)).unwrap_or(false);
+        if (emptied.contains(&d) || old) && fs::remove_dir(&d).is_ok() {   // only removes folders that are empty
+            if let Some(p) = d.parent() { emptied.insert(p.to_path_buf()); }   // its parent may be empty now too
+        }
+    }
 }
 
 fn trash(path: &Path) -> bool { gio::File::for_path(path).trash(gio::Cancellable::NONE).is_ok() }
@@ -420,6 +436,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
     let me = uid();
     let root_user = is_root();
     let trash_it = to_trash && c.kind != Kind::Trash && !c.admin;   // emptying the Trash can't go to the Trash
+    let touched: std::cell::RefCell<HashSet<PathBuf>> = Default::default();   // folders this clean took files out of
     let handle = |path: &Path, m: &fs::Metadata, cut: SystemTime, cnt: &mut Counter| {
         if cnt.cancelled() { return; }
         if let Some(ext) = &c.extensions {
@@ -430,12 +447,12 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
         // other people's and the system's files are never touched (system items are only measured here; the password
         // helper cleans them as root)
         if !root_user && m.uid() != me && !(c.admin && !delete) { return; }
-        let t = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let t = age_time(m);
         if t >= cut { if delete { cnt.skipped += 1; } return; }
         let size = size_of(m);
         if !delete { cnt.files += 1; cnt.bytes += size; return; }
         let ok = if trash_it { trash(path) } else { fs::remove_file(path).is_ok() };
-        if ok { cnt.files += 1; if trash_it { cnt.trashed += size } else { cnt.bytes += size } } else { cnt.skipped += 1; }
+        if ok { cnt.files += 1; if let Some(d) = path.parent() { touched.borrow_mut().insert(d.to_path_buf()); } if trash_it { cnt.trashed += size } else { cnt.bytes += size } } else { cnt.skipped += 1; }
         if let Some(f) = cnt.on_item.as_mut() { f(path, size, ok, trash_it); }
     };
     for root in &c.roots {
@@ -459,7 +476,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
                 } else {
                     let owner = if c.admin && !delete { fs::symlink_metadata(root).map(|m| m.uid()).unwrap_or(me) } else { me };
                     walk_as(root, &c.exclude, &kept, owner, &mut |p, fm| handle(p, fm, cutoff, cnt));
-                    if delete { remove_empty_dirs(root, true, &c.exclude, &kept, me); }
+                    if delete { remove_empty_dirs(root, true, &c.exclude, &kept, me, cutoff, &touched.borrow()); }
                 }
             }
             Kind::Subfolders => {
@@ -468,7 +485,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
                     let far = SystemTime::now() + Duration::from_secs(3600);
                     if fs::symlink_metadata(&sub).map(|m| m.uid() != me).unwrap_or(true) { continue; }
                     walk(&sub, &c.exclude, &kept, &mut |p, fm| handle(p, fm, far, cnt));
-                    if delete { remove_empty_dirs(&sub, false, &c.exclude, &kept, me); }
+                    if delete { remove_empty_dirs(&sub, false, &c.exclude, &kept, me, far, &HashSet::new()); }
                 }
             }
             Kind::Journal => {}
@@ -611,7 +628,8 @@ pub fn can_add(p: &Path, existing: bool) -> Result<(), String> {
     if personal().iter().any(|k| k.starts_with(p)) { return Err("it holds your personal folders".into()); }
     // installed tools and app settings: removing anything inside breaks them; their known caches are separate items
     for t in [".config", ".local", ".rustup", ".cargo", ".dotnet", ".nvm", ".pyenv", ".sdkman", ".rbenv", ".mozilla",
-              ".thunderbird", ".var", "snap", ".steam", ".wine", ".pki", ".java"] {
+              ".thunderbird", ".var", "snap", ".steam", ".wine", ".pki", ".java",
+              ".claude", ".codex", ".gemini", ".cursor", ".vscode", ".copilot", ".continue", ".aider"] {
         if p.starts_with(h.join(t)) { return Err("part of an installed tool or app's settings".into()); }
     }
     // a folder made right in your home (like ~/Work) usually holds your own files; hidden ones (~/.gradle) are app data
@@ -683,7 +701,7 @@ pub fn describe(root: &Path) -> String {
             let sz = size_of(&m);
             *bytes.entry(kind).or_default() += sz; *count.entry(kind).or_default() += 1;
             total += sz; n += 1;
-            let t = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let t = age_time(&m);
             if t > newest { newest = t; }
             let days = now.duration_since(t).map(|d| d.as_secs() / 86400).unwrap_or(0);
             if days > 30 { old30 += sz; } if days > 365 { old365 += sz; }

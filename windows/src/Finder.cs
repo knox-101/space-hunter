@@ -75,6 +75,7 @@ namespace SpaceHunter
             list.RemovedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Taken off the cleanup list: " + Theme.MidPath(((FolderNode)s).Path, 70) + "."; };
             tick.Tick += (s, e) => { sweep++; head.Invalidate(); };
             Shown += (s, e) => StartScan(startPath ?? Path.GetPathRoot(Engine.W));
+            FormClosed += (s, e) => BigFolders.Cancel = true;   // closing the map stops its scan
         }
 
         // test hook: draw the window off-screen (no focus needed) and save it
@@ -217,6 +218,23 @@ namespace SpaceHunter
         public FolderListView(List<Category> cats) { this.cats = cats ?? new List<Category>(); }
         public string Placeholder;   // shown while there's nothing to list yet
 
+        // why a folder can't be added, as a short calm label (the rules themselves are in Engine.CanAdd)
+        static string Calm(string why)
+        {
+            string w = why.ToLowerInvariant();
+            if (w.Contains("space hunter")) return "Space Hunter's own folder";
+            if (w.Contains("another account")) return "Another account's files";
+            if (w.Contains("browser")) return "Browser profile";
+            if (w.Contains("windows or installed")) return "Windows or an installed app";
+            if (w.Contains("settings") || w.Contains("keys")) return "App settings";
+            if (w.Contains("own files") || w.Contains("personal") || w.Contains("profile")) return "Your own files";
+            if (w.Contains("protected")) return "Protected";
+            if (w.Contains("already")) return "Already on your list";
+            if (w.Contains("kept by windows")) return "Kept by Windows";
+            if (w.Contains("drive")) return "A whole drive";
+            return "Can't be added";
+        }
+
         static string FileKind(string name)
         {
             string e = Path.GetExtension(name).TrimStart('.').ToUpperInvariant();
@@ -328,7 +346,7 @@ namespace SpaceHunter
                 using (var b = new SolidBrush(own ? Theme.Soft : Theme.Ink)) g.DrawString(r.Name, fName, b, new RectangleF(22, top + 7, nameW, 20), nowrap);
                 string sub = r.IsFile ? FileKind(r.Name) : r.Files.ToString("N0") + (r.Files == 1 ? " file" : " files") + (r.Denied ? "  ·  partly unreadable" : "");
                 if (!own && cover.ContainsKey(r)) sub = (inside[r] ? "Cleaned by: " : "Has cleanup items: ") + cover[r];
-                else if (!own && refusal.ContainsKey(r) && !added.Contains(r)) sub = "Can't add: " + refusal[r];
+                else if (!own && refusal.ContainsKey(r) && !added.Contains(r)) sub = Calm(refusal[r]) + (r.IsFile ? "" : "  \u00b7  " + r.Files.ToString("N0") + (r.Files == 1 ? " file" : " files"));
                 using (var b = new SolidBrush(Theme.Soft)) g.DrawString(sub, fSub, b, new RectangleF(22, top + 27, nameW, 18), nowrap);
 
                 // tag or key

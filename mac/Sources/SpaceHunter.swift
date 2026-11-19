@@ -160,7 +160,7 @@ enum Engine {
     }
 
     static let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
-                                         .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey]
+                                         .totalFileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey, .addedToDirectoryDateKey]
 
     static func walk(_ root: URL, exclude: Set<String>, kept: [String], cnt: Counter, _ body: (URL, Int64, Date) -> Void) {
         guard let e = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else { return }
@@ -173,7 +173,9 @@ enum Engine {
                 continue
             }
             if v.isRegularFile == true {
-                body(url, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), v.contentModificationDate ?? .distantPast)
+                // the newest of changed, created and added to this folder: photos copied in today are new, whatever their date
+                let t = [v.contentModificationDate, v.creationDate, v.addedToDirectoryDate].compactMap { $0 }.max() ?? .distantPast
+                body(url, Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0), t)
             }
         }
     }
@@ -184,21 +186,30 @@ enum Engine {
         return n
     }
 
-    static func removeEmptyDirs(_ root: URL, keepRoot: Bool, exclude: Set<String>, kept: [String]) {
+    // Removes the empty folders this clean emptied (touched), and empty folders older than the age rule; a folder a
+    // program made a moment ago stays. Never goes into another disk mounted inside.
+    static func removeEmptyDirs(_ root: URL, keepRoot: Bool, exclude: Set<String>, kept: [String], cutoff: Date = .distantFuture, touched: Set<String> = []) {
+        let vk: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .volumeIdentifierKey, .contentModificationDateKey, .creationDateKey]
+        let rootVol = (try? root.resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? NSObject
         var all: [URL] = []
-        if let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [], errorHandler: { _, _ in true }) {
+        if let e = fm.enumerator(at: root, includingPropertiesForKeys: vk, options: [], errorHandler: { _, _ in true }) {
             for case let url as URL in e {
-                let v = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                let v = try? url.resourceValues(forKeys: Set(vk))
                 if v?.isDirectory == true && v?.isSymbolicLink != true {
-                    if exclude.contains(url.lastPathComponent) || Keep.isKept(url.path, kept) { e.skipDescendants(); continue }
+                    if exclude.contains(url.lastPathComponent) || Keep.isKept(url.path, kept) || (v?.volumeIdentifier as? NSObject) != rootVol { e.skipDescendants(); continue }
                     all.append(url)
                 }
             }
         }
         if !keepRoot { all.append(root) }
+        var emptied = touched
         for dir in all.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
-            if let c = try? fm.contentsOfDirectory(atPath: dir.path), c.isEmpty || c == [".DS_Store"] {
+            guard let c = try? fm.contentsOfDirectory(atPath: dir.path), c.isEmpty || c == [".DS_Store"] else { continue }
+            let v = try? dir.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+            let old = (v?.contentModificationDate ?? .distantPast) < cutoff && (v?.creationDate ?? .distantPast) < cutoff
+            if emptied.contains(dir.path) || old {
                 try? fm.removeItem(at: dir)
+                emptied.insert(dir.deletingLastPathComponent().path)   // its parent may be empty now too
             }
         }
     }
@@ -207,6 +218,7 @@ enum Engine {
         let cutoff = Date().addingTimeInterval(-Double(c.ageMinutes) * 60)
         let kept = Keep.all + Keep.builtIn + Custom.skip   // what you unticked under "What's inside"
         let trashIt = toTrash && c.kind != .trash   // emptying the Trash can't go to the Trash
+        var touched = Set<String>()   // folders this clean took files out of
         func handle(_ url: URL, _ size: Int64, _ date: Date, _ cut: Date) {
             if let ext = c.extensions, !ext.contains(url.pathExtension.lowercased()) { return }
             if Keep.isKept(url.path, kept) { return }
@@ -216,7 +228,7 @@ enum Engine {
             do {
                 if trashIt { try fm.trashItem(at: url, resultingItemURL: nil) } else { try fm.removeItem(at: url) }
             } catch { ok = false }
-            if ok { cnt.files += 1; if trashIt { cnt.trashedBytes += size } else { cnt.bytes += size } } else { cnt.skipped += 1 }
+            if ok { cnt.files += 1; touched.insert(url.deletingLastPathComponent().path); if trashIt { cnt.trashedBytes += size } else { cnt.bytes += size } } else { cnt.skipped += 1 }
             cnt.onItem?(url.path, size, ok, trashIt)
         }
         if c.refused != nil { return }   // the safety rules refuse it now
@@ -242,7 +254,7 @@ enum Engine {
                     }
                 } else {
                     walk(root, exclude: c.exclude, kept: kept, cnt: cnt) { url, s, dd in handle(url, s, dd, cutoff) }
-                    if delete { removeEmptyDirs(root, keepRoot: true, exclude: c.exclude, kept: kept) }
+                    if delete { removeEmptyDirs(root, keepRoot: true, exclude: c.exclude, kept: kept, cutoff: cutoff, touched: touched) }
                 }
             case .subfolders:
                 for sub in dirs(root) {
@@ -261,6 +273,10 @@ enum Engine {
         if p == "/" { return "a whole disk" }
         // only inside your home folder, and never apps' settings in ~/Library (their caches and logs are fine)
         if !p.hasPrefix(home.path + "/") { return "outside your home folder" }
+        // AI tools' and editors' own folders hold settings, sign-in tokens and memory; their caches and old chats are items
+        for t in [".claude", ".codex", ".gemini", ".cursor", ".vscode", ".config", ".copilot", ".continue", ".aider"] where p == u(t).path || p.hasPrefix(u(t).path + "/") {
+            return "it holds an app's settings and sign-ins"
+        }
         let lib = u("Library").path
         if p.hasPrefix(lib + "/"), !["Caches", "Logs", "Developer"].contains(where: { p == lib + "/" + $0 || p.hasPrefix(lib + "/" + $0 + "/") }) {
             return "it holds an app's settings"
@@ -278,6 +294,19 @@ enum Engine {
         if Keep.isKept(p, Keep.all) { return "it's a protected folder" }
         if !existing && Custom.all.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) { return "it's already on the cleanup list" }
         return nil
+    }
+
+    // why something can't be added, as a short calm label (the rules themselves are in canAdd)
+    static func calm(_ why: String) -> String {
+        let w = why.lowercased()
+        if w.contains("space hunter") { return "Space Hunter's own folder" }
+        if w.contains("settings") || w.contains("sign-in") { return "App settings" }
+        if w.contains("macos or installed") { return "macOS or an installed app" }
+        if w.contains("own files") || w.contains("personal") || w.contains("home") { return "Your own files" }
+        if w.contains("protected") { return "Protected" }
+        if w.contains("already") { return "Already on your list" }
+        if w.contains("disk") { return "A whole disk" }
+        return "Can't be added"
     }
 
     // Which cleanup-list items already cover a folder (it's inside them) or sit inside it.
@@ -412,7 +441,7 @@ enum Theme {
     static let chassis = Color(hex: 0xD8D5CE), pane = Color(hex: 0xE4E1DA), selected = Color(hex: 0xE9E6E0), hover = Color(hex: 0xE0DDD6)
     static let screen = Color(hex: 0x121212), screenInk = Color(hex: 0xE9E6DF), screenMuted = Color(hex: 0x8A8A86)
     static let track = Color(hex: 0x3A3A38), used = Color(hex: 0x6F6C66)
-    static let ink = Color(hex: 0x1B1B1A), muted = Color(hex: 0x5F5C56), soft = Color(hex: 0x7D7972), line = Color(hex: 0xC3BFB6)
+    static let ink = Color(hex: 0x1B1B1A), muted = Color(hex: 0x5F5C56), soft = Color(hex: 0x605C56), line = Color(hex: 0xC3BFB6)
     static let orange = Color(hex: 0xFF5B1F), orangeDeep = Color(hex: 0xB5400F)
     static let key = Color(hex: 0xECEAE5), keyShadow = Color(hex: 0xA9A59C), disabled = Color(hex: 0x9A968F)
 
@@ -529,6 +558,8 @@ final class AppState: ObservableObject {
     @Published var log: [String] = []
     @Published var expected: Int64 = 1
     @Published var update: ReleaseInfo?
+    private var scanGen: [String: Int] = [:]   // per item: which measurement is the newest
+    @Published var results: [String] = []      // one plain line per item, shown when a clean is done
     private var counter: Counter?
     // a few items are measured at once (an SSD answers several folder reads in parallel)
     private let scanQ = DispatchQueue(label: "scan", attributes: .concurrent)
@@ -553,6 +584,8 @@ final class AppState: ObservableObject {
         let targets = cats.indices.filter { ids == nil || ids!.contains(cats[$0].id) }.sorted { cats[$0].level.rawValue < cats[$1].level.rawValue }
         for i in targets {
             cats[i].scanned = false
+            scanGen[cats[i].id, default: 0] += 1
+            let gen = scanGen[cats[i].id]!
             let snapshot = cats[i]
             scanning += 1
             scanQ.async { [scanSlots] in
@@ -560,7 +593,7 @@ final class AppState: ObservableObject {
                 let cnt = Counter()
                 Engine.process(snapshot, delete: false, toTrash: false, cnt: cnt)
                 DispatchQueue.main.async {
-                    if let j = self.cats.firstIndex(where: { $0.id == snapshot.id }) {
+                    if self.scanGen[snapshot.id] == gen, let j = self.cats.firstIndex(where: { $0.id == snapshot.id }) {
                         self.cats[j].files = cnt.files; self.cats[j].bytes = cnt.bytes; self.cats[j].scanned = true
                     }
                     self.scanning -= 1
@@ -614,18 +647,20 @@ final class AppState: ObservableObject {
             if self.cleanRunning { self.status = "Cleaning  ·  \(Engine.fmt(b)) freed" + (t > 0 ? " + \(Engine.fmt(t)) to the Trash" : "") + " so far.  You can keep looking around." }
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            var summary: [String] = []
+            var summary: [String] = [], lines: [String] = []
             for (i, c) in sel.enumerated() where !cnt.cancel {
                 DispatchQueue.main.async { self.currentItem = "ITEM \(i + 1) OF \(sel.count)  ·  \(c.name.uppercased())" }
                 lock.lock(); let b0 = cnt.bytes, t0 = cnt.trashedBytes, f0 = cnt.files; lock.unlock()
                 Engine.process(c, delete: true, toTrash: toTrash && !c.isSafe, cnt: cnt)   // Quick clean is always deleted for good
                 lock.lock(); let b1 = cnt.bytes, t1 = cnt.trashedBytes, f1 = cnt.files; lock.unlock()
                 summary.append("\(c.name): freed \(Engine.fmt(b1 - b0))" + (t1 > t0 ? " + \(Engine.fmt(t1 - t0)) to Trash" : "") + ", \(f1 - f0) files")
+                lines.append("\(c.name)   ·   " + (b1 > b0 || t1 == t0 ? "\(Engine.fmt(b1 - b0)) freed" : "") + (t1 > t0 ? (b1 > b0 ? " + " : "") + "\(Engine.fmt(t1 - t0)) to the Trash" : ""))
             }
             Engine.log((cnt.cancel ? "STOPPED " : "CLEANED ") + "\(Engine.fmt(cnt.bytes)), \(cnt.files) files; skipped \(cnt.skipped). " + summary.joined(separator: " | "))
             DispatchQueue.main.async {
                 timer.fire(); timer.invalidate()
                 self.log.append(contentsOf: summary.map { "— " + $0 })
+                self.results = lines
                 self.freed = cnt.bytes; self.trashed = cnt.trashedBytes; self.cleanedFiles = cnt.files; self.skipped = cnt.skipped
                 self.cleanStopped = cnt.cancel; self.cleanDone = true; self.cleanRunning = false
                 self.disk = Engine.disk(); self.scan()
@@ -663,8 +698,10 @@ enum Updater {
         req.setValue("SpaceHunter-updater", forHTTPHeaderField: "User-Agent")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: req) { data, _, _ in
+            // GitHub's API allows 60 checks an hour per internet address; on shared Wi-Fi (a campus, an office) that runs
+            // out, so fall back to the release page itself, which isn't limited that way
             guard let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = obj["tag_name"] as? String else { return done(nil) }
+                  let tag = obj["tag_name"] as? String else { return checkByPage(done) }
             let v = tag.hasPrefix("v") || tag.hasPrefix("V") ? String(tag.dropFirst()) : tag
             guard newer(v, than: current) else { return done(nil) }
             var zip: URL?, sig: URL?
@@ -674,6 +711,22 @@ enum Updater {
             }
             guard let zip, let sig else { return done(nil) }
             done(ReleaseInfo(version: v, page: obj["html_url"] as? String, zipURL: zip, sigURL: sig))
+        }.resume()
+    }
+
+    // The newest version from where github.com/.../releases/latest lands (e.g. .../releases/tag/v1.4.0); its files always
+    // sit at the standard download addresses.
+    static func checkByPage(_ done: @escaping (ReleaseInfo?) -> Void) {
+        var req = URLRequest(url: URL(string: "https://github.com/\(repo)/releases/latest")!, timeoutInterval: 10)
+        req.setValue("SpaceHunter-updater", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { _, resp, _ in
+            guard let final = resp?.url?.absoluteString, let r = final.range(of: "/tag/") else { return done(nil) }
+            let tag = String(final[r.upperBound...]).removingPercentEncoding ?? ""
+            let v = tag.hasPrefix("v") || tag.hasPrefix("V") ? String(tag.dropFirst()) : tag
+            guard newer(v, than: current),
+                  let zip = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/SpaceHunter-mac.zip"),
+                  let sig = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/SpaceHunter-mac.zip.sig") else { return done(nil) }
+            done(ReleaseInfo(version: v, page: final, zipURL: zip, sigURL: sig))
         }.resume()
     }
 
@@ -828,8 +881,12 @@ struct MainView: View {
             .animation(.easeOut(duration: 0.26), value: state.openID)
             if let u = state.update { UpdateBar(release: u) } else {
                 Rectangle().fill(Theme.line).frame(height: 1)
-                Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
+                HStack {
+                    Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
+                    Spacer()
+                    Text("Space Hunter \(Updater.current)").font(Theme.sans(10.5)).foregroundColor(Theme.soft)   // which version this is
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
             }
         }
         .background(Theme.chassis)
@@ -1353,7 +1410,7 @@ struct ProgressSheet: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(state.log.enumerated()), id: \.offset) { i, line in
+                        ForEach(Array((state.cleanDone && !state.results.isEmpty ? ["What was cleaned", ""] + state.results + ["", "Every file is listed in the log: press Open log."] : state.log).enumerated()), id: \.offset) { i, line in
                             Text(line).font(Theme.mono(11)).foregroundColor(Theme.ink).lineLimit(1).truncationMode(.middle).id(i)
                         }
                     }.padding(12)
@@ -1669,6 +1726,7 @@ struct FinderView: View {
         }
         .onExitCommand { withAnimation(.easeOut(duration: 0.12)) { listOpen = false } }
         .onAppear { if scanner.root == nil { place = VolumeChoice.all().first; start(Engine.home.path) } }
+        .onDisappear { scanner.cancel = true }   // closing the map stops its scan
         .onChange(of: scanner.root?.id) { _ in current = scanner.root }
     }
 
@@ -1912,7 +1970,7 @@ struct FolderRow: View {
         let refusal = Engine.canAdd(node.path)
         let sub: String = {
             if let name = cov.0 { return (cov.1 ? "Cleaned by: " : "Has cleanup items: ") + name }
-            if let r = refusal, !isAdded { return "Can't add: " + r }
+            if let r = refusal, !isAdded { return Engine.calm(r) + "  ·  \(node.files) file" + (node.files == 1 ? "" : "s") }
             return "\(node.files) file" + (node.files == 1 ? "" : "s")
         }()
         let frac = Double(node.size) / Double(parentSize)

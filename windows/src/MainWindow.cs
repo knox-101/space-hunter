@@ -715,6 +715,9 @@ namespace SpaceHunter
             drawer = new Drawer(listHost);
 
             status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(22, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
+            // which version this is, always visible (bottom right)
+            status.Controls.Add(new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = Theme.Pad(0, 0, 22, 0),
+                                            TextAlign = ContentAlignment.TopRight, ForeColor = Theme.Soft, Font = Theme.Sans(8.5f), BackColor = Theme.Chassis, UseMnemonic = false });
             divider = new Panel { Dock = DockStyle.Bottom, Height = Math.Max(1, Theme.D(1)), BackColor = Theme.Line };
             BuildUpdateBar();
             Controls.Add(body); Controls.Add(top); Controls.Add(updateBar); Controls.Add(divider); Controls.Add(status);
@@ -890,7 +893,7 @@ namespace SpaceHunter
             int start;
             lock (qLock)
             {
-                foreach (var c in items.OrderBy(x => x.Level)) if (!scanQueue.Contains(c)) { c.Scanned = false; scanQueue.Enqueue(c); }
+                foreach (var c in items.OrderBy(x => x.Level)) { c.ScanGen++; if (!scanQueue.Contains(c)) { c.Scanned = false; scanQueue.Enqueue(c); } }
                 start = Math.Min(ScanWorkers - workers, scanQueue.Count);
                 if (start <= 0) { list.Invalidate(); return; }
                 workers += start; workerRunning = true;
@@ -910,10 +913,12 @@ namespace SpaceHunter
                 while (true)
                 {
                     Category c;
-                    lock (qLock) { if (scanQueue.Count == 0) { workers--; break; } c = scanQueue.Dequeue(); }
+                    int gen;
+                    lock (qLock) { if (scanQueue.Count == 0) { workers--; break; } c = scanQueue.Dequeue(); gen = c.ScanGen; }
                     BeginInvoke((Action)(() => status.Text = "Scanning  " + c.Name + " ..."));
                     var cnt = new Counter();
                     try { Engine.Process(c, false, cnt); } catch { }   // a problem in one item never closes the app
+                    lock (qLock) { if (c.ScanGen != gen) continue; }   // a newer measurement of this item is on its way
                     c.Files = cnt.Files; c.Bytes = cnt.Bytes; c.Scanned = true;
                     BeginInvoke((Action)(() => { drawer.Panel.RefreshStats(c); Refresh_(); }));
                 }

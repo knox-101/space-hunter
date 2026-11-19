@@ -63,6 +63,14 @@ namespace SpaceHunter
             AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
             AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
             if (Has(args, "--version")) { Console.WriteLine("Space Hunter " + AppVersion.Text); return 0; }
+            string pretend = Arg(args, "--test-check");   // test hook: check for an update as if this were an older version
+            if (pretend != null)
+            {
+                Updater.Pretend = Version.Parse(pretend);
+                var r = Updater.Check();
+                Console.WriteLine(r == null ? "no update found" : "update found: " + r.Version + "  " + r.ExeUrl);
+                return 0;
+            }
             string verifyFile = Arg(args, "--test-verify");   // test hook: --test-verify <file> <sig> <public-key.xml>
             if (verifyFile != null)
             {

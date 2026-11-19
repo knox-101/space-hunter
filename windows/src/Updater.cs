@@ -29,7 +29,8 @@ namespace SpaceHunter
         const string ExeAsset = "SpaceHunter.exe", SigAsset = "SpaceHunter.exe.sig";
         static string Dir { get { return Path.Combine(Engine.AppDir, "update"); } }
 
-        public static Version Current { get { return Version.Parse(AppVersion.Text); } }
+        public static Version Pretend;   // test hook: behave as this version when checking
+        public static Version Current { get { return Pretend ?? Version.Parse(AppVersion.Text); } }
 
         // The public half of the release signing key, embedded at build time (null if this build has none).
         static string PublicKey()
@@ -58,10 +59,14 @@ namespace SpaceHunter
         // A newer release, or null (offline, no release yet, or already up to date). Never throws.
         public static Release Check()
         {
+            string json = null;
+            try { using (var w = Client()) json = w.DownloadString("https://api.github.com/repos/" + Repo + "/releases/latest"); }
+            catch { }
+            // GitHub's API allows 60 checks an hour per internet address; on shared Wi-Fi (a campus, an office) that runs
+            // out, so fall back to the release page itself, which isn't limited that way
+            if (json == null) return CheckByPage();
             try
             {
-                string json;
-                using (var w = Client()) json = w.DownloadString("https://api.github.com/repos/" + Repo + "/releases/latest");
                 var d = (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(json);
                 string tag = (d["tag_name"] ?? "").ToString();
                 Version v; if (!Version.TryParse(tag.TrimStart('v', 'V'), out v) || v <= Current) return null;
@@ -72,6 +77,25 @@ namespace SpaceHunter
                     if (name == ExeAsset) r.ExeUrl = url; else if (name == SigAsset) r.SigUrl = url;
                 }
                 return r.ExeUrl != null && r.SigUrl != null ? r : null;
+            }
+            catch { return null; }
+        }
+
+        // The newest version from where github.com/.../releases/latest points (e.g. .../releases/tag/v1.4.0); its files
+        // always sit at the standard download addresses.
+        static Release CheckByPage()
+        {
+            try
+            {
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("https://github.com/" + Repo + "/releases/latest");
+                req.AllowAutoRedirect = false; req.UserAgent = "SpaceHunter-updater"; req.Timeout = 10000;
+                string loc;
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse()) loc = resp.Headers["Location"] ?? "";
+                int i = loc.LastIndexOf("/tag/", StringComparison.Ordinal); if (i < 0) return null;
+                string tag = Uri.UnescapeDataString(loc.Substring(i + 5));
+                Version v; if (!Version.TryParse(tag.TrimStart('v', 'V'), out v) || v <= Current) return null;
+                string dl = "https://github.com/" + Repo + "/releases/download/" + tag + "/";
+                return new Release { Version = v, Tag = tag, Page = "https://github.com/" + Repo + "/releases/tag/" + tag, ExeUrl = dl + ExeAsset, SigUrl = dl + SigAsset };
             }
             catch { return null; }
         }

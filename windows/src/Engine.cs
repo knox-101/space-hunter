@@ -19,6 +19,7 @@ namespace SpaceHunter
     class Category
     {
         // a frozen copy for a running clean: changing ticks, ages or Reset in the window can't alter it half-way
+        public int ScanGen;   // bumped whenever a new measurement starts; an older one finishing late is ignored
         public Category Snapshot() { var c = (Category)MemberwiseClone(); c.Roots = new List<string>(Roots); return c; }
         public string Id, Name, Note;
         public Level Level;
@@ -232,6 +233,7 @@ namespace SpaceHunter
             if (c.Refused != null) return;   // the safety rules refuse it now
             var bin = delete && c.Recycle ? new RecycleBatch(cnt) : null;
             skipNow = Custom.Skip;   // what you unticked under "What's inside" (or inside a folder you added)
+            touchedNow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // folders this clean takes files out of
             foreach (var root in c.Roots)
             {
                 if (cnt.Cancel) break;
@@ -259,7 +261,7 @@ namespace SpaceHunter
                 {
                     Walk(rd, each, cnt, exclude);
                     if (bin != null) bin.Flush();
-                    if (delete) RemoveEmptyDirs(rd, true, exclude);
+                    if (delete) RemoveEmptyDirs(rd, true, exclude, cutoff);
                 }
                 else
                 {
@@ -273,7 +275,7 @@ namespace SpaceHunter
                         if (Newest(s, cnt) >= cutoff) continue;
                         Walk(s, f => Handle(f, DateTime.MaxValue, delete, cnt, bin), cnt, exclude);
                         if (bin != null) bin.Flush();
-                        if (delete) RemoveEmptyDirs(s, false, exclude);
+                        if (delete) RemoveEmptyDirs(s, false, exclude, DateTime.MaxValue);   // the whole old session folder goes
                     }
                 }
             }
@@ -312,17 +314,19 @@ namespace SpaceHunter
             }
         }
 
-        [ThreadStatic] static HashSet<string> skipNow;
+        [ThreadStatic] static HashSet<string> skipNow, touchedNow;
 
         static void Handle(FileInfo f, DateTime cutoff, bool delete, Counter cnt, RecycleBatch bin)
         {
             if (Custom.IsSkipped(f.FullName, skipNow)) return;
             DateTime t; long len;
-            try { t = f.LastWriteTime; len = f.Length; } catch { return; }
+            // the newer of "last changed" and "arrived here": photos copied in today are new, whatever their date
+            try { t = f.LastWriteTime; var made = f.CreationTime; if (made > t) t = made; len = f.Length; } catch { return; }
             if (Keep.IsKept(f.FullName)) return;   // on the keep list: never touched, never counted
             if (t >= cutoff) { if (delete) cnt.Skipped++; return; }
             if (!delete) { cnt.Files++; cnt.Bytes += len; return; }
             cnt.Current = f.FullName;
+            if (touchedNow != null) touchedNow.Add(f.DirectoryName ?? "");
             if (bin != null) { bin.Add(f.FullName, len); return; }
             bool ok = TryDelete(f);
             if (ok) { cnt.Files++; cnt.Bytes += len; } else cnt.Skipped++;
@@ -365,14 +369,26 @@ namespace SpaceHunter
             return n;
         }
 
-        static void RemoveEmptyDirs(DirectoryInfo d, bool isRoot, HashSet<string> exclude)
+        // Removes the empty folders this clean emptied, and empty folders older than the age rule. A folder a program made a
+        // moment ago (say, an installer's working folder in Temp) stays.
+        static void RemoveEmptyDirs(DirectoryInfo d, bool isRoot, HashSet<string> exclude, DateTime cutoff)
         {
             DirectoryInfo[] subs;
             try { subs = d.GetDirectories(); } catch { return; }
             foreach (var s in subs)
-                if ((s.Attributes & FileAttributes.ReparsePoint) == 0 && !exclude.Contains(s.Name) && !Keep.IsKept(s.FullName) && !Custom.IsSkipped(s.FullName, skipNow)) RemoveEmptyDirs(s, false, exclude);
-            if (!isRoot)
-                try { if (d.GetFileSystemInfos().Length == 0) { if ((d.Attributes & FileAttributes.ReadOnly) != 0) d.Attributes &= ~FileAttributes.ReadOnly; d.Delete(); } } catch { }
+                if ((s.Attributes & FileAttributes.ReparsePoint) == 0 && !exclude.Contains(s.Name) && !Keep.IsKept(s.FullName) && !Custom.IsSkipped(s.FullName, skipNow)) RemoveEmptyDirs(s, false, exclude, cutoff);
+            if (isRoot) return;
+            try
+            {
+                if (d.GetFileSystemInfos().Length != 0) return;
+                bool emptiedNow = touchedNow != null && touchedNow.Contains(d.FullName);
+                bool old = d.CreationTime < cutoff && d.LastWriteTime < cutoff;
+                if (!emptiedNow && !old) return;
+                if ((d.Attributes & FileAttributes.ReadOnly) != 0) d.Attributes &= ~FileAttributes.ReadOnly;
+                d.Delete();
+                if (touchedNow != null && d.Parent != null) touchedNow.Add(d.Parent.FullName);   // its parent may be empty now too
+            }
+            catch { }
         }
 
         public static string Fmt(long b)
@@ -466,6 +482,9 @@ namespace SpaceHunter
             var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
             foreach (var sys in new[] { W, pf, pf86, PD })
                 if (!string.IsNullOrEmpty(sys) && Under(p, Norm(sys))) { why = "part of Windows or installed programs"; return false; }
+            // AI tools' and editors' own folders hold settings, sign-in tokens and memory; their caches and old chats are items
+            foreach (var t in new[] { ".claude", ".codex", ".gemini", ".cursor", ".vscode", ".config", ".copilot", ".continue", ".aider" })
+                if (Under(p, Norm(Path.Combine(H, t)))) { why = "it holds an app's settings and sign-ins"; return false; }
             // other people's profiles (C:\Users\Alice, Public, Default) are never offered
             string users = Norm(Path.GetDirectoryName(H));
             if (Under(p, users) && !Under(p, Norm(H))) { why = "it's in another account's folders"; return false; }

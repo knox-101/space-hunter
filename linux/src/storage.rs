@@ -32,11 +32,12 @@ impl Node {
     fn new(name: String, path: PathBuf) -> Node { Node { name, path, size: 0, files: 0, own_size: 0, own_files: 0, denied: false, kids: Vec::new() } }
 }
 
-struct Ctx { dev: u64, files: AtomicU64, bytes: AtomicU64, seen: Mutex<HashSet<(u64, u64)>> }
+struct Ctx { dev: u64, files: AtomicU64, bytes: AtomicU64, seen: Mutex<HashSet<(u64, u64)>>, cancel: std::sync::atomic::AtomicBool }
 
 // Read one folder, then its sub-folders in parallel (an SSD answers several reads at once). Never crosses into
 // another disk, never follows links, and counts a hard-linked file once.
 fn fill(n: &mut Node, ctx: &Ctx) {
+    if ctx.cancel.load(Ordering::Relaxed) { return; }
     let rd = match fs::read_dir(&n.path) { Ok(r) => r, Err(_) => { n.denied = true; return; } };
     let (mut c, mut b) = (0u64, 0u64);
     for e in rd.flatten() {
@@ -296,7 +297,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
         let st = s.clone();
         s.win.connect_close_request(move |_| {
             st.pop.unparent();
-            if let Some(c) = st.ctx.borrow().as_ref() { c.files.store(0, Ordering::Relaxed); }
+            if let Some(c) = st.ctx.borrow().as_ref() { c.cancel.store(true, Ordering::Relaxed); }   // closing the map stops its scan
             if st.sm.borrow().changed { st.on_change.as_ref()(); }
             glib::Propagation::Proceed
         });
@@ -324,7 +325,7 @@ fn scan(s: &Rc<Storage>) {
         sm.place.clone()
     };
     let dev = fs::symlink_metadata(&place.path).map(|m| m.dev()).unwrap_or(0);
-    let ctx = Arc::new(Ctx { dev, files: AtomicU64::new(0), bytes: AtomicU64::new(0), seen: Mutex::new(HashSet::new()) });
+    let ctx = Arc::new(Ctx { dev, files: AtomicU64::new(0), bytes: AtomicU64::new(0), seen: Mutex::new(HashSet::new()), cancel: std::sync::atomic::AtomicBool::new(false) });
     *s.ctx.borrow_mut() = Some(ctx.clone());
     let target = if place.mount && place.total > 0 { place.total - place.free } else { 0 };
     s.place_lbl.set_text(&format!("{}  \u{00B7}  {} free", place.name, fmt(place.free)));
@@ -465,10 +466,22 @@ fn show(s: &Rc<Storage>) {
     }
 }
 
+// why something can't be added, as a short calm label (the rules themselves are in engine::can_add)
+fn calm(why: &str) -> &'static str {
+    let w = why.to_lowercase();
+    if w.contains("space hunter") { "Space Hunter's own folder" }
+    else if w.contains("installed tool") || w.contains("settings") || w.contains("sign-in") { "App settings or an installed tool" }
+    else if w.contains("own files") || w.contains("personal") { "Your own files" }
+    else if w.contains("outside your home") { "Outside your home folder" }
+    else if w.contains("protected") { "Protected" }
+    else if w.contains("already") { "Already on your list" }
+    else { "Can't be added" }
+}
+
 fn sub_for(cats: &[Cat], p: &Path, files: Option<u64>, denied: bool) -> String {
     let (cov, inside) = engine::coverage(p, cats);
     if let Some(c) = cov { return format!("{}{}", if inside { "Cleaned by: " } else { "Has cleanup items: " }, c); }
-    if !is_added(p) { if let Err(why) = engine::can_add(p, false) { return format!("Can't add: {}", why); } }
+    if !is_added(p) { if let Err(why) = engine::can_add(p, false) { return format!("{}{}", calm(&why), files.map(|f| format!("  \u{00B7}  {} file{}", f, if f == 1 { "" } else { "s" })).unwrap_or_default()); } }
     match files { Some(f) => format!("{} file{}{}", f, if f == 1 { "" } else { "s" }, if denied { "  \u{00B7}  partly unreadable" } else { "" }), None => String::new() }
 }
 

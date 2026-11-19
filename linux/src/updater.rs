@@ -37,8 +37,12 @@ fn get(url: &str, out: Option<&Path>) -> Option<Vec<u8>> {
 
 // The newest release, if it's newer than this copy. None when offline or up to date.
 pub fn check() -> Option<Release> {
-    let body = get(&format!("https://api.github.com/repos/{}/releases/latest", REPO), None)?;
-    let j: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    // GitHub's API allows 60 checks an hour per internet address; on shared Wi-Fi (a campus, an office) that runs out,
+    // so fall back to the release page itself, which isn't limited that way
+    let api = get(&format!("https://api.github.com/repos/{}/releases/latest", REPO), None)
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .filter(|j| j.get("tag_name").is_some());
+    let j = match api { Some(j) => j, None => return check_by_page() };
     let tag = j.get("tag_name")?.as_str()?.to_string();
     if parse(&tag)? <= parse(&current())? { return None; }
     let assets = j.get("assets")?.as_array()?;
@@ -49,6 +53,19 @@ pub fn check() -> Option<Release> {
         url: find(ASSET)?,
         sig_url: find(&format!("{}.sig", ASSET))?,
     })
+}
+
+// The newest version from where github.com/.../releases/latest points (e.g. .../releases/tag/v1.4.0); its files always
+// sit at the standard download addresses.
+fn check_by_page() -> Option<Release> {
+    let out = Command::new("curl").args(["-fsSI", "--max-time", "15", "-o", "/dev/null", "-w", "%{redirect_url}", "-H", "User-Agent: SpaceHunter"])
+        .arg(format!("https://github.com/{}/releases/latest", REPO)).output().ok()?;
+    let loc = String::from_utf8_lossy(&out.stdout).to_string();
+    let tag = loc.rsplit_once("/tag/")?.1.trim().to_string();
+    if parse(&tag)? <= parse(&current())? { return None; }
+    let dl = format!("https://github.com/{}/releases/download/{}/", REPO, tag);
+    Some(Release { version: tag.trim_start_matches('v').to_string(), page: Some(format!("https://github.com/{}/releases/tag/{}", REPO, tag)),
+                   url: format!("{}{}", dl, ASSET), sig_url: format!("{}{}.sig", dl, ASSET) })
 }
 
 pub fn verify(data: &[u8], sig: &[u8], key_der: &[u8]) -> bool {
