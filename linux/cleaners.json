@@ -1,0 +1,185 @@
+{
+  "about": "Space Hunter's cleanup items for Linux. Each item is one row in the app. See CONTRIBUTING.md for every field. Items with \"admin\": true clean system folders after one password prompt; their folders must also be on the built-in list in linux/src/engine.rs.",
+  "items": [
+    {
+      "id": "temp", "name": "Old temporary files", "level": "safe", "age": "1d",
+      "paths": ["/tmp", "/var/tmp"],
+      "short": "Apps recreate what they need",
+      "what": "Scratch files that apps, installers and AI agents such as Claude Code or Codex leave in /tmp and /var/tmp.",
+      "deletes": "Your own files there that haven't changed for a day. Other users' and the system's files are never touched.",
+      "safe": "Yes. Files changed within the last day are left alone, so running apps keep theirs.",
+      "after": "Apps recreate what they need. Many systems also clear /tmp on restart."
+    },
+    {
+      "id": "thumbs", "name": "Thumbnail cache", "level": "safe", "age": "0",
+      "paths": ["~/.cache/thumbnails"],
+      "short": "Previews redraw once",
+      "what": "Small preview pictures your file manager makes for photos, videos and documents.",
+      "deletes": "Every thumbnail in ~/.cache/thumbnails.",
+      "safe": "Yes.",
+      "after": "Folders with many pictures show previews a little slower the first time."
+    },
+    {
+      "id": "browsers", "name": "Browser caches", "level": "safe", "age": "0",
+      "paths": ["~/.cache/google-chrome", "~/.cache/chromium", "~/.cache/BraveSoftware", "~/.cache/vivaldi", "~/.cache/microsoft-edge", "~/.cache/opera", "~/.cache/mozilla/firefox/*/cache2", "~/snap/firefox/common/.cache/mozilla/firefox/*/cache2"],
+      "short": "Sites load slower once; logins kept",
+      "what": "Copies of web pages, images and scripts kept by Chrome, Chromium, Brave, Vivaldi, Edge, Opera and Firefox.",
+      "deletes": "The cache folders only. On Linux these live apart from your browser profile.",
+      "safe": "Yes. Passwords, cookies, history, bookmarks and extensions are NOT touched.",
+      "after": "Sites load a little slower once. Quit the browsers first for a full clean."
+    },
+    {
+      "id": "chat", "name": "Chat app caches", "level": "safe", "age": "0",
+      "paths": ["~/.config/discord/Cache", "~/.config/discord/Code Cache", "~/.config/discord/GPUCache", "~/.config/Slack/Cache", "~/.config/Slack/Code Cache", "~/.config/Slack/GPUCache", "~/.config/Slack/Service Worker/CacheStorage", "~/.config/teams-for-linux/Cache", "~/.config/teams-for-linux/Code Cache"],
+      "short": "Apps open slower once; messages kept",
+      "what": "Discord, Slack and Teams keep a web cache, like a browser.",
+      "deletes": "Their Cache, Code Cache and GPUCache folders.",
+      "safe": "Yes. Messages, sign-ins and settings are untouched.",
+      "after": "Quit the apps first for a full clean."
+    },
+    {
+      "id": "claudecache", "name": "AI app caches & logs (e.g. Claude)", "level": "safe", "age": "0",
+      "paths": ["~/.config/Claude*/Cache", "~/.config/Claude*/Code Cache", "~/.config/Claude*/GPUCache", "~/.config/Claude*/logs", "~/.config/Claude*/Crashpad/completed"],
+      "short": "Apps open slower once; chats kept",
+      "what": "AI desktop apps such as Claude keep a web cache, a GPU cache and logs, like a browser does.",
+      "deletes": "Those folders only. Not your chats, agent sessions or settings.",
+      "safe": "Yes.",
+      "after": "Quit the app first for a full clean."
+    },
+    {
+      "id": "vscode", "name": "Code editor caches & logs", "level": "safe", "age": "0",
+      "paths": ["~/.config/Code/Cache", "~/.config/Code/CachedData", "~/.config/Code/Code Cache", "~/.config/Code/GPUCache", "~/.config/Code/logs", "~/.config/Cursor/Cache", "~/.config/Cursor/logs", "~/.config/Windsurf/Cache", "~/.config/Windsurf/logs", "~/.cache/JetBrains"],
+      "short": "Rebuilt on next start",
+      "what": "VS Code, Cursor, Windsurf and JetBrains IDEs keep caches, compiled code and logs.",
+      "deletes": "Cache, CachedData, Code Cache, GPUCache and logs; JetBrains' cache folder.",
+      "safe": "Yes. Extensions, settings and projects are untouched.",
+      "after": "Rebuilt on the next start. A JetBrains IDE re-indexes your project once, which takes a few minutes."
+    },
+    {
+      "id": "devcaches", "name": "npm, Yarn, pip and uv download caches", "level": "safe", "age": "0",
+      "paths": ["~/.npm/_cacache", "~/.cache/yarn", "~/.cache/pip", "~/.cache/uv", "~/.cache/pnpm"],
+      "short": "Packages re-download on next install",
+      "what": "Download caches for JavaScript and Python packages that you or an AI agent installed.",
+      "deletes": "Those cache folders. Same as 'npm cache clean --force', 'pip cache purge' and similar.",
+      "safe": "Yes. Projects' node_modules and virtual environments are untouched.",
+      "after": "The next install downloads again and needs internet."
+    },
+    {
+      "id": "gobuild", "name": "Go build cache", "level": "safe", "age": "0",
+      "paths": ["~/.cache/go-build"],
+      "short": "The next build compiles from scratch",
+      "what": "Compiled pieces Go keeps to make builds faster.",
+      "deletes": "~/.cache/go-build. Same as 'go clean -cache'.",
+      "safe": "Yes.",
+      "after": "The next build of each project takes longer."
+    },
+    {
+      "id": "apt", "name": "Downloaded system updates (apt)", "level": "safe", "age": "0", "admin": true,
+      "paths": ["/var/cache/apt/archives"], "extensions": ["deb"], "topLevelOnly": true,
+      "short": "Already installed; needs your password",
+      "what": "Ubuntu, Debian and Mint keep a copy of every update package after installing it.",
+      "deletes": "The .deb files in /var/cache/apt/archives. Same as 'sudo apt clean'.",
+      "safe": "Yes. The updates stay installed.",
+      "after": "Nothing changes. Linux asks for your password once to clean system folders."
+    },
+    {
+      "id": "dnf", "name": "Downloaded system updates (dnf, zypper)", "level": "safe", "age": "0", "admin": true,
+      "paths": ["/var/cache/dnf", "/var/cache/libdnf5", "/var/cache/zypp/packages"],
+      "short": "Already installed; needs your password",
+      "what": "Fedora and openSUSE keep downloaded packages and package lists.",
+      "deletes": "Everything in those cache folders. Same as 'sudo dnf clean all'.",
+      "safe": "Yes. The updates stay installed.",
+      "after": "The next update downloads the package lists again."
+    },
+    {
+      "id": "coredumps", "name": "Crash dumps", "level": "safe", "age": "0", "admin": true,
+      "paths": ["/var/lib/systemd/coredump", "/var/crash"],
+      "short": "Old crash reports; needs your password",
+      "what": "Snapshots of apps that crashed, kept so developers can look at them.",
+      "deletes": "Every crash dump in those folders.",
+      "safe": "Yes; you lose the old reports, which matter only to someone fixing that crash.",
+      "after": "Nothing changes."
+    },
+    {
+      "id": "trash", "name": "Trash", "level": "review", "kind": "trash", "age": "0",
+      "paths": ["~/.local/share/Trash/files", "~/.local/share/Trash/info", "~/.local/share/Trash/expunged"],
+      "short": "Nothing can be restored",
+      "what": "Files you moved to the Trash from your file manager.",
+      "deletes": "Everything in your Trash.",
+      "safe": "Only if you're sure; this is permanent.",
+      "after": "Nothing can be restored."
+    },
+    {
+      "id": "journal", "name": "System logs older than 2 weeks", "level": "review", "kind": "journal", "age": "14d", "admin": true,
+      "paths": ["/var/log/journal"],
+      "short": "Older logs go; needs your password",
+      "what": "The system journal: messages from Linux and its services, kept for troubleshooting.",
+      "deletes": "Log entries older than 2 weeks. Same as 'sudo journalctl --vacuum-time=14d'.",
+      "safe": "Yes, unless you're investigating a problem from more than 2 weeks ago.",
+      "after": "Recent logs stay."
+    },
+    {
+      "id": "pacman", "name": "Old package versions (pacman)", "level": "review", "age": "0", "admin": true,
+      "paths": ["/var/cache/pacman/pkg"],
+      "short": "No rolling back; needs your password",
+      "what": "Arch and Manjaro keep every version of every package they've installed.",
+      "deletes": "Everything in /var/cache/pacman/pkg. Same as 'sudo pacman -Scc'.",
+      "safe": "Yes, but you can no longer go back to an older version of a package without downloading it.",
+      "after": "Downgrading a package needs internet."
+    },
+    {
+      "id": "hf", "name": "Downloaded AI models", "level": "review", "age": "0",
+      "paths": ["~/.cache/huggingface", "~/.cache/torch", "~/.ollama/models"],
+      "short": "Models re-download when used",
+      "what": "AI models and datasets downloaded by Python tools (Hugging Face, PyTorch) and Ollama. Some are many GB each.",
+      "deletes": "Everything in those model folders.",
+      "safe": "Only if you don't need them offline.",
+      "after": "Scripts and Ollama download them again."
+    },
+    {
+      "id": "codex", "name": "AI tool runtimes (e.g. Codex)", "level": "review", "age": "0",
+      "paths": ["~/.cache/codex-runtimes", "~/.cache/ms-playwright"],
+      "short": "Tools re-download when needed",
+      "what": "Runtimes and browsers that command-line AI tools such as Codex and Playwright download for themselves.",
+      "deletes": "Those folders.",
+      "safe": "Yes.",
+      "after": "The tool's next run is slower."
+    },
+    {
+      "id": "cargo", "name": "Rust (Cargo) downloads", "level": "review", "age": "0",
+      "paths": ["~/.cargo/registry/cache", "~/.cargo/registry/src", "~/.cargo/git/checkouts"],
+      "short": "Next build re-downloads crates",
+      "what": "Cargo keeps every crate it downloaded, both packed and unpacked.",
+      "deletes": "The registry cache, unpacked sources and git checkouts. Installed tools in ~/.cargo/bin are kept.",
+      "safe": "Yes.",
+      "after": "The next build downloads crates again and needs internet."
+    },
+    {
+      "id": "jvm", "name": "Gradle and Maven downloads", "level": "review", "age": "0",
+      "paths": ["~/.gradle/caches", "~/.m2/repository"],
+      "short": "Next build re-downloads libraries",
+      "what": "Java and Android build tools keep every library they downloaded.",
+      "deletes": "Gradle's caches and Maven's repository.",
+      "safe": "Yes.",
+      "after": "The next build downloads libraries again and needs internet."
+    },
+    {
+      "id": "transcripts", "name": "Old AI agent chat history (Claude Code, Codex)", "level": "caution", "age": "14d",
+      "paths": ["~/.claude/projects", "~/.claude/file-history", "~/.codex/sessions"], "exclude": ["memory"],
+      "short": "Those chats can't be resumed; memory kept",
+      "what": "AI coding agents such as Claude Code (~/.claude) and Codex (~/.codex) save every conversation, sub-tasks and big tool outputs, plus checkpoints for undo.",
+      "deletes": "Conversation and checkpoint files not changed within the age you set. Agents' memory folders (such as Claude's memory) are always skipped.",
+      "safe": "Only for conversations you'll never reopen. Recent ones are protected by the age rule.",
+      "after": "Those conversations can't be resumed or rewound."
+    },
+    {
+      "id": "downloads", "name": "Old installers & archives in Downloads", "level": "caution", "age": "30d",
+      "paths": ["$XDG_DOWNLOAD_DIR"], "extensions": ["deb", "rpm", "appimage", "zip", "7z", "rar", "iso", "tar", "gz", "tgz", "xz", "zst", "bz2"], "topLevelOnly": true,
+      "short": "Installers and archives only, top level",
+      "what": "Packages, AppImages, disk images and archives that pile up in Downloads after you've installed or unpacked them.",
+      "deletes": "Only .deb, .rpm, .AppImage, .iso, .zip, .tar.gz and similar files sitting directly in Downloads, untouched for the age you set (30 days by default). Sub-folders and every other file type are never touched.",
+      "safe": "Usually. Check the folder first if you keep installers you can't download again.",
+      "after": "You'd need to download those installers again."
+    }
+  ]
+}

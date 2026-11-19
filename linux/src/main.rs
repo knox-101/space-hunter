@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Space Hunter (Linux) - phase 1: the window, the look, the fonts and the disk numbers. Scanning and cleaning come next.
 
+mod engine;
+
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use std::ffi::CString;
@@ -53,15 +55,7 @@ fn disk(path: &str) -> (u64, u64) {
     (s.f_bavail as u64 * unit, s.f_blocks as u64 * unit)
 }
 
-fn fmt(b: u64) -> String {
-    let b = b as f64;
-    let (k, m, g, t) = (1024.0, 1024.0 * 1024.0, 1024.0 * 1024.0 * 1024.0, 1024.0 * 1024.0 * 1024.0 * 1024.0);
-    if b >= t { format!("{:.1} TB", b / t) }
-    else if b >= g { format!("{:.1} GB", b / g) }
-    else if b >= m { format!("{:.0} MB", b / m) }
-    else if b >= k { format!("{:.0} KB", b / k) }
-    else { "0 MB".to_string() }
-}
+use engine::fmt;
 
 const CSS: &str = r#"
 window, .chassis { background: #D8D5CE; }
@@ -269,6 +263,41 @@ fn main() -> glib::ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version") {
         println!("Space Hunter {}", VERSION.trim());
+        return glib::ExitCode::SUCCESS;
+    }
+    // the password helper (started by pkexec as root): cleans the named system items, then exits
+    if let Some(i) = args.iter().position(|a| a == "--clean-system") {
+        return glib::ExitCode::from(engine::clean_system(args.get(i + 1).map(|s| s.as_str()).unwrap_or("")) as u8);
+    }
+    // test hook: list every item found on this PC with its size
+    if args.iter().any(|a| a == "--report") {
+        for c in engine::build() {
+            let mut cnt = engine::Counter::default();
+            engine::process(&c, false, false, &mut cnt);
+            println!("{:<12} {:<8} {:>10} {:>8} files  {}", c.id, format!("{:?}", c.level), fmt(cnt.bytes), cnt.files,
+                     c.roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", "));
+        }
+        return glib::ExitCode::SUCCESS;
+    }
+    // test hook: measure, then clean, one folder as a test item (files older than a day); 3 = the folder was refused
+    if let Some(i) = args.iter().position(|a| a == "--test-engine") {
+        let dir = std::path::PathBuf::from(args.get(i + 1).cloned().unwrap_or_default());
+        let sub = args.iter().any(|a| a == "--subfolders");
+        if !engine::is_safe_root(&dir, false, false) { println!("REFUSED {}", dir.display()); return glib::ExitCode::from(3); }
+        let c = engine::Cat {
+            id: "test".into(), name: "Test folder".into(), level: engine::Level::Safe,
+            kind: if sub { engine::Kind::Subfolders } else { engine::Kind::Contents }, admin: false,
+            roots: vec![dir], exclude: ["memory".to_string()].into_iter().collect(), extensions: None, top_level_only: false,
+            is_custom: false, default_age: engine::DAY, age_minutes: engine::DAY, checked: true, files: 0, bytes: 0,
+            scanned: false, blocked: false, short: String::new(), what: String::new(), deletes: String::new(),
+            safe_text: String::new(), after: String::new(),
+        };
+        let mut m = engine::Counter::default();
+        engine::process(&c, false, false, &mut m);
+        println!("MEASURE {} files {} bytes", m.files, m.bytes);
+        let mut k = engine::Counter::default();
+        engine::process(&c, true, args.iter().any(|a| a == "--trash"), &mut k);
+        println!("CLEAN {} files {} bytes {} trashed {} skipped", k.files, k.bytes, k.trashed, k.skipped);
         return glib::ExitCode::SUCCESS;
     }
     // test hook: close by itself after N seconds (for screenshots on the build machine)
