@@ -136,7 +136,7 @@ fn squarify(items: &mut [Block], w: f64, h: f64) {
     }
 }
 
-struct Sm { root: Option<Node>, path: Vec<usize>, scanning: bool, place: Place, cats: Vec<Cat>, blocks: Vec<Block>, hover: Option<usize>, sweep: u32, changed: bool, drill: usize }
+struct Sm { root: Option<Node>, path: Vec<usize>, scanning: bool, place: Place, cats: Vec<Cat>, blocks: Vec<Block>, hover: Option<usize>, spin: std::time::Instant, changed: bool, drill: usize }
 
 pub struct Storage {
     sm: RefCell<Sm>,
@@ -221,7 +221,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
     let ps = places();
     let place = match &start { Some(p) => ps.iter().find(|x| &x.path == p).cloned().unwrap_or(Place { path: p.clone(), name: home_short(p), free: 0, total: 0, mount: false }), None => ps[0].clone() };
     let s = Rc::new(Storage {
-        sm: RefCell::new(Sm { root: None, path: Vec::new(), scanning: false, place, cats, blocks: Vec::new(), hover: None, sweep: 0, changed: false, drill }),
+        sm: RefCell::new(Sm { root: None, path: Vec::new(), scanning: false, place, cats, blocks: Vec::new(), hover: None, spin: std::time::Instant::now(), changed: false, drill }),
         win, head, hero, unit, path_lbl, sub, ring, pbar, pfrac: Cell::new(0.0), place_lbl, place_btn, pop, pop_box,
         back, crumbs, add_here, chart, caption, rows, hint, ctx: RefCell::new(None), on_change,
     });
@@ -234,7 +234,8 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
             let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, 24.0);
             cr.set_line_width(5.0);
             cr.set_source_rgb(0.227, 0.227, 0.220); cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI); let _ = cr.stroke();
-            let a = (sm.sweep as f64 * 0.32) % (2.0 * std::f64::consts::PI);
+            // motion follows the clock, not a count of frames, so a late frame never jumps
+            let a = (sm.spin.elapsed().as_secs_f64() * 300f64.to_radians()) % (2.0 * std::f64::consts::PI);
             cr.set_line_cap(gtk::cairo::LineCap::Round);
             cr.set_source_rgb(1.0, 0.357, 0.122); cr.arc(cx, cy, r, a, a + 1.9); let _ = cr.stroke();
         });
@@ -245,7 +246,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
             cr.set_source_rgb(1.0, 0.357, 0.122);
             let f = st.pfrac.get();
             if f >= 0.0 { cr.rectangle(0.0, 0.0, w * f, h); }
-            else { let seg = w * 0.22; let x = ((st.sm.borrow().sweep as f64 * 9.0) % (w + seg)) - seg; cr.rectangle(x.max(0.0), 0.0, seg.min(w - x.max(0.0)), h); }   // total unknown: a moving block
+            else { let seg = w * 0.22; let x = ((st.sm.borrow().spin.elapsed().as_secs_f64() * 150.0) % (w + seg)) - seg; cr.rectangle(x.max(0.0), 0.0, seg.min(w - x.max(0.0)), h); }   // total unknown: a moving block
             let _ = cr.fill();
         });
         let st = s.clone();
@@ -341,16 +342,24 @@ fn scan(s: &Rc<Storage>) {
         total(&mut root);
         let _ = tx.send(root);
     });
+    // the ring and the moving block are redrawn every frame while the scan runs (the numbers below change less often);
+    // it stops when the scan ends or the map closes
+    s.sm.borrow_mut().spin = std::time::Instant::now();
+    let weak = Rc::downgrade(s);
+    s.ring.add_tick_callback(move |_, _| {
+        let st = match weak.upgrade() { Some(st) => st, None => return glib::ControlFlow::Break };
+        if !st.sm.borrow().scanning || !st.win.is_visible() { return glib::ControlFlow::Break; }
+        st.ring.queue_draw(); st.pbar.queue_draw();
+        glib::ControlFlow::Continue
+    });
     let st = s.clone();
     glib::timeout_add_local(Duration::from_millis(60), move || {
-        st.sm.borrow_mut().sweep += 1;
         let files = ctx.files.load(Ordering::Relaxed);
         let bytes = ctx.bytes.load(Ordering::Relaxed);
         st.head.set_text(&format!("Storage map  \u{00B7}  measuring {}  \u{00B7}  counting files", home_short(&st.sm.borrow().place.path)));
         st.hero.set_text(&format!("{} FILES", files)); st.unit.set_text("");
         st.pfrac.set(if target > 0 { (bytes as f64 / target as f64).min(1.0) } else { -1.0 });
         st.sub.set_text(&if target > 0 { format!("Measured {} of {} used  \u{00B7}  {}%", fmt(bytes), fmt(target), (bytes as f64 * 100.0 / target as f64).min(100.0) as u32) } else { format!("Measured {} so far", fmt(bytes)) });
-        st.ring.queue_draw(); st.pbar.queue_draw();
         if let Ok(root) = rx.try_recv() {
             let drill = {
                 let mut sm = st.sm.borrow_mut();

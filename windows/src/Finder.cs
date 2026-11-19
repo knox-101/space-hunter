@@ -27,7 +27,8 @@ namespace SpaceHunter
         readonly Key upKey = new Key("up one level"), openKey = new Key("open in explorer");
         readonly Label hint = new Label();
         FolderNode cur; string drive; bool scanning; long target; int sweep;   // target: the drive's used bytes (0 = unknown)
-        readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 60 };
+        readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 15 };
+        readonly System.Diagnostics.Stopwatch spin = System.Diagnostics.Stopwatch.StartNew();   // motion follows time, so a late frame never jumps
         public string SnapshotPath; readonly string startPath;
         public bool Added;
         Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fPath = Theme.CSans(11f), fSub = Theme.CSans(9.5f);
@@ -161,7 +162,7 @@ namespace SpaceHunter
                 float rr = 26, cx = W - pad - rr - 6, cy = H / 2 - 4;
                 using (var pen = new Pen(Theme.DisplayTrack, 5f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
                 using (var pen = new Pen(Theme.Orange, 5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                    g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (sweep * 18) % 360, 110);
+                    g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (float)(spin.Elapsed.TotalSeconds * 300 % 360), 110);
             }
             if (cur != null)
             {
@@ -191,7 +192,7 @@ namespace SpaceHunter
                 }
                 else
                 {
-                    float seg = bw * 0.22f, x = bx + ((sweep * 9) % (int)(bw + seg)) - seg;   // unknown total: a moving block
+                    float seg = bw * 0.22f, x = bx + (float)(spin.Elapsed.TotalSeconds * 150 % (bw + seg)) - seg;   // unknown total: a moving block
                     var st = g.Save(); g.SetClip(new RectangleF(bx, by, bw, bh));
                     using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, x, by, seg, bh);
                     g.Restore(st);

@@ -56,6 +56,9 @@ pub struct Ui {
     rows: gtk::Box,
     panel_rev: gtk::Revealer,
     panel: gtk::Box,
+    psw: gtk::ScrolledWindow,                 // the item panel's scroller
+    panel_for: RefCell<Option<String>>,       // which item the panel was last filled for (the same one keeps its place)
+    scroll_gen: Cell<u64>,                    // the newest "stay where you were"; older ones stop
     status: gtk::Label,
     prog_win: RefCell<Option<gtk::Window>>,
     opts: Opts,
@@ -338,7 +341,8 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let ui = Rc::new(Ui {
         st: RefCell::new(St { cats: Vec::new(), tier: Level::Safe, open: None, pending: 0, cleaning: false, first_scan_done: false }),
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
-        legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel, status,
+        legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel,
+        psw: psw.clone(), panel_for: RefCell::new(None), scroll_gen: Cell::new(0), status,
         prog_win: RefCell::new(None), opts,
         bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
         more: Cell::new(false),
@@ -627,32 +631,40 @@ fn rebuild_rows(u: &Rc<Ui>) {
     }
 }
 
+// what you picked, against the whole item: files and space
+fn pick_chip(c: &Cat) -> String {
+    let pb = match c.pick_bytes { Some(b) => b, None => return "measuring your picks\u{2026}".to_string() };
+    let files = if c.pick_files <= c.files { format!("{} of {} files", c.pick_files, c.files) }
+                else { format!("{} file{}", c.pick_files, if c.pick_files == 1 { "" } else { "s" }) };
+    let size = if pb <= c.bytes { format!("{} of {}", fmt(pb), fmt(c.bytes)) } else { fmt(pb) };
+    format!("{}  \u{00B7}  {}", files, size)
+}
+
 // One item: a tick box, its name and what happens, its size; the rest of the row opens its panel.
 fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     let h = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     h.add_css_class("rowline");
     let chk = gtk::CheckButton::new();
-    chk.set_active(c.checked && !empty);   // nothing to clean: an empty grey box, as on Windows and Mac
-    chk.set_inconsistent(c.partial() && !empty);   // some of it, picked by hand: orange with a dash
+    // nothing to clean: an empty grey box, as on Windows and Mac; files picked by hand: ticked, like the whole item
+    chk.set_active((c.checked || c.partial()) && !empty);
     chk.set_sensitive(!empty && c.refused().is_none());
     chk.set_valign(gtk::Align::Center);
     chk.set_margin_start(4);
     let id = c.id.clone();
     let uu = u.clone();
-    // some -> all (the picks go), none -> all, all -> none
+    // picked -> none (the picks go), none -> all, all -> none
     chk.connect_toggled(move |b| {
         let was_partial = {
             let mut st = uu.st.borrow_mut();
             let mut was = false;
             if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) {
                 was = c.partial();
-                c.checked = b.is_active();
+                c.checked = !was && b.is_active();
                 c.picks.clear(); c.pick_bytes = None;
             }
             engine::settings::save(&st.cats);
             was
         };
-        b.set_inconsistent(false);
         refresh_top(&uu);
         // the row's lines and the open panel follow once the click is over (the box isn't replaced while it's clicked)
         let open_here = uu.st.borrow().open.as_deref() == Some(id.as_str());
@@ -681,21 +693,27 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
         let age = if c.age_choice() {
             if c.age_minutes > 0 { format!("  \u{00B7}  older than {}", engine::fmt_age(c.age_minutes)) } else { "  \u{00B7}  everything".to_string() }
         } else if matches!(c.kind, Kind::Contents | Kind::Subfolders) { "  \u{00B7}  all of it".to_string() } else { String::new() };
-        let (sub, class) = match c.refused() {
-            Some(why) => (format!("Not cleaned: {}. Remove it from the list", why), "row-sub"),
-            None if partial => {   // "25 of 312 files picked  ·  just these, this clean"
-                let n = match c.pick_bytes {
-                    None => "Measuring your picks".to_string(),
-                    Some(_) if c.pick_files <= c.files => format!("{} of {} files picked", c.pick_files, c.files),
-                    Some(_) => format!("{} files picked", c.pick_files),
-                };
-                (format!("{}  \u{00B7}  just these, this clean", n), "row-sub-pick")
+        if partial {   // the usual description, then a small chip with what you picked; the chip always fits whole
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            if !c.short.is_empty() {
+                let s = label(&c.short, "row-sub");
+                s.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                s.set_valign(gtk::Align::Center);
+                line.append(&s);
             }
-            None => (format!("{}{}", c.short, age), "row-sub"),
-        };
-        let s = label(&sub, class);
-        s.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        names.append(&s);
+            let chip = label(&pick_chip(c), "pick-chip");
+            chip.set_valign(gtk::Align::Center);
+            line.append(&chip);
+            names.append(&line);
+        } else {
+            let sub = match c.refused() {
+                Some(why) => format!("Not cleaned: {}. Remove it from the list", why),
+                None => format!("{}{}", c.short, age),
+            };
+            let s = label(&sub, "row-sub");
+            s.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            names.append(&s);
+        }
     }
     inner.append(&names);
     let sizes = gtk::Box::new(gtk::Orientation::Vertical, 3);
@@ -706,9 +724,7 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     size.set_xalign(1.0);
     sizes.append(&size);
     if !empty {
-        let second = if partial {
-            if c.pick_bytes.unwrap_or(0) <= c.bytes { format!("of {}", fmt(c.bytes)) } else { "picked".to_string() }
-        } else { format!("{} file{}", c.files, if c.files == 1 { "" } else { "s" }) };
+        let second = if partial { "picked".to_string() } else { format!("{} file{}", c.files, if c.files == 1 { "" } else { "s" }) };
         let f = label(&second, "row-sub");
         f.set_xalign(1.0);
         sizes.append(&f);
@@ -736,6 +752,7 @@ fn open_panel(u: &Rc<Ui>, id: &str) {
 
 fn close_panel(u: &Rc<Ui>) {
     u.st.borrow_mut().open = None;
+    *u.panel_for.borrow_mut() = None;   // opened again later, it starts at the top
     u.panel_rev.set_reveal_child(false);
     rebuild_rows(u);
 }
@@ -786,7 +803,37 @@ fn remeasure(u: &Rc<Ui>, id: &str) {
 
 // The item panel, top to bottom: its name and size, a short summary, what to clean, the files; the full notes (behind
 // "More about this item") and the Trash's folders after.
+// The panel is built again whenever its item changes (a tick, an age, a keep, a new measurement). The same item keeps
+// its place: the scroll position is put back once the new contents are laid out (removing the clicked box would
+// otherwise let the scroller fall back to the top). Another item starts at the top.
 fn fill_panel(u: &Rc<Ui>) {
+    let now = u.st.borrow().open.clone();
+    let same = now.is_some() && u.panel_rev.reveals_child() && *u.panel_for.borrow() == now;   // hidden: opening afresh
+    let adj = u.psw.vadjustment();
+    let y = if same { adj.value() } else { 0.0 };
+    *u.panel_for.borrow_mut() = now;
+    fill_panel_now(u);
+    hold_scroll(u, y);
+}
+
+// Put the panel's scroll back to y now and for the next few frames (until the new contents are laid out and any
+// scroll-to-focus has settled). A newer call takes over from an older one.
+fn hold_scroll(u: &Rc<Ui>, y: f64) {
+    let adj = u.psw.vadjustment();
+    adj.set_value(y);
+    let gen = u.scroll_gen.get() + 1;
+    u.scroll_gen.set(gen);
+    let start = std::time::Instant::now();
+    let uu = Rc::downgrade(u);
+    u.psw.add_tick_callback(move |_, _| {
+        let u = match uu.upgrade() { Some(u) => u, None => return glib::ControlFlow::Break };
+        if u.scroll_gen.get() != gen { return glib::ControlFlow::Break; }
+        if (adj.value() - y).abs() > 0.5 { adj.set_value(y); }
+        if start.elapsed() < Duration::from_millis(300) { glib::ControlFlow::Continue } else { glib::ControlFlow::Break }
+    });
+}
+
+fn fill_panel_now(u: &Rc<Ui>) {
     clear(&u.panel);
     let c = {
         let st = u.st.borrow();
@@ -1346,7 +1393,8 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     let pbar = gtk::DrawingArea::new(); pbar.set_content_height(12);
     let frac = Rc::new(Cell::new(0.0f64));
     let fin = Rc::new(Cell::new(-1.0f64));   // the finish, 0..1 (below 0: not finishing)
-    let (f2, fin2) = (frac.clone(), fin.clone());
+    let shown = Rc::new(Cell::new(-1.0f64)); // what the bar shows: it glides toward frac (below 0: nothing yet)
+    let (f2, fin2) = (shown.clone(), fin.clone());
     pbar.set_content_height(28);
     pbar.set_draw_func(move |_, cr, w, _| {
         let (w, h) = (w as f64, 12.0);
@@ -1364,7 +1412,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 let _ = cr.fill();
             }
         } else {
-            cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w * f2.get(), h); let _ = cr.fill();
+            cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w * f2.get().max(0.0), h); let _ = cr.fill();
         }
     });
     let totals = Rc::new(Cell::new((0u64, 0u64, 0u64, 0u64)));
@@ -1393,6 +1441,22 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
         if d2.get() { if let Some(w) = uu.prog_win.borrow_mut().take() { w.close(); } return; }
         c2.store(true, Ordering::Relaxed); b.set_label("STOPPING"); b.set_sensitive(false);
     });
+    {   // while cleaning, the bar glides toward the real share every frame (time-based, so a late frame never jumps);
+        // it goes straight down if the share ever drops, and stops when the clean is done or the window is gone
+        let (frac, shown, done) = (frac.clone(), shown.clone(), done.clone());
+        let last = Cell::new(std::time::Instant::now());
+        pbar.add_tick_callback(move |bar, _| {
+            let target = frac.get();
+            if done.get() { shown.set(target); bar.queue_draw(); return glib::ControlFlow::Break; }
+            let now = std::time::Instant::now();
+            let dt = now.duration_since(last.get()).as_secs_f64();
+            last.set(now);
+            let s = shown.get();
+            shown.set(if s < 0.0 || target < s { target } else { s + (target - s) * (1.0 - (-dt / 0.12).exp()) });
+            bar.queue_draw();
+            glib::ControlFlow::Continue
+        });
+    }
     let d3 = done.clone();
     w.connect_close_request(move |w| {
         if d3.get() { glib::Propagation::Proceed } else { w.minimize(); glib::Propagation::Stop }   // closing mid-clean just tucks it away

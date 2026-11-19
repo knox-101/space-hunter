@@ -3,6 +3,16 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.5.1 (2026-11-20)
+
+- **The item panel stays where you are.** Ticking a file or folder in What's inside, changing the age or keeping a
+  folder no longer scrolls the panel back to the top or takes the file list back to the item's top folder.
+- **Picked files tick the item.** When you tick files inside an unticked item, the item now shows a normal tick,
+  keeps its description, and adds a small note with what you picked against the whole item, for example
+  "25 of 312 files · 40 MB of 1.2 GB". Clicking its box clears your picks.
+- **Smoother loading animations.** The Storage map's turning ring and moving bar, and the cleaning window's progress
+  bar, are drawn about 60 times a second and move with the clock, so they no longer jitter.
+
 ## 1.5.0 (2026-11-19)
 
 - **Pick exactly what goes.** Open an unticked item and tick just the files or folders you want cleaned. The item

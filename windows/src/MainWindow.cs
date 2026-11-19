@@ -292,10 +292,22 @@ namespace SpaceHunter
             if (SelectionChanged != null) SelectionChanged(this, EventArgs.Empty);
         }
 
+        readonly Font fChip = Theme.CSemi(8.25f);
+        // what you picked, against the whole item: files and space
+        static string PickChip(Category c)
+        {
+            if (c.PickBytes < 0) return "measuring your picks…";
+            string files = c.PickFiles <= c.Files ? c.PickFiles.ToString("N0") + " of " + c.Files.ToString("N0") + " files"
+                                                  : c.PickFiles.ToString("N0") + (c.PickFiles == 1 ? " file" : " files");
+            string size = c.PickBytes <= c.Bytes ? Engine.Fmt(c.PickBytes) + " of " + Engine.Fmt(c.Bytes) : Engine.Fmt(c.PickBytes);
+            return files + "  ·  " + size;
+        }
+
         void Toggle(Category c)
         {
             if (IsEmpty(c) || c.Refused != null) return;
-            c.Checked = c.Partial || !c.Checked; c.Picks.Clear(); Invalidate();   // a partly picked item becomes all of it
+            bool picked = c.Partial;
+            c.Checked = !picked && !c.Checked; c.Picks.Clear(); c.PickBytes = -1; Invalidate();   // ticked by your picks: unticking clears them
             if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
         }
 
@@ -374,12 +386,7 @@ namespace SpaceHunter
                 // checkbox: filled orange with a dark tick, an ink outline, or grey when there's nothing to clear
                 var box = new RectangleF(24, top + (r.H - 17) / 2f, 17, 17);
                 if (empty || c.Refused != null) using (var path = Theme.Round(box, 2)) using (var pen = new Pen(Theme.Line, 1.6f)) g.DrawPath(pen, path);
-                else if (c.Partial)   // some of it, picked by hand: orange with a dash
-                {
-                    using (var path = Theme.Round(box, 2)) using (var br = new SolidBrush(Theme.Orange)) g.FillPath(br, path);
-                    using (var br = new SolidBrush(Theme.OnOrange)) g.FillRectangle(br, box.X + 4, box.Y + 7.5f, 9, 2.4f);
-                }
-                else if (c.Checked)
+                else if (c.Checked || c.Partial)   // ticked, by the item or by the files you picked in it
                 {
                     using (var path = Theme.Round(box, 2)) using (var br = new SolidBrush(Theme.Orange)) g.FillPath(br, path);
                     using (var pen = new Pen(Theme.OnOrange, 2.2f) { StartCap = LineCap.Square, EndCap = LineCap.Square })
@@ -397,7 +404,7 @@ namespace SpaceHunter
                 float x = 56, right = w - 34;
                 string size = c.Blocked ? "size after cleaning" : !c.Scanned ? "..." : c.Kind == Kind.RunHistory ? c.Files + (c.Files == 1 ? " entry" : " entries") :
                               c.Partial ? (c.PickBytes < 0 ? "..." : Engine.Fmt(c.PickBytes)) : Engine.Fmt(c.Bytes);
-                string files = !small && !c.Blocked && c.Scanned && c.Kind != Kind.RunHistory ? (c.Partial ? (c.PickBytes <= c.Bytes ? "of " + Engine.Fmt(c.Bytes) : "picked") : c.Files.ToString("N0") + (c.Files == 1 ? " file" : " files")) : "";
+                string files = !small && !c.Blocked && c.Scanned && c.Kind != Kind.RunHistory ? (c.Partial ? "picked" : c.Files.ToString("N0") + (c.Files == 1 ? " file" : " files")) : "";
                 var sizeFont = c.Blocked ? fLine : fSize;
                 var sz = g.MeasureString(size, sizeFont); var fz = g.MeasureString(files, fFiles);
                 using (var br = new SolidBrush(empty || c.Blocked ? Theme.Soft : Theme.Ink)) g.DrawString(size, sizeFont, br, right - sz.Width, top + (c.Blocked ? 18 : small ? 9 : 9));
@@ -411,10 +418,18 @@ namespace SpaceHunter
                     continue;
                 }
                 using (var br = new SolidBrush(Theme.Ink)) g.DrawString(c.Name, nameFont, br, new RectangleF(x, top + 8, tw, 22), nowrap);
-                if (c.Partial)   // "25 of 312 files picked · just these"
+                if (c.Partial)   // a small display chip: "1 of 10 files · 12 MB of 340 MB"
                 {
-                    string picked = (c.PickBytes < 0 ? "Measuring your picks" : c.PickFiles <= c.Files ? c.PickFiles.ToString("N0") + " of " + c.Files.ToString("N0") + " files picked" : c.PickFiles.ToString("N0") + " files picked") + "  ·  just these, this clean";
-                    using (var br = new SolidBrush(Theme.OrangeDeep)) g.DrawString(picked, fLine, br, new RectangleF(x, top + 30, tw, 18), nowrap);
+                    string chip = PickChip(c);
+                    var cs = g.MeasureString(chip, fChip);
+                    float cw = Math.Min(cs.Width + 12, tw);
+                    // the item's own description first, then the chip; the description gives way when space is short
+                    float dw = Math.Min(g.MeasureString(c.Short, fLine, PointF.Empty, StringFormat.GenericTypographic).Width + 14, tw - cw - 8);
+                    if (dw > 30) using (var br = new SolidBrush(Theme.Soft)) g.DrawString(c.Short, fLine, br, new RectangleF(x, top + 30, dw, 18), nowrap);
+                    else dw = -8;
+                    var cr = new RectangleF(x + dw + 4, top + 29, cw, 19);
+                    using (var p = Theme.Round(cr, 3)) using (var br = new SolidBrush(Theme.Screen)) g.FillPath(br, p);
+                    using (var br = new SolidBrush(Theme.DisplayInk)) g.DrawString(chip, fChip, br, new RectangleF(cr.X + 6, cr.Y + 2.5f, cr.Width - 8, 16), nowrap);
                     continue;
                 }
                 string sub = c.Blocked ? "A Windows system folder" :
@@ -599,8 +614,11 @@ namespace SpaceHunter
 
         public Category Current { get { return cat; } }
 
-        public void ShowCategory(Category c)
+        public void ShowCategory(Category c) { ShowCategory(c, false); }
+        // keepPlace: the same item refreshed (a re-measure after a tick or an age change), so stay where you were
+        public void ShowCategory(Category c, bool keepPlace)
         {
+            keepPlace = keepPlace && c == cat;
             loading = true; cat = c;
             tag.Text = Theme.TierName(c.Level);
             title.Text = c.Name;
@@ -630,7 +648,7 @@ namespace SpaceHunter
                 var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Theme.Pad(0, 2, 0, 2), BackColor = Theme.Pane };
                 var k = new Key(kept ? "kept" : "keep") { Height = Theme.D(28), Toggled = kept, Enabled = !Keep.IsBuiltIn(p) };   // Space Hunter's own folder stays kept
                 k.Font = Theme.Semi(8.5f);
-                k.Click += (s, e) => { if (Keep.IsKept(p)) Keep.Remove(p); else Keep.Add(p); if (KeepChanged != null) KeepChanged(cat, EventArgs.Empty); ShowCategory(cat); };
+                k.Click += (s, e) => { if (Keep.IsKept(p)) Keep.Remove(p); else Keep.Add(p); if (KeepChanged != null) KeepChanged(cat, EventArgs.Empty); ShowCategory(cat, true); };
                 var ll = new LinkLabel { Text = Theme.MidPath(p, 44), AutoSize = true, Font = Theme.Sans(9.5f), LinkColor = kept ? Theme.Soft : Theme.Ink, ActiveLinkColor = Theme.OrangeDeep, VisitedLinkColor = Theme.Ink, Margin = Theme.Pad(8, 6, 0, 0), LinkBehavior = LinkBehavior.HoverUnderline, UseMnemonic = false };
                 ll.LinkClicked += (s, e) => { try { Process.Start("explorer.exe", "\"" + p + "\""); } catch { } };
                 row.Controls.Add(k); row.Controls.Add(ll);
@@ -638,11 +656,13 @@ namespace SpaceHunter
             }
             if (list.Count > 14) folders.Controls.Add(new Label { Text = "+ " + (list.Count - 14) + " more", AutoSize = true, ForeColor = Theme.Soft, Font = Theme.Sans(9f) });
             FitWidths();
-            flow.Top = 0; ScrollBy(0);
+            if (!keepPlace) flow.Top = 0;
+            ScrollBy(0);
             loading = false;
         }
 
         bool hasInside;
+        public int ScrollTop { get { return flow.Top; } }   // test hook
         public void ShowFiles() { if (hasInside) { ScrollBy(-flow.Top - insideHead.Top + Theme.D(12)); } }   // test hook: scroll to the files
         // What the item will clean right now: all of it (by its age rule), only what you picked, or nothing yet.
         void ShowMode()
@@ -704,7 +724,7 @@ namespace SpaceHunter
             SetAge(Math.Max(1, value) * mult);
         }
 
-        public void RefreshStats(Category c) { if (c == cat) ShowCategory(c); }
+        public void RefreshStats(Category c) { if (c == cat) ShowCategory(c, true); }
 
         // A folder you added: say what's actually in it (worked out here, nothing is sent anywhere).
         readonly Dictionary<string, string> described = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -779,7 +799,7 @@ namespace SpaceHunter
         bool workerRunning;
         readonly System.Windows.Forms.Timer ageDebounce = new System.Windows.Forms.Timer { Interval = 600 };
         Category pendingAge;
-        public string SnapshotPath, OpenPanelFor, FramesDir; public List<string> PickPaths;   // test hook: picks in the opened item
+        public string SnapshotPath, OpenPanelFor, FramesDir, KeepPlaceOut; public List<string> PickPaths;   // test hook: picks in the opened item
 
         // Composited painting: the whole window is drawn off-screen first, so the sliding panel never tears.
         protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= 0x02000000; return cp; } }
@@ -1037,7 +1057,14 @@ namespace SpaceHunter
                     status.Text = History.FreedAllTime(out _cl) == 0
                         ? "Quick clean is ticked for you: press Clean, check the list, and it's done."
                         : "Scan done.  Click a row to see what it is.  Tick the box to include it.";
-                    if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; if (PickPaths != null) drawer.Panel.ShowFiles(); } OpenPanelFor = null; }
+                    if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; if (PickPaths != null || KeepPlaceOut != null) drawer.Panel.ShowFiles();
+                        if (KeepPlaceOut != null)   // test hook: a re-measure must leave the panel where it was
+                        {
+                            var kc = oc; var kt = new System.Windows.Forms.Timer { Interval = 1500 };
+                            kt.Tick += (s9, e9) => { kt.Stop(); int before = drawer.Panel.ScrollTop; drawer.Panel.RefreshStats(kc); int after = drawer.Panel.ScrollTop;
+                                File.WriteAllText(KeepPlaceOut, before + " " + after); Environment.Exit(0); };
+                            kt.Start();
+                        } } OpenPanelFor = null; }
                     if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
                 }));
             });

@@ -134,6 +134,9 @@ namespace SpaceHunter
         const double FinishMs = 1200;
         readonly Stopwatch finishClock = new Stopwatch();
         System.Windows.Forms.Timer finishTick;
+        readonly System.Windows.Forms.Timer frame = new System.Windows.Forms.Timer { Interval = 15 };
+        readonly System.Diagnostics.Stopwatch frameClock = new System.Diagnostics.Stopwatch();
+        double barShown = -1; long lastFrame;
         double FinishT { get { return !finishClock.IsRunning && finishClock.ElapsedMilliseconds == 0 ? 1 : Math.Min(1, finishClock.ElapsedMilliseconds / FinishMs); } }
         bool Finishing { get { return done && !cnt.Cancel && finishClock.IsRunning; } }
         public bool Done { get { return done; } }
@@ -177,7 +180,9 @@ namespace SpaceHunter
             cnt.OnNote = msg => feed.Enqueue("--  " + msg);
             tick = new System.Windows.Forms.Timer { Interval = 120 };
             tick.Tick += (s, e) => Pump();
-            Shown += (s, e) => Start();
+            frame.Tick += (s, e) => { if (!done) display.Invalidate(); else frame.Stop(); };
+            Shown += (s, e) => { frameClock.Start(); frame.Start(); Start(); };
+            FormClosed += (s, e) => frame.Stop();
         }
 
         void PaintDisplay(object s, PaintEventArgs e)
@@ -223,7 +228,13 @@ namespace SpaceHunter
                         g.FillRectangle(b, bx + k * sw + 1, by + (float)(fall * 16), sw - 2, bh * (float)(1 - fall * 0.6));
                 }
             }
-            else using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, bx, by, (float)(bw * f), bh);
+            else
+            {
+                // glide toward the real figure instead of stepping each time it changes
+                long now = frameClock.ElapsedMilliseconds; double dt = Math.Max(0, now - lastFrame) / 1000.0; lastFrame = now;
+                barShown = barShown < 0 || f < barShown ? f : barShown + (f - barShown) * (1 - Math.Exp(-dt / 0.12));
+                using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, bx, by, (float)(bw * barShown), bh);
+            }
         }
 
         void Start()

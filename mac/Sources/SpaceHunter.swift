@@ -711,10 +711,11 @@ final class AppState: ObservableObject {
         save(cats[i]); scan([id])
     }
 
-    // the item's box in the list: some -> all, none -> all, all -> none (picks are cleared either way)
+    // the item's box in the list: picked -> none, none -> all, all -> none (picks are cleared either way)
     func toggle(_ id: String) {
         guard let i = cats.firstIndex(where: { $0.id == id }) else { return }
-        cats[i].checked = cats[i].partial || !cats[i].checked
+        let picked = cats[i].partial
+        cats[i].checked = !picked && !cats[i].checked
         cats[i].picks = []; cats[i].pickBytes = -1; cats[i].pickFiles = 0
         save(cats[i])
     }
@@ -1291,24 +1292,33 @@ struct Row: View {
         let isOpen = state.openID == c.id
         let ageNow: String = c.ageMinutes > 0 ? "  ·  older than " + Engine.fmtAge(c.ageMinutes) : "  ·  everything"
         let age: String = c.ageChoice ? ageNow : (c.kind == .contents || c.kind == .subfolders) ? "  ·  all of it" : ""
-        // picked by hand: "25 of 312 files picked  ·  just these, this clean"
-        let pickCount: String = c.pickBytes < 0 ? "Measuring your picks"
-            : c.pickFiles <= c.files ? "\(c.pickFiles) of \(c.files) files picked" : "\(c.pickFiles) files picked"
-        let picked: String = pickCount + "  ·  just these, this clean"
+        // picked by hand: the item's short text, then a chip "25 of 312 files  ·  1.2 GB of 4.8 GB"
+        let pickFilesText: String = c.pickFiles <= c.files ? "\(c.pickFiles) of \(c.files) files"
+            : "\(c.pickFiles) file" + (c.pickFiles == 1 ? "" : "s")
+        let pickSizeText: String = c.pickBytes <= c.bytes ? Engine.fmt(c.pickBytes) + " of " + Engine.fmt(c.bytes) : Engine.fmt(c.pickBytes)
+        let chip: String = c.pickBytes < 0 ? "measuring your picks…" : pickFilesText + "  ·  " + pickSizeText
         let pickSize: String = c.pickBytes < 0 ? "…" : Engine.fmt(c.pickBytes)
         let size: String = !c.scanned ? "…" : c.partial ? pickSize : Engine.fmt(c.bytes)
         let fileCount: String = "\(c.files) file" + (c.files == 1 ? "" : "s")
-        let ofSize: String = c.pickBytes <= c.bytes ? "of " + Engine.fmt(c.bytes) : "picked"
-        let files: String = !c.scanned ? "" : c.partial ? ofSize : fileCount
+        let files: String = !c.scanned ? "" : c.partial ? "picked" : fileCount
         HStack(alignment: .center, spacing: 14) {
-            Check(on: c.checked, empty: empty, partial: c.partial)
+            // an item with files picked by hand draws as ticked
+            Check(on: c.checked || c.partial, empty: empty)
                 .contentShape(Rectangle())
                 .onTapGesture { if !empty { state.toggle(c.id) } }
             VStack(alignment: .leading, spacing: 3) {
                 Text(c.name).font(isOpen ? Theme.bold(14) : Theme.semi(14)).foregroundColor(compact ? Theme.soft : Theme.ink).lineLimit(1)
                 if !compact {
                     if c.partial {
-                        Text(picked).font(Theme.sans(11.5)).foregroundColor(Theme.orangeDeep).lineLimit(1)
+                        // the chip keeps its full width; the short text gives way
+                        HStack(spacing: 8) {
+                            Text(c.short).font(Theme.sans(11.5)).foregroundColor(Theme.soft).lineLimit(1)
+                            Text(chip).font(Theme.semi(11)).foregroundColor(Theme.screenInk).lineLimit(1)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(RoundedRectangle(cornerRadius: 3).fill(Theme.screen))
+                                .fixedSize()
+                                .layoutPriority(1)
+                        }
                     } else {
                         Text(c.short + age).font(Theme.sans(11.5)).foregroundColor(Theme.soft).lineLimit(1)
                     }
@@ -1388,6 +1398,7 @@ struct DetailPanel: View {
             }
             .padding(.horizontal, 26).padding(.vertical, 20)
         }
+        .id(cat.id)   // a different item starts at the top; re-measuring the same one keeps the scroll where it is
         .background(Theme.pane)
         .overlay(Rectangle().fill(Theme.line).frame(width: 1), alignment: .leading)
         .onAppear { load(c) }
@@ -1488,7 +1499,7 @@ struct FolderKeeps: View {
                 if list.count > 14 { Text("+ \(list.count - 14) more").font(Theme.sans(11)).foregroundColor(Theme.soft) }
             }
         }
-        .id(tick)
+        .background(Color.clear.opacity(tick < 0 ? 1 : 0))   // redraw on tick without rebuilding (keeps the scroll)
     }
 
     func folders() -> [String] {
@@ -1608,14 +1619,29 @@ struct ConfirmRow: View {
     }
 }
 
+// The cleaning bar's shown width, gliding toward the real fraction each frame (not observed: it only changes while drawing).
+final class BarGlide {
+    var shown: CGFloat = 0
+    var last: Date?
+    func step(_ target: CGFloat, at now: Date) -> CGFloat {
+        let dt = last.map { min(0.5, max(0, now.timeIntervalSince($0))) } ?? 0
+        last = now
+        if target < shown { shown = target }   // snap down
+        else { shown += (target - shown) * CGFloat(1 - exp(-dt / 0.12)) }
+        return shown
+    }
+}
+
 struct ProgressSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var finishStart: Date?   // the finish: the bar clears and the number counts up, about a second
+    @State private var glide = BarGlide()
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TimelineView(.animation(paused: finishStart == nil)) { tl in
+            // redrawn every frame while cleaning (the bar glides) and during the finish; still once it has settled
+            TimelineView(.animation(paused: state.cleanDone && finishStart == nil)) { tl in
                 let finished = state.cleanDone && !state.cleanStopped
                 let t: Double = finished ? (finishStart.map { min(1, tl.date.timeIntervalSince($0) / 1.2) } ?? 1) : 1
                 let ease = 1 - pow(1 - t, 3)   // quick at first, settling on the real total
@@ -1623,6 +1649,7 @@ struct ProgressSheet: View {
                 let shown = Int64(Double(binOnly ? state.trashed : state.freed) * (finished ? ease : 1))
                 let p = Engine.parts(shown)
                 let fraction = min(1, CGFloat(Double(state.freed + state.trashed) / Double(state.expected)))
+                let barFraction: CGFloat = state.cleanDone ? fraction : glide.step(fraction, at: tl.date)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(state.cleanDone ? (state.cleanStopped ? "Stopped  ·  nothing else will be cleaned" : t < 1 ? "Clearing up…" : "Done  ·  all ticked items cleaned") : "Cleaning  ·  " + state.currentItem)
                         .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
@@ -1653,7 +1680,7 @@ struct ProgressSheet: View {
                                 }
                                 .frame(height: 12, alignment: .top)
                             } else {
-                                Rectangle().fill(Theme.orange).frame(width: g.size.width * fraction, height: 12)
+                                Rectangle().fill(Theme.orange).frame(width: g.size.width * barFraction, height: 12)
                             }
                         }
                     }.frame(height: 12).padding(.top, 6)
@@ -2030,13 +2057,15 @@ struct FinderHeader: View {
 
 // A large turning ring for the whole scan: impossible to miss.
 struct SpinRing: View {
+    @State private var start = Date()
     var body: some View {
+        // driven by time at the display's frame rate (300° a second), so a late frame never jumps
         TimelineView(.animation) { tl in
-            let t = tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.1) / 1.1
+            let angle = (max(0, tl.date.timeIntervalSince(start)) * 300).truncatingRemainder(dividingBy: 360)
             ZStack {
                 Circle().stroke(Theme.track, lineWidth: 5)
                 Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .rotationEffect(.degrees(360 * t))
+                    .rotationEffect(.degrees(angle))
             }
         }
     }
@@ -2186,7 +2215,9 @@ struct InsideList: View {
             }
             if entries.count > 60 { Text("+ \(entries.count - 60) more (open the folder in Finder to see them all)").font(Theme.sans(11)).foregroundColor(Theme.soft).padding(.top, 6) }
         }
-        .id(tick)
+        // tick only redraws the list (the keep list isn't observed). It used to be the list's .id, which rebuilt it on
+        // every tick: the folder shown went back to the top and the panel's scroll jumped up.
+        .background(Color.clear.opacity(tick < 0 ? 1 : 0))
         .padding(.bottom, 12)
         .onChange(of: catID) { _ in here = "" }
         .onAppear { measure(here) }
@@ -2261,6 +2292,7 @@ struct InsideList: View {
 struct ScanBar: View {
     let done: Int64
     let target: Int64
+    @State private var start = Date()
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
@@ -2268,11 +2300,14 @@ struct ScanBar: View {
                 if target > 0 {
                     Rectangle().fill(Theme.orange).frame(width: g.size.width * min(1, CGFloat(Double(done) / Double(target))))
                 } else {
+                    // 150 pt a second by the clock, wrapped round the track and the block's own width
                     TimelineView(.animation) { tl in
-                        let t = tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+                        let block = g.size.width * 0.22
+                        let span = Double(max(1, g.size.width + block))
+                        let x = (max(0, tl.date.timeIntervalSince(start)) * 150).truncatingRemainder(dividingBy: span)
                         Rectangle().fill(Theme.orange)
-                            .frame(width: g.size.width * 0.22)
-                            .offset(x: g.size.width * 1.22 * CGFloat(t) - g.size.width * 0.22)
+                            .frame(width: block)
+                            .offset(x: CGFloat(x) - block)
                     }
                 }
             }

@@ -113,7 +113,7 @@ button.row-btn.open { background: $SELECTED; }
 .row-name { color: $INK; font-weight: 600; font-size: 10.5pt; }
 .row-name-dim { color: $SOFT; font-size: 10pt; }
 .row-sub { color: $SOFT; font-size: 9pt; }
-.row-sub-pick { color: $ODEEP; font-weight: 600; font-size: 9pt; }
+.pick-chip { background: $SCREEN; color: #E9E6DF; font-weight: 600; font-size: 8.25pt; padding: 0 6px; border-radius: 3px; }
 .row-size { color: $INK; font-weight: 600; font-size: 11pt; }
 .chevron { color: $SOFT; font-size: 16pt; }
 .chevron-open { color: #FF5B1F; font-size: 16pt; font-weight: 700; }

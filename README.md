@@ -22,8 +22,8 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
   (more if you want it). Things that fill up over time (Temp, logs, Downloads) let you choose "only older than N"
   or "everything"; caches are simply cleaned whole.
 - **What's inside**: every item lists the folders and files it would clean, with their sizes. Untick anything that
-  should always stay, or leave an item unticked and tick just the files you want gone: it then shows as partly
-  ticked ("25 of 312 files picked") and only those go, in that one clean. Select all / Clear, folders to open, Back.
+  should always stay, or leave an item unticked and tick just the files you want gone: the item then shows ticked,
+  with a small note like "25 of 312 files · 40 MB of 1.2 GB", and only those go, in that one clean. Select all / Clear, folders to open, Back.
 - **Asks before cleaning**. Quick clean is deleted for good (caches rebuild, so the bin would only fill up); for
   everything else you choose **Permanently delete** or **Recycle Bin / Trash**. It shows each file as it goes, then a short list of what was cleaned.
   Cleaning runs in its own window, so you can keep looking around. On Linux, system folders such as downloaded
