@@ -3,6 +3,16 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.3.0 (2026-11-19)
+
+- **What's inside, for every item**: an item's panel lists the folders and files it would clean, each with the folder
+  it comes from. Open a folder to look inside it, and untick anything that should stay; most people leave it all
+  ticked. Each item's rules still apply (for example, only old installers in Downloads are listed). On Linux it shows
+  only your own files, since others' are never cleaned.
+- **Quick clean is always deleted for good**: those are caches that rebuild, so the Recycle Bin or Trash would only
+  fill up. When only Quick clean is ticked there's nothing to choose; otherwise the choice applies to the rest, and
+  the confirm window says how much goes where.
+
 ## 1.2.0 (2026-11-19)
 
 - **Space Hunter for Linux.** The same app, look and features as on Windows and Mac: the three sections, the item
