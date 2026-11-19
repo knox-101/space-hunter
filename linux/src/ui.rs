@@ -432,7 +432,7 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     let h = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     h.add_css_class("rowline");
     let chk = gtk::CheckButton::new();
-    chk.set_active(c.checked);
+    chk.set_active(c.checked && !empty);   // nothing to clean: an empty grey box, as on Windows and Mac
     chk.set_sensitive(!empty && c.refused().is_none());
     chk.set_valign(gtk::Align::Center);
     chk.set_margin_start(4);
