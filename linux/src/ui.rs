@@ -833,6 +833,8 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
             for e in rd.flatten() {
                 let m = match std::fs::symlink_metadata(e.path()) { Ok(m) => m, Err(_) => continue };
                 if m.file_type().is_symlink() { continue; }
+                // other people's and the system's files are never cleaned, so they aren't listed as if they were
+                if !engine::is_root() && std::os::unix::fs::MetadataExt::uid(&m) != unsafe { libc::geteuid() } && !c.admin { continue; }
                 let n = e.file_name().to_string_lossy().to_string();
                 let item = (n.clone(), e.path(), m.is_dir(), m.len(), m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), sub.clone());
                 if m.is_dir() {
