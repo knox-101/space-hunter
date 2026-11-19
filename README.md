@@ -18,9 +18,12 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
 - **Sorts them by risk**: **Quick clean** (caches and leftovers that rebuild, ticked at start), **Big caches &
   history** (big caches that download again, or old history) and **Personal & work items** (can hold your work or
   history; check before cleaning).
-- **Explains each one**: click a row to see what it is, what gets deleted, whether it's safe and what happens after,
-  and choose "only files older than N days" or "everything". **What's inside** lists the folders and files it would
-  clean, with their sizes and the folder each comes from; untick anything that should stay.
+- **Explains each one**: click a row to see, in three short lines, what it is, what goes and what happens after
+  (more if you want it). Things that fill up over time (Temp, logs, Downloads) let you choose "only older than N"
+  or "everything"; caches are simply cleaned whole.
+- **What's inside**: every item lists the folders and files it would clean, with their sizes. Untick anything that
+  should always stay, or leave an item unticked and tick just the files you want gone: it then shows as partly
+  ticked ("25 of 312 files picked") and only those go, in that one clean. Select all / Clear, folders to open, Back.
 - **Asks before cleaning**. Quick clean is deleted for good (caches rebuild, so the bin would only fill up); for
   everything else you choose **Permanently delete** or **Recycle Bin / Trash**. It shows each file as it goes, then a short list of what was cleaned.
   Cleaning runs in its own window, so you can keep looking around. On Linux, system folders such as downloaded
@@ -33,6 +36,8 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
 The same app on Linux (and on Mac), with the same names, look and features:
 
 ![Space Hunter on Linux](docs/screenshots/linux-main.png)
+
+Light, dark, or follow the system: the switch is at the top right.
 
 ## Safe by design
 

@@ -64,6 +64,7 @@ pub struct Ui {
     dir_sizes: RefCell<std::collections::HashMap<PathBuf, u64>>,   // folder sizes for "What's inside", measured once
     inside_here: RefCell<Option<(String, PathBuf)>>,                       // a folder you added: where its panel list is looking
     described: RefCell<std::collections::HashMap<String, String>>,       // what's inside folders you added, worked out once
+    more: Cell<bool>,                                                    // the item panel shows its full notes
 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -105,7 +106,7 @@ fn map_icon() -> gtk::DrawingArea {
     d.set_content_width(14);
     d.set_content_height(12);
     d.set_draw_func(|_, cr, _, _| {
-        cr.set_source_rgb(0.106, 0.106, 0.102);
+        crate::theme::rgb(cr, crate::theme::pal().ink);
         cr.rectangle(0.0, 0.0, 7.0, 12.0);
         cr.rectangle(8.0, 0.0, 6.0, 7.0);
         cr.rectangle(8.0, 8.0, 3.0, 4.0);
@@ -156,15 +157,46 @@ fn hatch(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64) {
     let _ = cr.restore();
 }
 
+// Light / Dark / System: three small segments at the top right, above the display. The lit one is ink-filled.
+fn theme_switch() -> gtk::Box {
+    use crate::theme::Mode;
+    let strip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    strip.set_margin_top(8); strip.set_margin_start(18); strip.set_margin_end(18);
+    strip.append(&hspacer());
+    let l = label("Theme", "theme-label"); l.set_valign(gtk::Align::Center);
+    strip.append(&l);
+    let segs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    segs.add_css_class("seg-box");
+    segs.set_valign(gtk::Align::Center);
+    let modes = [(Mode::Light, "LIGHT"), (Mode::Dark, "DARK"), (Mode::System, "SYSTEM")];
+    let buttons: Rc<Vec<(gtk::Button, Mode)>> = Rc::new(modes.iter().map(|(m, t)| {
+        let b = gtk::Button::with_label(t);
+        b.add_css_class("seg");
+        if crate::theme::mode() == *m { b.add_css_class("on"); }
+        (b, *m)
+    }).collect());
+    for (b, m) in buttons.iter() {
+        segs.append(b);
+        let (all, m) = (buttons.clone(), *m);
+        b.connect_clicked(move |_| {
+            crate::theme::set_mode(m);
+            for (x, xm) in all.iter() { if *xm == m { x.add_css_class("on"); } else { x.remove_css_class("on"); } }
+        });
+    }
+    strip.append(&segs);
+    strip
+}
+
 pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let win = gtk::ApplicationWindow::builder().application(app).title("Space Hunter").default_width(1180).default_height(760).build();
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("chassis");
+    root.append(&theme_switch());
 
     // the dark display: the number you get back, the disk as one bar with a clear legend
     let display = gtk::Box::new(gtk::Orientation::Vertical, 0);
     display.add_css_class("display");
-    display.set_margin_top(18); display.set_margin_start(18); display.set_margin_end(18);
+    display.set_margin_top(6); display.set_margin_start(18); display.set_margin_end(18);
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
     left.append(&label("Space to free up", "display-label"));
@@ -309,6 +341,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel, status,
         prog_win: RefCell::new(None), opts,
         bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
+        more: Cell::new(false),
     });
 
     {
@@ -364,6 +397,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
                 let mut st = u.st.borrow_mut();
                 for c in st.cats.iter_mut() {
                     c.checked = c.is_safe() && c.refused().is_none();
+                    c.picks.clear(); c.pick_bytes = None;
                     c.age_minutes = c.default_age;
                     c.last_age = if c.default_age > 0 { c.default_age } else { 14 * engine::DAY };
                 }
@@ -505,6 +539,7 @@ fn test_cat(dir: PathBuf) -> Cat {
         roots: vec![dir], exclude: Default::default(), extensions: None, top_level_only: false, is_custom: false,
         default_age: 0, age_minutes: 0, last_age: engine::DAY, checked: true, files: 0, bytes: 0, scanned: true, blocked: false,
         short: String::new(), what: String::new(), deletes: String::new(), safe_text: String::new(), after: String::new(),
+        picks: Default::default(), pick_files: 0, pick_bytes: None,
     }
 }
 
@@ -513,7 +548,7 @@ fn set_all(u: &Rc<Ui>, on: bool) {
         let mut st = u.st.borrow_mut();
         let tier = st.tier;
         for c in st.cats.iter_mut().filter(|c| c.level == tier) {
-            if !is_empty(c) && c.refused().is_none() { c.checked = on; }
+            if !is_empty(c) && c.refused().is_none() { c.checked = on; c.picks.clear(); c.pick_bytes = None; }
         }
         engine::settings::save(&st.cats);
     }
@@ -526,9 +561,9 @@ fn refresh(u: &Rc<Ui>) { refresh_top(u); rebuild_rows(u); }
 // The display, keys and tiles (not the list, so a tick box isn't replaced while it's being clicked).
 fn refresh_top(u: &Rc<Ui>) {
     let st = u.st.borrow();
-    let selected: u64 = st.cats.iter().filter(|c| c.checked).map(|c| c.bytes).sum();
-    let not_ticked: u64 = st.cats.iter().filter(|c| !c.checked && !c.is_safe() && c.kind != Kind::Trash).map(|c| c.bytes).sum();
-    let only_safe = !st.cats.iter().any(|c| c.checked && !c.is_safe() && (c.bytes > 0 || c.files > 0));
+    let selected: u64 = st.cats.iter().filter(|c| c.included()).map(|c| c.clean_bytes()).sum();
+    let not_ticked: u64 = st.cats.iter().filter(|c| !c.included() && !c.is_safe() && c.kind != Kind::Trash).map(|c| c.bytes).sum();
+    let only_safe = !st.cats.iter().any(|c| c.included() && !c.is_safe() && (c.bytes > 0 || c.files > 0));
     let (num, unit) = split(selected);
     u.hero.set_text(&num);
     u.unit.set_text(&unit);
@@ -553,7 +588,7 @@ fn refresh_top(u: &Rc<Ui>) {
     }
     u.legend_ticked.set_text(&format!("Ticked: {}", fmt(selected)));
     u.legend_not.set_text(&format!("Not ticked: {}", fmt(not_ticked)));
-    let can_clean = st.pending == 0 && st.cats.iter().any(|c| c.checked && (c.bytes > 0 || c.files > 0));
+    let can_clean = st.pending == 0 && st.cats.iter().any(|c| c.checked && (c.bytes > 0 || c.files > 0) || c.partial() && c.pick_bytes.unwrap_or(0) > 0);
     u.clean.set_label(&if st.cleaning { "SHOW CLEANING".to_string() } else { format!("CLEAN {}", fmt(selected)) });
     u.clean.set_sensitive(st.cleaning || can_clean);
     u.scan_key.set_sensitive(st.pending == 0 && !st.cleaning);
@@ -561,9 +596,9 @@ fn refresh_top(u: &Rc<Ui>) {
         let lvl = ORDER[i];
         let items: Vec<&Cat> = st.cats.iter().filter(|c| c.level == lvl).collect();
         let found: u64 = items.iter().map(|c| c.bytes).sum();
-        let ticked: u64 = items.iter().filter(|c| c.checked).map(|c| c.bytes).sum();
+        let ticked: u64 = items.iter().filter(|c| c.included()).map(|c| c.clean_bytes()).sum();
         let n_items = items.iter().filter(|c| c.bytes > 0 || c.files > 0).count();
-        let n_ticked = items.iter().filter(|c| c.checked && (c.bytes > 0 || c.files > 0)).count();
+        let n_ticked = items.iter().filter(|c| c.included() && (c.bytes > 0 || c.files > 0)).count();
         size.set_text(&format!("{} found", fmt(found)));
         count.set_text(&if n_items == 0 { "Nothing to clean here right now".to_string() }
                         else if n_ticked == 0 { format!("None of {} ticked", n_items) }
@@ -598,18 +633,36 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     h.add_css_class("rowline");
     let chk = gtk::CheckButton::new();
     chk.set_active(c.checked && !empty);   // nothing to clean: an empty grey box, as on Windows and Mac
+    chk.set_inconsistent(c.partial() && !empty);   // some of it, picked by hand: orange with a dash
     chk.set_sensitive(!empty && c.refused().is_none());
     chk.set_valign(gtk::Align::Center);
     chk.set_margin_start(4);
     let id = c.id.clone();
     let uu = u.clone();
+    // some -> all (the picks go), none -> all, all -> none
     chk.connect_toggled(move |b| {
-        {
+        let was_partial = {
             let mut st = uu.st.borrow_mut();
-            if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) { c.checked = b.is_active(); }
+            let mut was = false;
+            if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) {
+                was = c.partial();
+                c.checked = b.is_active();
+                c.picks.clear(); c.pick_bytes = None;
+            }
             engine::settings::save(&st.cats);
-        }
+            was
+        };
+        b.set_inconsistent(false);
         refresh_top(&uu);
+        // the row's lines and the open panel follow once the click is over (the box isn't replaced while it's clicked)
+        let open_here = uu.st.borrow().open.as_deref() == Some(id.as_str());
+        if was_partial || open_here {
+            let u3 = uu.clone();
+            glib::idle_add_local_once(move || {
+                if was_partial { rebuild_rows(&u3); }
+                if open_here { fill_panel(&u3); }
+            });
+        }
     });
     h.append(&chk);
     let btn = gtk::Button::new();
@@ -623,23 +676,40 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     let name = label(&c.name, if empty { "row-name-dim" } else { "row-name" });
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     names.append(&name);
+    let partial = c.partial() && !empty && c.refused().is_none();
     if !empty {
-        let age = match c.kind {
-            Kind::Contents | Kind::Subfolders => if c.age_minutes > 0 { format!("  \u{00B7}  older than {}", engine::fmt_age(c.age_minutes)) } else { "  \u{00B7}  all files, any age".to_string() },
-            _ => String::new(),
+        let age = if c.age_choice() {
+            if c.age_minutes > 0 { format!("  \u{00B7}  older than {}", engine::fmt_age(c.age_minutes)) } else { "  \u{00B7}  everything".to_string() }
+        } else if matches!(c.kind, Kind::Contents | Kind::Subfolders) { "  \u{00B7}  all of it".to_string() } else { String::new() };
+        let (sub, class) = match c.refused() {
+            Some(why) => (format!("Not cleaned: {}. Remove it from the list", why), "row-sub"),
+            None if partial => {   // "25 of 312 files picked  ·  just these, this clean"
+                let n = match c.pick_bytes {
+                    None => "Measuring your picks".to_string(),
+                    Some(_) if c.pick_files <= c.files => format!("{} of {} files picked", c.pick_files, c.files),
+                    Some(_) => format!("{} files picked", c.pick_files),
+                };
+                (format!("{}  \u{00B7}  just these, this clean", n), "row-sub-pick")
+            }
+            None => (format!("{}{}", c.short, age), "row-sub"),
         };
-        let sub = match c.refused() { Some(why) => format!("Not cleaned: {}. Remove it from the list", why), None => format!("{}{}", c.short, age) };
-        let s = label(&sub, "row-sub");
+        let s = label(&sub, class);
         s.set_ellipsize(gtk::pango::EllipsizeMode::End);
         names.append(&s);
     }
     inner.append(&names);
     let sizes = gtk::Box::new(gtk::Orientation::Vertical, 3);
-    let size = label(&if c.scanned { fmt(c.bytes) } else { "\u{2026}".to_string() }, "row-size");
+    let size_text = if !c.scanned { "\u{2026}".to_string() }
+                    else if partial { c.pick_bytes.map(fmt).unwrap_or_else(|| "\u{2026}".to_string()) }
+                    else { fmt(c.bytes) };
+    let size = label(&size_text, "row-size");
     size.set_xalign(1.0);
     sizes.append(&size);
     if !empty {
-        let f = label(&format!("{} file{}", c.files, if c.files == 1 { "" } else { "s" }), "row-sub");
+        let second = if partial {
+            if c.pick_bytes.unwrap_or(0) <= c.bytes { format!("of {}", fmt(c.bytes)) } else { "picked".to_string() }
+        } else { format!("{} file{}", c.files, if c.files == 1 { "" } else { "s" }) };
+        let f = label(&second, "row-sub");
         f.set_xalign(1.0);
         sizes.append(&f);
     }
@@ -683,7 +753,39 @@ fn set_age(u: &Rc<Ui>, id: &str, minutes: u32) {
     scan(u, Some(vec![id.to_string()]));
 }
 
-// The item panel: what it is, what goes, whether it's safe, the age rule and its folders.
+// the first sentence of a note, for the short summary
+fn first(t: &str) -> String {
+    match t.find(". ") { Some(i) if i > 0 && i < 160 => t[..=i].to_string(), _ => t.to_string() }
+}
+
+// Every item that cleans folders shows what's in them (a single file you added has nothing inside).
+fn has_inside(c: &Cat) -> bool { matches!(c.kind, Kind::Contents | Kind::Subfolders) && c.refused().is_none() && c.roots.iter().any(|r| r.is_dir()) }
+
+// Select all / Clear in the item panel: the whole item, or nothing. Hand-picked files go either way.
+fn set_item(u: &Rc<Ui>, id: &str, on: bool) {
+    {
+        let mut st = u.st.borrow_mut();
+        if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) { c.checked = on; c.picks.clear(); c.pick_bytes = None; }
+        engine::settings::save(&st.cats);
+    }
+    u.described.borrow_mut().clear();
+    refresh(u);
+    fill_panel(u);
+    scan(u, Some(vec![id.to_string()]));
+}
+
+// The ticks under "What's inside" changed: measure the item (and what's picked in it) again.
+fn remeasure(u: &Rc<Ui>, id: &str) {
+    if u.st.borrow().cleaning {   // nothing is measured during a clean; show the change, measure afterwards
+        let uu = u.clone();
+        glib::idle_add_local_once(move || { refresh(&uu); fill_panel(&uu); });
+        return;
+    }
+    scan(u, Some(vec![id.to_string()]));
+}
+
+// The item panel, top to bottom: its name and size, a short summary, what to clean, the files; the full notes (behind
+// "More about this item") and the Trash's folders after.
 fn fill_panel(u: &Rc<Ui>) {
     clear(&u.panel);
     let c = {
@@ -707,9 +809,31 @@ fn fill_panel(u: &Rc<Ui>) {
     let s = label(&stats, "panel-stats"); s.set_wrap(true); s.set_max_width_chars(46);
     u.panel.append(&s);
 
-    // every item that cleans folders shows what's in them (a single file you added has nothing inside)
-    if matches!(c.kind, Kind::Contents | Kind::Subfolders) && c.refused().is_none() && c.roots.iter().any(|r| r.is_dir()) { inside_list(u, &c); }
-    if matches!(c.kind, Kind::Contents | Kind::Subfolders) && c.refused().is_none() {
+    // three short lines, always in view
+    let inside = has_inside(&c);
+    let ages = c.age_choice() && c.refused().is_none();
+    let goes = if c.partial() { "Only the files you tick below, whatever their age, in the next clean.".to_string() }
+               else if !c.checked && inside && !c.admin { "Nothing yet: tick the item, or tick files below to clean just those.".to_string() }
+               else if ages { if c.age_minutes > 0 { format!("Files untouched for {} or more.", engine::fmt_age(c.age_minutes)) } else { "Everything in it, whatever its age.".to_string() } }
+               else { first(&c.deletes) };
+    let grid = gtk::Grid::new();
+    grid.set_column_spacing(14); grid.set_row_spacing(5); grid.set_margin_top(4);
+    let mut r = 0;
+    for (k, v) in [("What it is", first(&c.what)), ("What goes", goes), ("After", first(&c.after))] {
+        if v.is_empty() { continue; }
+        let kl = label(k, "sum-key"); kl.set_valign(gtk::Align::Start); kl.set_size_request(84, -1);
+        let vl = label(&v, "sum-val"); vl.set_wrap(true); vl.set_max_width_chars(38); vl.set_hexpand(true);
+        grid.attach(&kl, 0, r, 1, 1);
+        grid.attach(&vl, 1, r, 1, 1);
+        r += 1;
+    }
+    u.panel.append(&grid);
+    let more = gtk::Button::with_label(if u.more.get() { "Less about this item" } else { "More about this item" });
+    more.add_css_class("link-btn"); more.set_halign(gtk::Align::Start); more.set_margin_top(4); more.set_margin_bottom(4);
+    u.panel.append(&more);
+
+    // the age rule: only on items that fill up over time, and not while only hand-picked files are cleaned
+    if ages && !c.partial() {
         u.panel.append(&head("What to clean"));
         let older = c.age_minutes > 0;
         let mode = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -723,28 +847,32 @@ fn fill_panel(u: &Rc<Ui>) {
         u.panel.append(&mode);
         let m = if older { c.age_minutes } else { c.last_age };
         let (unit, value) = if m % engine::DAY == 0 { (engine::DAY, m / engine::DAY) } else if m % engine::HOUR == 0 { (engine::HOUR, m / engine::HOUR) } else { (1, m) };
-        let ages = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let agebox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         let minus = key("\u{2212}", &[]);
         let val = label(&value.to_string(), "age-value"); val.set_xalign(0.5); val.set_width_chars(4);
         let plus = key("+", &[]);
-        ages.append(&minus); ages.append(&val); ages.append(&plus);
-        let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0); gap.set_size_request(8, -1); ages.append(&gap);
+        agebox.append(&minus); agebox.append(&val); agebox.append(&plus);
+        let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0); gap.set_size_request(8, -1); agebox.append(&gap);
         for (txt, u_m) in [("min", 1u32), ("hours", engine::HOUR), ("days", engine::DAY)] {
             let k = key(txt, on(older && unit == u_m));
             let (uu, id) = (u.clone(), c.id.clone());
             k.connect_clicked(move |_| set_age(&uu, &id, value.max(1) * u_m));
             k.set_sensitive(older);
-            ages.append(&k);
+            agebox.append(&k);
         }
         let (uu, id) = (u.clone(), c.id.clone());
         minus.connect_clicked(move |_| { if value > 1 { set_age(&uu, &id, (value - 1) * unit); } });
         let (uu, id) = (u.clone(), c.id.clone());
         plus.connect_clicked(move |_| { if value < 999 { set_age(&uu, &id, (value + 1) * unit); } });
         minus.set_sensitive(older); plus.set_sensitive(older);
-        u.panel.append(&ages);
-        let hint = if older { format!("Files untouched for {} or more.", engine::fmt_age(c.age_minutes)) } else { "Every file, whatever its age.".to_string() };
-        u.panel.append(&body_text(&format!("{} Delete or Trash is chosen when you press Clean.", hint)));
+        u.panel.append(&agebox);
+        u.panel.append(&body_text(&if older { format!("Files untouched or added within {} stay.", engine::fmt_age(c.age_minutes)) } else { "Every file, whatever its age.".to_string() }));
     }
+    if inside { inside_list(u, &c); }
+
+    // the full notes, behind "More about this item"
+    let details = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    details.set_visible(u.more.get());
     // a folder or file you added: say what's actually in it (worked out here, nothing is sent anywhere)
     let what = if c.is_custom {
         let root = c.roots[0].to_string_lossy().to_string();
@@ -753,7 +881,7 @@ fn fill_panel(u: &Rc<Ui>) {
             Some(d) => d,
             None => {
                 let looking = format!("Looking inside {}\u{2026}", c.roots[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
-                u.described.borrow_mut().insert(root.clone(), looking);   // one look at a time, however often the panel redraws
+                u.described.borrow_mut().insert(root.clone(), looking.clone());   // one look at a time, however often the panel redraws
                 let (tx, rx) = mpsc::channel::<String>();
                 let r2 = c.roots[0].clone();
                 std::thread::spawn(move || { let _ = tx.send(engine::describe(&r2)); });
@@ -763,16 +891,27 @@ fn fill_panel(u: &Rc<Ui>) {
                     Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                     Err(_) => glib::ControlFlow::Break,
                 });
-                format!("Looking inside {}\u{2026}", c.roots[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+                looking
             }
         }
     } else { c.what.clone() };
     for (h, b) in [("What is it?", &what), ("What gets cleaned", &c.deletes), ("Is it safe?", &c.safe_text), ("What happens after", &c.after)] {
         if b.is_empty() { continue; }
-        u.panel.append(&head(h));
-        u.panel.append(&body_text(b));
+        details.append(&head(h));
+        details.append(&body_text(b));
     }
-    // the item's folders, each with a keep switch (kept folders are protected)
+    u.panel.append(&details);
+    u.panel.reorder_child_after(&details, Some(&more));   // the full notes open right under their link
+    {
+        let (uu, d2) = (u.clone(), details.clone());
+        more.connect_clicked(move |b| {
+            let m = !uu.more.get();
+            uu.more.set(m);
+            d2.set_visible(m);
+            b.set_label(if m { "Less about this item" } else { "More about this item" });
+        });
+    }
+    // the Trash's folders, each with a keep switch (kept folders are protected)
     let roots: Vec<PathBuf> = c.roots.iter().filter(|r| r.is_dir()).cloned().collect();
     if !roots.is_empty() && !c.admin && c.kind == Kind::Trash {   // other items show their folders in the list above
         u.panel.append(&head("Folders  \u{00B7}  keep one to never clean it"));
@@ -816,8 +955,9 @@ fn fill_panel(u: &Rc<Ui>) {
     }
 }
 
-// Inside a folder you added: its files and sub-folders, each with a tick box. Unticked ones stay; a folder's name
-// opens it, and Back goes up (never above the folder you added).
+// What's inside an item: its files and sub-folders, each with a tick box. In a ticked item everything ticked is
+// cleaned and unticking keeps a file or folder for good; in an unticked item, ticking picks just that, for the next
+// clean. A folder's name opens it, and Back goes up (never above the item's own folders).
 fn inside_list(u: &Rc<Ui>, c: &Cat) {
     let roots: Vec<PathBuf> = c.roots.iter().filter(|r| r.is_dir()).cloned().collect();
     // where the list is looking: empty = the top, all of the item's folders at once
@@ -827,22 +967,62 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
     };
     *u.inside_here.borrow_mut() = Some((c.id.clone(), here.clone()));
     let top = here.as_os_str().is_empty();
-    u.panel.append(&head(&format!("{}  \u{00B7}  untick what should stay", if c.is_custom { "Inside this folder" } else { "What's inside" })));
-    let name = c.name.replace("  (your folder)", "");
-    u.panel.append(&body_text(&if c.admin { "A system folder: after your password it's cleaned as a whole, so this list is just to look at.".to_string() }
-                              else if !c.checked { format!("Nothing here is cleaned until you tick \u{201C}{}\u{201D} in the list. Untick anything that should always stay.", name) }
-                              else if c.is_custom { "Ticked files and folders are cleaned when you press Clean (only those older than the age you set). Click a folder's name to look inside it.".to_string() }
-                              else { "What this item cleans, with the folder each one comes from. Untick anything that should stay; you don't need to. Click a folder's name to look inside it.".to_string() }));
+    let partial = c.partial();
+    u.panel.append(&head(if c.is_custom { "Inside this folder" } else { "What's inside" }));
+    u.panel.append(&body_text(if c.admin { "A system folder: after your password it's cleaned as a whole, so this list is just to look at." }
+                              else if c.checked { "Everything ticked is cleaned. Untick anything that should always stay. Click a folder to look inside it." }
+                              else if partial { "Just the ticked files and folders are cleaned, this once. Select all cleans the whole item." }
+                              else { "Tick files or folders to clean just those, this once, or Select all for the whole item. Click a folder to look inside it." }));
+    // what is picked, with Select all / Clear at the right (system items are cleaned whole, so there's nothing to pick)
+    if !c.admin {
+        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        bar.add_css_class("rowline");
+        bar.set_margin_top(4);
+        let state = if c.checked { "All of it, except anything unticked".to_string() }
+                    else if partial { format!("{} picked{}", c.picks.len(), c.pick_bytes.map(|b| format!("  \u{00B7}  {}", fmt(b))).unwrap_or_default()) }
+                    else { "Nothing picked yet".to_string() };
+        let sl = label(&state, "inside-state");
+        if partial { sl.add_css_class("picked"); }
+        sl.set_hexpand(true); sl.set_valign(gtk::Align::Center);
+        sl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        bar.append(&sl);
+        let all = gtk::Button::with_label("Select all"); all.add_css_class("link-btn");
+        let none = gtk::Button::with_label("Clear"); none.add_css_class("link-btn");
+        for b in [&all, &none] { b.set_valign(gtk::Align::Center); b.set_margin_bottom(4); }
+        let (uu, id, rs) = (u.clone(), c.id.clone(), roots.clone());
+        all.connect_clicked(move |_| {
+            // the whole item, with nothing held back under it
+            for sp in engine::custom::skip() {
+                if rs.iter().any(|r| std::path::Path::new(&sp).starts_with(r)) { engine::custom::set_skipped(&sp, false); }
+            }
+            set_item(&uu, &id, true);
+        });
+        let (uu, id) = (u.clone(), c.id.clone());
+        none.connect_clicked(move |_| set_item(&uu, &id, false));
+        bar.append(&all); bar.append(&none);
+        u.panel.append(&bar);
+    }
     if !top {
         let root = roots.iter().find(|r| here.starts_with(r)).cloned().unwrap_or(here.clone());
         let rel = here.strip_prefix(&root).map(|r| r.to_string_lossy().replace('/', "  \u{203A}  ")).unwrap_or_default();
         let rname = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let b = gtk::Button::with_label(&format!("\u{2190}  Back  \u{00B7}  {}{}", rname, if rel.is_empty() { String::new() } else { format!("  \u{203A}  {}", rel) }));
         b.add_css_class("crumb");
+        b.set_hexpand(true);
+        if let Some(l) = b.child().and_then(|w| w.downcast::<gtk::Label>().ok()) { l.set_ellipsize(gtk::pango::EllipsizeMode::Middle); l.set_xalign(0.0); }
         let up = if roots.contains(&here) { PathBuf::new() } else { here.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
         let (uu, id) = (u.clone(), c.id.clone());
         b.connect_clicked(move |_| { *uu.inside_here.borrow_mut() = Some((id.clone(), up.clone())); fill_panel(&uu); });
-        u.panel.append(&b);
+        line.append(&b);
+        let open = gtk::Button::with_label("Open in Files");
+        open.add_css_class("link-btn"); open.set_valign(gtk::Align::Center);
+        let hp = here.clone();
+        open.connect_clicked(move |_| {
+            let _ = gtk::gio::AppInfo::launch_default_for_uri(&gtk::gio::File::for_path(&hp).uri(), None::<&gtk::gio::AppLaunchContext>);
+        });
+        line.append(&open);
+        u.panel.append(&line);
     }
     let skip = engine::custom::skip();
     // name, path, folder?, size, changed, which folder it comes from (at the top)
@@ -872,26 +1052,52 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
     };
     if top { for r in &roots { list(r, Some(format!("in {}", home_short(r)))); } } else { list(&here, None); }
     if entries.is_empty() { u.panel.append(&label("Empty", "group-note")); }
-    let cutoff = std::time::SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
+    let whole = c.checked || c.admin;   // ticked: everything here goes unless unticked; unticked: only what's ticked here
+    let age = if c.age_choice() { c.age_minutes } else { 0 };
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(age as u64 * 60);
     for (n, p, dir, len, modified, sub) in entries.iter().take(60) {
         let parent = p.parent().map(|x| x.to_path_buf()).unwrap_or_default();
-        let inherited = !roots.contains(&parent) && engine::custom::is_skipped(&parent, &skip);
-        let off = inherited || engine::custom::is_skipped(p, &skip);
+        let inherited = !roots.contains(&parent) && engine::custom::is_skipped(&parent, &skip);   // a folder around it is kept
+        let skipped = inherited || engine::custom::is_skipped(p, &skip);
+        let inherited_pick = c.picks.iter().any(|q| q != p && p.starts_with(q));   // a folder around it is picked
+        let (active, locked) = if whole { (!skipped, inherited) }
+                               else { (c.picks.contains(p) || inherited_pick, inherited_pick || skipped) };
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("rowline");
         let chk = gtk::CheckButton::new();
-        chk.set_active(!off); chk.set_sensitive(!inherited && !c.admin);
+        chk.set_active(active); chk.set_sensitive(!locked && !c.admin);
         chk.set_valign(gtk::Align::Center);
-        if !c.checked { chk.add_css_class("dim"); }   // grey until the item itself is ticked
-        let (uu, ps, id) = (u.clone(), p.to_string_lossy().to_string(), c.id.clone());
-        chk.connect_toggled(move |b| { engine::custom::set_skipped(&ps, !b.is_active()); uu.described.borrow_mut().clear(); scan(&uu, Some(vec![id.clone()])); });
+        let (uu, pp, id) = (u.clone(), p.clone(), c.id.clone());
+        if whole {   // unticking in a ticked item: always keep it
+            chk.connect_toggled(move |b| {
+                engine::custom::set_skipped(&pp.to_string_lossy(), !b.is_active());
+                uu.described.borrow_mut().clear();
+                remeasure(&uu, &id);
+            });
+        } else {     // ticking in an unticked item: clean just this, in the next clean
+            chk.connect_toggled(move |b| {
+                {
+                    let mut st = uu.st.borrow_mut();
+                    if let Some(item) = st.cats.iter_mut().find(|x| x.id == id) {
+                        if b.is_active() {
+                            item.picks.retain(|q| !q.starts_with(&pp));   // anything picked inside it is now covered by it
+                            item.picks.insert(pp.clone());
+                        } else {
+                            item.picks.remove(&pp);
+                        }
+                        item.pick_bytes = None;
+                    }
+                }
+                remeasure(&uu, &id);
+            });
+        }
         row.append(&chk);
         let nb = gtk::Button::new(); nb.add_css_class("row-btn"); nb.set_hexpand(true);
         let col = gtk::Box::new(gtk::Orientation::Vertical, 1);
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let nl = label(n, "row-name"); nl.set_hexpand(true); nl.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         line.append(&nl);
-        let too_new = !*dir && c.age_minutes > 0 && *modified > cutoff;
+        let too_new = c.checked && !*dir && age > 0 && *modified > cutoff;   // picked by hand, a file goes whatever its age
         let dsize = if *dir { u.dir_sizes.borrow().get(p).cloned() } else { None };
         line.append(&label(&if *dir { match dsize { Some(sz) if sz < u64::MAX => format!("{}  \u{00B7}  folder  \u{203A}", fmt(sz)), _ => "folder  \u{203A}".to_string() } } else if too_new { "too new, stays".to_string() } else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) }, "row-sub"));
         col.append(&line);
@@ -956,14 +1162,20 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
         let mut g = u.scan_gen.borrow_mut(); let e = g.entry(c.id.clone()).or_insert(0); *e += 1; (c.id.clone(), *e)
     }).collect();
     let queue = Arc::new(Mutex::new(VecDeque::from(targets)));
-    let (tx, rx) = mpsc::channel::<(String, String, u64, u64)>();
+    // id, name, files, bytes, and for a partly picked item what its picks hold (files, bytes)
+    let (tx, rx) = mpsc::channel::<(String, String, u64, u64, Option<(u64, u64)>)>();
     for _ in 0..n.min(4) {
         let (q, tx) = (queue.clone(), tx.clone());
         std::thread::spawn(move || loop {
             let c = match q.lock().ok().and_then(|mut g| g.pop_front()) { Some(c) => c, None => break };
             let mut cnt = Counter::default();
             engine::process(&c, false, false, &mut cnt);
-            if tx.send((c.id.clone(), c.name.clone(), cnt.files, cnt.bytes)).is_err() { break; }
+            let picked = if c.partial() {
+                let mut pc = Counter::default();
+                engine::process_picks(&c, false, false, &mut pc);
+                Some((pc.files, pc.bytes))
+            } else { None };
+            if tx.send((c.id.clone(), c.name.clone(), cnt.files, cnt.bytes, picked)).is_err() { break; }
         });
     }
     let got = Rc::new(Cell::new(0usize));
@@ -971,11 +1183,16 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
     glib::timeout_add_local(Duration::from_millis(120), move || {
         let mut any = false;
         let mut last = String::new();
-        while let Ok((id, name, files, bytes)) = rx.try_recv() {
+        while let Ok((id, name, files, bytes, picked)) = rx.try_recv() {
             any = true; got.set(got.get() + 1); last = name;
             let newest = uu.scan_gen.borrow().get(&id) == gens.get(&id);
             let mut st = uu.st.borrow_mut();
-            if newest { if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) { c.files = files; c.bytes = bytes; c.scanned = true; } }
+            if newest {
+                if let Some(c) = st.cats.iter_mut().find(|c| c.id == id) {
+                    c.files = files; c.bytes = bytes; c.scanned = true;
+                    match picked { Some((pf, pb)) => { c.pick_files = pf; c.pick_bytes = Some(pb); } None => { c.pick_files = 0; c.pick_bytes = None; } }
+                }
+            }
             st.pending = st.pending.saturating_sub(1);
         }
         if any {
@@ -1007,7 +1224,15 @@ fn after_first_scan(u: &Rc<Ui>) {
 
 // Shown every time Clean is pressed: what will go, grouped by risk, and how (Trash or permanently).
 fn confirm(u: &Rc<Ui>) {
-    let sel: Vec<Cat> = u.st.borrow().cats.iter().filter(|c| c.checked && c.refused().is_none() && (c.bytes > 0 || c.files > 0)).cloned().collect();
+    // frozen copies; a partly picked item counts only what you picked
+    let sel: Vec<Cat> = u.st.borrow().cats.iter()
+        .filter(|c| c.refused().is_none() && (c.checked && (c.bytes > 0 || c.files > 0) || c.partial() && c.pick_bytes.unwrap_or(0) > 0))
+        .map(|c| {
+            let mut s = c.clone();
+            if c.partial() { s.bytes = c.pick_bytes.unwrap_or(0); s.files = c.pick_files; s.name = format!("{} (your picks)", c.name); }
+            s
+        })
+        .collect();
     if sel.is_empty() { return; }
     let total: u64 = sel.iter().map(|c| c.bytes).sum();
     let w = gtk::Window::builder().transient_for(&u.win).modal(true).title("Space Hunter").default_width(560).resizable(false).build();
@@ -1173,6 +1398,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
         if d3.get() { glib::Propagation::Proceed } else { w.minimize(); glib::Propagation::Stop }   // closing mid-clean just tucks it away
     });
 
+    let cleaned_ids: Vec<String> = sel.iter().map(|c| c.id.clone()).collect();   // their picks are for this clean only
     let (tx, rx) = mpsc::channel::<Msg>();
     let c3 = cancel.clone();
     std::thread::spawn(move || {
@@ -1280,7 +1506,11 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 });
             } else if !stopped { fin.set(1.0); pbar.queue_draw(); }
             minimise.set_visible(false);
-            uu.st.borrow_mut().cleaning = false;
+            {
+                let mut st = uu.st.borrow_mut();
+                st.cleaning = false;
+                for c in st.cats.iter_mut().filter(|c| cleaned_ids.contains(&c.id)) { c.picks.clear(); c.pick_bytes = None; }
+            }
             uu.status.set_text("Cleaning finished. The list is being measured again.");
             scan(&uu, None);
             return glib::ControlFlow::Break;

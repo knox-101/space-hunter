@@ -57,24 +57,90 @@ namespace SpaceHunter
 
     static class Theme
     {
-        public static readonly Color Chassis = Color.FromArgb(0xD8, 0xD5, 0xCE);
-        public static readonly Color Pane = Color.FromArgb(0xE4, 0xE1, 0xDA);
-        public static readonly Color Selected = Color.FromArgb(0xE9, 0xE6, 0xE0);
-        public static readonly Color Hover = Color.FromArgb(0xE0, 0xDD, 0xD6);
-        public static readonly Color Screen = Color.FromArgb(0x12, 0x12, 0x12);
-        public static readonly Color DisplayInk = Color.FromArgb(0xE9, 0xE6, 0xDF);
-        public static readonly Color DisplayMuted = Color.FromArgb(0x8A, 0x8A, 0x86);
-        public static readonly Color DisplayTrack = Color.FromArgb(0x3A, 0x3A, 0x38);
-        public static readonly Color DisplayUsed = Color.FromArgb(0x6F, 0x6C, 0x66);
-        public static readonly Color Ink = Color.FromArgb(0x1B, 0x1B, 0x1A);
-        public static readonly Color Muted = Color.FromArgb(0x5F, 0x5C, 0x56);
-        public static readonly Color Soft = Color.FromArgb(0x60, 0x5C, 0x56);   // readable on the chassis (4.5:1)
-        public static readonly Color Line = Color.FromArgb(0xC3, 0xBF, 0xB6);
-        public static readonly Color Orange = Color.FromArgb(0xFF, 0x5B, 0x1F);
-        public static readonly Color OrangeDeep = Color.FromArgb(0xB5, 0x40, 0x0F);
-        public static readonly Color Key = Color.FromArgb(0xEC, 0xEA, 0xE5);
-        public static readonly Color KeyShadow = Color.FromArgb(0xA9, 0xA5, 0x9C);
-        public static readonly Color Disabled = Color.FromArgb(0x9A, 0x96, 0x8F);
+        // Colour tokens. Light is the original warm-grey chassis; Dark keeps the same idea (one display, darker than
+        // everything around it, orange as the only accent). Every token differs from every other in both palettes, so a
+        // window that is already open can be switched by swapping colours one to one (Theme.Apply).
+        public static Color Chassis, Pane, Selected, Hover, Screen, DisplayInk, DisplayMuted, DisplayTrack, DisplayUsed,
+                            Ink, Muted, Soft, Line, Orange, OrangeDeep, Key, KeyShadow, Disabled, KeyOff;
+        public static readonly Color OnOrange = Color.FromArgb(0x1B, 0x1B, 0x1A);   // text and ticks on orange, in both
+        public static bool IsDark;
+
+        static Color[] Light()
+        {
+            return new[] {
+                C(0xD8D5CE), C(0xE4E1DA), C(0xE9E6E0), C(0xE0DDD6), C(0x121212), C(0xE9E6DF), C(0x8A8A86), C(0x3A3A38), C(0x6F6C66),
+                C(0x1B1B1A), C(0x55524C), C(0x57534D), C(0xC3BFB6), C(0xFF5B1F), C(0x9A3409), C(0xECEAE5), C(0xA9A59C), C(0x9A968F), C(0xD0CDC6) };
+        }
+        static Color[] DarkSet()
+        {
+            return new[] {
+                C(0x1E1E1C), C(0x262624), C(0x30302D), C(0x2A2A27), C(0x0B0B0A), C(0xE9E6E0), C(0x8A8A87), C(0x3A3A39), C(0x6F6C67),
+                C(0xECE9E3), C(0xABA79F), C(0xA6A29A), C(0x3B3A37), C(0xFF5B1E), C(0xFF7A45), C(0x34332F), C(0x0E0E0D), C(0x6E6B65), C(0x2C2B28) };
+        }
+        static Color C(int rgb) { return Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF); }
+        static Color[] Current()
+        {
+            return new[] { Chassis, Pane, Selected, Hover, Screen, DisplayInk, DisplayMuted, DisplayTrack, DisplayUsed,
+                           Ink, Muted, Soft, Line, Orange, OrangeDeep, Key, KeyShadow, Disabled, KeyOff };
+        }
+        static void Set(Color[] p)
+        {
+            Chassis = p[0]; Pane = p[1]; Selected = p[2]; Hover = p[3]; Screen = p[4]; DisplayInk = p[5]; DisplayMuted = p[6];
+            DisplayTrack = p[7]; DisplayUsed = p[8]; Ink = p[9]; Muted = p[10]; Soft = p[11]; Line = p[12]; Orange = p[13];
+            OrangeDeep = p[14]; Key = p[15]; KeyShadow = p[16]; Disabled = p[17]; KeyOff = p[18];
+        }
+
+        // Light, Dark or System (follows Windows' "app mode"). Saved next to the settings.
+        public enum Mode { System, Light, Dark }
+        public static Mode Chosen = Mode.System;
+        static string ModeFile { get { return Path.Combine(Engine.AppDir, "theme.txt"); } }
+        public static bool SystemDark()
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                    return k != null && k.GetValue("AppsUseLightTheme") is int && (int)k.GetValue("AppsUseLightTheme") == 0;
+            }
+            catch { return false; }
+        }
+        static bool WantDark { get { return Chosen == Mode.Dark || Chosen == Mode.System && SystemDark(); } }
+        public static void LoadMode()
+        {
+            try { var t = File.Exists(ModeFile) ? File.ReadAllText(ModeFile).Trim() : ""; Chosen = t == "light" ? Mode.Light : t == "dark" ? Mode.Dark : Mode.System; } catch { }
+            IsDark = WantDark; Set(IsDark ? DarkSet() : Light());
+        }
+        public static void Force(bool dark) { Chosen = dark ? Mode.Dark : Mode.Light; IsDark = dark; Set(dark ? DarkSet() : Light()); }   // test hook, not saved
+        public static void SetMode(Mode m)
+        {
+            Chosen = m;
+            try { Directory.CreateDirectory(Engine.AppDir); File.WriteAllText(ModeFile, m == Mode.Light ? "light" : m == Mode.Dark ? "dark" : "system"); } catch { }
+            Apply();
+        }
+        // Switches every open window to the theme wanted now (after a choice, or when Windows itself changes).
+        public static void Apply()
+        {
+            bool dark = WantDark;
+            if (dark == IsDark) { foreach (Form f in Application.OpenForms) f.Invalidate(true); return; }
+            var from = Current(); var to = dark ? DarkSet() : Light();
+            var map = new System.Collections.Generic.Dictionary<int, Color>();
+            for (int i = 0; i < from.Length; i++) map[from[i].ToArgb()] = to[i];
+            IsDark = dark; Set(to);
+            foreach (Form f in Application.OpenForms) { Swap(f, map); TitleBar(f); f.Invalidate(true); }
+        }
+        static void Swap(Control c, System.Collections.Generic.Dictionary<int, Color> map)
+        {
+            Color n;
+            if (c.BackColor.A == 255 && map.TryGetValue(c.BackColor.ToArgb(), out n)) c.BackColor = n;
+            if (map.TryGetValue(c.ForeColor.ToArgb(), out n)) c.ForeColor = n;
+            var ll = c as LinkLabel;
+            if (ll != null)
+            {
+                if (map.TryGetValue(ll.LinkColor.ToArgb(), out n)) ll.LinkColor = n;
+                if (map.TryGetValue(ll.ActiveLinkColor.ToArgb(), out n)) ll.ActiveLinkColor = n;
+                if (map.TryGetValue(ll.VisitedLinkColor.ToArgb(), out n)) ll.VisitedLinkColor = n;
+            }
+            foreach (Control k in c.Controls) Swap(k, map);
+        }
 
         public static float S = 1f;   // UI scale: the screen's DPI / 96 (or a test override)
         public static float A = 1f;   // the screen's actual DPI / 96 (fonts in points already grow by this)
@@ -82,6 +148,7 @@ namespace SpaceHunter
         static FontFamily display, sans, sansSemi, mono, monoSemi;
         public static void Init(float overrideScale)
         {
+            LoadMode();
             Fonts.Init();
             try { using (var g = Graphics.FromHwnd(IntPtr.Zero)) A = g.DpiX / 96f; } catch { A = 1f; }
             S = overrideScale > 0 ? overrideScale : A;
@@ -200,6 +267,8 @@ namespace SpaceHunter
         {
             try
             {
+                int dark = IsDark ? 1 : 0;
+                DwmSetWindowAttribute(f.Handle, 20, ref dark, 4);   // dark title-bar buttons (and Windows 10's bar)
                 int cap = Chassis.R | (Chassis.G << 8) | (Chassis.B << 16);
                 int txt = Ink.R | (Ink.G << 8) | (Ink.B << 16);
                 int border = Line.R | (Line.G << 8) | (Line.B << 16);
@@ -285,9 +354,9 @@ namespace SpaceHunter
             float s = Theme.S, lift = 2 * s, press = down && Enabled ? lift : 0, rad = 4 * s;
             var face = new RectangleF(0.5f, 0.5f + press, Width - 1, Height - 1 - lift - 1);
             Color fill = Toggled ? Theme.Ink : Primary ? Theme.Orange : Theme.Key;
-            Color shadow = Toggled ? Color.Black : Primary ? Theme.OrangeDeep : Theme.KeyShadow;
-            Color ink = Toggled ? Theme.DisplayInk : Theme.Ink;
-            if (!Enabled) { fill = Color.FromArgb(0xD0, 0xCD, 0xC6); shadow = Theme.Line; ink = Theme.Disabled; }
+            Color shadow = Toggled ? Color.Black : Primary ? Color.FromArgb(0xB5, 0x40, 0x0F) : Theme.KeyShadow;
+            Color ink = Toggled ? Theme.Pane : Primary ? Theme.OnOrange : Theme.Ink;
+            if (!Enabled) { fill = Theme.KeyOff; shadow = Theme.Line; ink = Theme.Disabled; }
             else if (hover && !Toggled) fill = ControlPaint.Light(fill, 0.25f);
             if (press == 0)
                 using (var p = Theme.Round(new RectangleF(0.5f, 0.5f + lift, Width - 1, Height - 1 - lift - 1), rad)) using (var b = new SolidBrush(shadow)) g.FillPath(b, p);

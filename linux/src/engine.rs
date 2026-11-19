@@ -87,10 +87,20 @@ pub struct Cat {
     pub deletes: String,
     pub safe_text: String,
     pub after: String,
+    // Files and folders picked by hand inside an unticked item: cleaned exactly as picked (whatever their age), in the
+    // next clean only. Never saved, so nothing new is ever cleaned by surprise later.
+    pub picks: HashSet<PathBuf>,
+    pub pick_files: u64,
+    pub pick_bytes: Option<u64>,             // None: not measured yet
 }
 
 impl Cat {
     pub fn is_safe(&self) -> bool { self.level == Level::Safe }
+    pub fn partial(&self) -> bool { !self.checked && !self.picks.is_empty() }
+    pub fn included(&self) -> bool { self.checked || self.partial() }
+    pub fn clean_bytes(&self) -> u64 { if self.checked { self.bytes } else if self.partial() { self.pick_bytes.unwrap_or(0) } else { 0 } }
+    // Only items that fill up over time offer "older than"; caches and the like are cleaned all at once.
+    pub fn age_choice(&self) -> bool { matches!(self.kind, Kind::Contents | Kind::Subfolders) && (self.default_age > 0 || self.is_custom) }
 }
 
 #[derive(Default)]
@@ -114,7 +124,7 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| PathBuf::from("/nonexistent"))
 }
 
-fn config_dir() -> PathBuf { glib::user_config_dir().join("space-hunter") }
+pub fn config_dir() -> PathBuf { glib::user_config_dir().join("space-hunter") }
 
 fn lines(name: &str) -> Vec<String> {
     fs::read_to_string(config_dir().join(name)).unwrap_or_default()
@@ -304,6 +314,7 @@ pub fn build() -> Vec<Cat> {
             default_age: age, age_minutes: age, last_age: if age > 0 { age } else { 14 * DAY }, checked: level == Level::Safe,
             files: 0, bytes: 0, scanned: false, blocked: false,
             short: d.short, what: d.what, deletes: d.deletes, safe_text: d.safe, after: d.after,
+            picks: HashSet::new(), pick_files: 0, pick_bytes: None,
         };
         let installed = match c.kind {
             Kind::Trash => true,
@@ -326,6 +337,7 @@ pub fn build() -> Vec<Cat> {
                 deletes: "Just this file, whatever its age.".into(),
                 safe_text: "Only you know. Open it and check before ticking.".into(),
                 after: "The file is gone, unless you choose Trash in the confirm window.".into(),
+                picks: HashSet::new(), pick_files: 0, pick_bytes: None,
             });
             continue;
         }
@@ -338,6 +350,7 @@ pub fn build() -> Vec<Cat> {
             deletes: "Every file inside it (older than the age you set) and the sub-folders that end up empty. The folder itself stays.".into(),
             safe_text: "Only you know. Open it and check before ticking. Protected folders inside it are skipped.".into(),
             after: "The files are gone, unless you choose Trash in the confirm window.".into(),
+            picks: HashSet::new(), pick_files: 0, pick_bytes: None,
         });
     }
     list
@@ -434,6 +447,7 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
         }
         return;
     }
+    if delete && c.partial() { process_picks(c, true, to_trash, cnt); return; }   // only what you picked
     let cutoff = SystemTime::now() - Duration::from_secs(c.age_minutes as u64 * 60);
     let mut kept = keep::all();
     kept.extend(keep::builtin());   // Space Hunter itself, always
@@ -494,6 +508,76 @@ pub fn process(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
                 }
             }
             Kind::Journal => {}
+        }
+    }
+}
+
+// The files and folders picked by hand in an unticked item (measure with delete = false, clean with delete = true).
+// Each pick goes whole, whatever its age. Only picks strictly inside the item's own folders count, a pick inside another
+// picked folder is covered by it, and protected, kept and "always keep" files, excluded folders, links, other people's
+// files and other disks still stay.
+pub fn process_picks(c: &Cat, delete: bool, to_trash: bool, cnt: &mut Counter) {
+    if c.admin || c.blocked || c.refused().is_some() || !matches!(c.kind, Kind::Contents | Kind::Subfolders) { return; }
+    let mut kept = keep::all();
+    kept.extend(keep::builtin());
+    kept.extend(custom::skip());
+    let me = uid();
+    let root_user = is_root();
+    let trash_it = to_trash;
+    // the item's own folders, by the same rules as a normal clean
+    let roots: Vec<(PathBuf, u64)> = c.roots.iter().filter_map(|r| {
+        let m = fs::symlink_metadata(r).ok()?;
+        if !m.is_dir() || !is_safe_root(r, false, c.extensions.is_some() && c.top_level_only) || keep::is_kept(r, &kept) { return None; }
+        Some((r.clone(), m.dev()))
+    }).collect();
+    let all: Vec<PathBuf> = c.picks.iter().filter(|p| p.is_absolute() && !has_dots(p)).cloned().collect();
+    let mut picks: Vec<(PathBuf, PathBuf, u64)> = Vec::new();   // pick, its root, the root's disk
+    for p in &all {
+        if all.iter().any(|q| q != p && p.starts_with(q)) { continue; }   // inside a picked folder: covered by it
+        if let Some((r, dev)) = roots.iter().find(|(r, _)| p != r && p.starts_with(r)) { picks.push((p.clone(), r.clone(), *dev)); }
+    }
+    picks.sort();
+    let touched: std::cell::RefCell<HashSet<PathBuf>> = Default::default();
+    let handle = |path: &Path, m: &fs::Metadata, cnt: &mut Counter| {
+        if cnt.cancelled() { return; }
+        if let Some(ext) = &c.extensions {
+            let e = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if !ext.contains(&e) { return; }
+        }
+        if keep::is_kept(path, &kept) { return; }
+        if !root_user && m.uid() != me { return; }   // other people's and the system's files are never touched
+        let size = size_of(m);
+        if !delete { cnt.files += 1; cnt.bytes += size; return; }
+        let ok = if trash_it { trash(path) } else { fs::remove_file(path).is_ok() };
+        if ok { cnt.files += 1; if let Some(d) = path.parent() { touched.borrow_mut().insert(d.to_path_buf()); } if trash_it { cnt.trashed += size } else { cnt.bytes += size } } else { cnt.skipped += 1; }
+        if let Some(f) = cnt.on_item.as_mut() { f(path, size, ok, trash_it); }
+    };
+    for (p, root, dev) in &picks {
+        if cnt.cancelled() { break; }
+        if keep::is_kept(p, &kept) { continue; }
+        // every folder on the way down from the item's folder: a real folder (never a link), on the same disk, yours,
+        // and not one the item leaves out
+        let rel = match p.strip_prefix(root) { Ok(r) => r.to_path_buf(), Err(_) => continue };
+        let mut way = root.clone();
+        let mut fine = true;
+        let parts: Vec<_> = rel.components().collect();
+        for (i, part) in parts.iter().enumerate() {
+            way.push(part.as_os_str());
+            if c.exclude.contains(&part.as_os_str().to_string_lossy().to_string()) { fine = false; break; }
+            if i + 1 == parts.len() { break; }
+            match fs::symlink_metadata(&way) { Ok(m) if m.is_dir() && m.dev() == *dev && (root_user || m.uid() == me) => {}, _ => { fine = false; break; } }
+        }
+        if !fine { continue; }
+        if c.top_level_only && parts.len() != 1 { continue; }   // only files directly in the folder
+        let m = match fs::symlink_metadata(p) { Ok(m) => m, Err(_) => continue };
+        let ft = m.file_type();
+        if ft.is_symlink() || m.dev() != *dev { continue; }
+        if ft.is_file() { handle(p, &m, cnt); continue; }
+        if !ft.is_dir() || c.top_level_only || (!root_user && m.uid() != me) { continue; }
+        walk_as(p, &c.exclude, &kept, me, &mut |fp, fm| handle(fp, fm, cnt));
+        if delete && !cnt.cancelled() {   // the picked folder goes too, once it's empty (only empty folders are removed)
+            let far = SystemTime::now() + Duration::from_secs(3650 * 86400);
+            remove_empty_dirs(p, false, &c.exclude, &kept, me, far, &touched.borrow());
         }
     }
 }
@@ -559,7 +643,8 @@ pub mod settings {
             if p.len() < 4 { continue; }
             if let Some(c) = cats.iter_mut().find(|c| c.id == p[0]) {
                 if c.refused().is_none() { c.checked = p[1] == "1"; }
-                if let Ok(a) = p[2].parse() { c.age_minutes = a; }
+                // no age on caches and the like: they are cleaned all at once
+                if let Ok(a) = p[2].parse::<u32>() { c.age_minutes = if matches!(c.kind, Kind::Contents | Kind::Subfolders) && !c.age_choice() { 0 } else { a }; }
                 if let Ok(a) = p[3].parse::<u32>() { if a > 0 { c.last_age = a; } }
             }
         }

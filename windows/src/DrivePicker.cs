@@ -65,7 +65,7 @@ namespace SpaceHunter
             var g = e.Graphics; Theme.Hq(g);
             float s = Theme.S, lift = 2 * s, press = (down || Open) && Enabled ? lift : 0, rad = 4 * s;
             var face = new RectangleF(0.5f, 0.5f + press, Width - 1, Height - 1 - lift - 1);
-            Color fill = !Enabled ? Color.FromArgb(0xD0, 0xCD, 0xC6) : hover || Open ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key;
+            Color fill = !Enabled ? Theme.KeyOff : hover || Open ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key;
             if (press == 0)
                 using (var p = Theme.Round(new RectangleF(0.5f, 0.5f + lift, Width - 1, Height - 1 - lift - 1), rad)) using (var b = new SolidBrush(Theme.KeyShadow)) g.FillPath(b, p);
             using (var p = Theme.Round(face, rad)) using (var b = new SolidBrush(fill)) g.FillPath(b, p);

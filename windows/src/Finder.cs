@@ -355,7 +355,7 @@ namespace SpaceHunter
                 if (!own && (added.Contains(r) || (inside.ContainsKey(r) && inside[r])))
                 {
                     bool undo = added.Contains(r) && hoverChip == i;   // pointing at "added" offers the way back
-                    using (var p = Theme.Round(chip, 4)) using (var b = new SolidBrush(undo ? Theme.Muted : Theme.Ink)) g.FillPath(b, p);
+                    using (var p = Theme.Round(chip, 4)) using (var b = new SolidBrush(undo ? Theme.DisplayTrack : Theme.Screen)) g.FillPath(b, p);
                     using (var b = new SolidBrush(Theme.DisplayInk)) using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                         g.DrawString(undo ? "REMOVE FROM LIST" : added.Contains(r) ? "ADDED" : "ALREADY INCLUDED", fChip, b, chip, sf);
                 }
@@ -501,7 +501,7 @@ namespace SpaceHunter
                 if (r.Width < 2 || r.Height < 2) continue;
                 bool hot = i == hover && CanOpen(b);
                 if (b.Free) Theme.Hatch(g, r, Theme.Line, Theme.Hover);
-                else using (var br = new SolidBrush(hot ? Theme.Ink : b.Rest ? Theme.Hover : Theme.Key)) g.FillRectangle(br, r);
+                else using (var br = new SolidBrush(hot ? Theme.Screen : b.Rest ? Theme.Hover : Theme.Key)) g.FillRectangle(br, r);
                 if (b.Marked)
                 {
                     float c = Math.Min(14, Math.Min(r.Width, r.Height) / 2);
@@ -581,7 +581,7 @@ namespace SpaceHunter
             // the Back key, drawn like the other keys (flat and grey at the top of the drive)
             var b = Back(); bool on = CanGoBack;
             if (on) using (var p = Theme.Round(new RectangleF(b.X, b.Y + 2, b.Width, b.Height), 4)) using (var br = new SolidBrush(Theme.KeyShadow)) g.FillPath(br, p);
-            using (var p = Theme.Round(b, 4)) using (var br = new SolidBrush(!on ? Color.FromArgb(0xD0, 0xCD, 0xC6) : hover == 0 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
+            using (var p = Theme.Round(b, 4)) using (var br = new SolidBrush(!on ? Theme.KeyOff : hover == 0 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
             Color ink = on ? Theme.Ink : Theme.Disabled;
             using (var pen = new Pen(ink, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
@@ -605,7 +605,7 @@ namespace SpaceHunter
             {
                 var a = AddKey();
                 using (var p = Theme.Round(new RectangleF(a.X, a.Y + 2, a.Width, a.Height), 4)) using (var br = new SolidBrush(IsAdded ? Color.Black : Theme.KeyShadow)) g.FillPath(br, p);
-                using (var p = Theme.Round(a, 4)) using (var br = new SolidBrush(IsAdded ? (hover == 1000 ? Theme.Muted : Theme.Ink) : hover == 1000 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
+                using (var p = Theme.Round(a, 4)) using (var br = new SolidBrush(IsAdded ? (hover == 1000 ? Theme.DisplayTrack : Theme.Screen) : hover == 1000 ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key)) g.FillPath(br, p);
                 using (var br = new SolidBrush(IsAdded ? Theme.DisplayInk : Theme.Ink)) using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                     g.DrawString(IsAdded ? (hover == 1000 ? "REMOVE FROM LIST" : "ADDED") : "+ ADD THIS FOLDER", fKey, br, a, sf);
             }

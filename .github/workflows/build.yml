@@ -149,6 +149,17 @@ jobs:
           "$BIN" --test-engine "$T" --by-changed
           ok test -d "$T/fresh-empty"; ok test ! -e "$T/e"
 
+          echo "-- hand-picked files and folders go whatever their age; the rest, and picks outside the folder, stay"
+          mkdir -p "$T/p/pickdir/deep" "$T/p/pickdir2"
+          echo new > "$T/p/fresh.txt"; echo a > "$T/p/pickdir/a"; echo b > "$T/p/pickdir/deep/b"
+          echo s > "$T/p/sibling.txt"; echo c > "$T/p/pickdir2/c"
+          echo outside > "$RUNNER_TEMP/picked-outside.txt"
+          "$BIN" --test-engine "$T/p" --pick "$T/p/fresh.txt" --pick "$T/p/pickdir|$T/p/pickdir/deep/b|$RUNNER_TEMP/picked-outside.txt|/etc/hostname"
+          ok test ! -e "$T/p/fresh.txt"; ok test ! -e "$T/p/pickdir"
+          ok test -e "$T/p/sibling.txt"; ok test -e "$T/p/pickdir2/c"; ok test -d "$T/p"
+          ok test -e "$RUNNER_TEMP/picked-outside.txt"
+          if [ -e /etc/hostname ]; then ok test -s /etc/hostname; fi
+
           echo "-- a folder owned by someone else (here root) is never entered"
           sudo mkdir -p "$T/rootowned"; sudo sh -c "printf x > '$T/rootowned/f'"; sudo touch -d '3 days ago' "$T/rootowned/f"
           "$BIN" --test-engine "$T" --by-changed

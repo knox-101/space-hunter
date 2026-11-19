@@ -184,6 +184,7 @@ namespace SpaceHunter
             Application.SetCompatibleTextRenderingDefault(false);
             float scale; if (!float.TryParse(Arg(args, "--scale") ?? "", NumberStyles.Float, CultureInfo.InvariantCulture, out scale)) scale = 0;
             Theme.Init(scale);
+            if (Arg(args, "--theme") != null) Theme.Force(Arg(args, "--theme") == "dark");   // test hook for screenshots
             string snap = Arg(args, "--snapshot");
 
             // elevated with another account's password: every user folder would be that account's, so stop
@@ -201,7 +202,8 @@ namespace SpaceHunter
             {
                 var c = new Category { Id = "test", Name = "Test folder", Level = Level.Safe, Kind = Kind.Contents, Checked = true, Recycle = Has(args, "--bin") };
                 c.Roots.Add(testDir);
-                var cnt = new Counter(); Engine.Process(c, false, cnt); c.Bytes = cnt.Bytes; c.Files = cnt.Files;
+                if (Arg(args, "--pick") != null) { c.Checked = false; foreach (var pp in Arg(args, "--pick").Split('|')) c.Picks.Add(pp); }   // only these
+                var cnt = new Counter(); if (c.Partial) Engine.ProcessPicks(c, false, cnt); else Engine.Process(c, false, cnt); c.Bytes = cnt.Bytes; c.Files = cnt.Files;
                 var pf = new ProgressForm(new List<Category> { c }, c.Bytes) { SnapshotPath = snap };
                 pf.StartPosition = FormStartPosition.CenterScreen; pf.ShowInTaskbar = true;
                 Application.Run(pf);
@@ -259,6 +261,7 @@ namespace SpaceHunter
 
             Updater.CleanUpOld();
             var form = new MainForm { SnapshotPath = snap, OpenPanelFor = Arg(args, "--open"), FramesDir = Arg(args, "--frames") };
+            if (Arg(args, "--pick") != null) form.PickPaths = Arg(args, "--pick").Split('|').ToList();
             if (Has(args, "--test-update-bar"))   // test hook: show the update bar with a made-up newer version
                 form.Shown += (s, e) => form.ShowUpdate(new Release { Version = new Version(Updater.Current.Major, Updater.Current.Minor + 1, 0), Tag = "test" });
             Application.Run(form);

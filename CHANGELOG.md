@@ -3,6 +3,22 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.5.0 (2026-11-19)
+
+- **Pick exactly what goes.** Open an unticked item and tick just the files or folders you want cleaned. The item
+  shows a dash instead of a tick and says, for example, "25 of 312 files picked · just these". Only those go, whatever
+  their age, in the next clean; afterwards the item is unticked again, so nothing new is ever cleaned by surprise.
+- **Select all / Clear** at the top right of every file list, and the file list works the same in every folder:
+  open a folder to look inside, Back, the folder trail, and Open in Explorer / Finder / Files.
+- **Age only where it makes sense.** "Only older than N" or "everything" is offered on things that fill up over
+  time (Temp, logs, Windows Update files, Downloads, old AI chats and workspaces, folders you added). Caches are
+  cleaned whole, so they no longer ask.
+- **Shorter item panel.** Three short lines are always in view (what it is, what goes, what happens after), with
+  "More about this item" for the full notes, so the file list has room.
+- **Light, Dark or System theme**, from the switch at the top right. System follows your computer's setting as it
+  changes. The display stays the darkest part of the window and orange stays the only accent.
+- Small grey text and orange text are a little darker in the light theme, so they're easier to read.
+
 ## 1.4.0 (2026-11-19)
 
 - **Update checks work on shared networks.** On a busy network (an office, a campus, a hotspot shared by many people)

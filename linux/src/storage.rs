@@ -514,8 +514,9 @@ fn list_row(s: &Rc<Storage>, name: &str, sub: &str, size: u64, max: u64, p: &Pat
     let bar = gtk::DrawingArea::new(); bar.set_content_width(180); bar.set_content_height(8); bar.set_valign(gtk::Align::Center);
     let frac = size as f64 / max as f64;
     bar.set_draw_func(move |_, cr, w, h| {
-        cr.set_source_rgb(0.765, 0.749, 0.714); cr.rectangle(0.0, 0.0, w as f64, h as f64); let _ = cr.fill();
-        cr.set_source_rgb(0.106, 0.106, 0.102); cr.rectangle(0.0, 0.0, (w as f64 * frac).max(if frac > 0.0 { 2.0 } else { 0.0 }), h as f64); let _ = cr.fill();
+        let pal = crate::theme::pal();
+        crate::theme::rgb(cr, pal.line); cr.rectangle(0.0, 0.0, w as f64, h as f64); let _ = cr.fill();
+        crate::theme::rgb(cr, pal.ink); cr.rectangle(0.0, 0.0, (w as f64 * frac).max(if frac > 0.0 { 2.0 } else { 0.0 }), h as f64); let _ = cr.fill();
     });
     r.append(&bar);
     let sizes = gtk::Box::new(gtk::Orientation::Vertical, 2); sizes.set_size_request(90, -1); sizes.set_valign(gtk::Align::Center);
@@ -562,20 +563,21 @@ fn draw_chart(s: &Rc<Storage>, cr: &gtk::cairo::Context, w: f64, h: f64) {
         squarify(&mut keep, w, h);
         blocks = keep;
     }
-    cr.set_source_rgb(0.847, 0.835, 0.808); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
+    let pal = crate::theme::pal();
+    crate::theme::rgb(cr, pal.chassis); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
     let layout = pangocairo_layout(s, cr);
     for (i, b) in blocks.iter().enumerate() {
         let (x, y, bw, bh) = (b.rect.0 + 1.5, b.rect.1 + 1.5, b.rect.2 - 3.0, b.rect.3 - 3.0);
         if bw < 2.0 || bh < 2.0 { continue; }
         let hot = sm.hover == Some(i) && b.target.is_some();
         if b.free {
-            cr.set_source_rgb(0.878, 0.867, 0.839); cr.rectangle(x, y, bw, bh); let _ = cr.fill();
+            crate::theme::rgb(cr, pal.hover); cr.rectangle(x, y, bw, bh); let _ = cr.fill();
             let _ = cr.save(); cr.rectangle(x, y, bw, bh); cr.clip();
-            cr.set_source_rgb(0.765, 0.749, 0.714); cr.set_line_width(1.5);
+            crate::theme::rgb(cr, pal.line); cr.set_line_width(1.5);
             let mut lx = x - bh; while lx < x + bw { cr.move_to(lx, y + bh); cr.line_to(lx + bh, y); lx += 5.0; }
             let _ = cr.stroke(); let _ = cr.restore();
         } else {
-            if hot { cr.set_source_rgb(0.106, 0.106, 0.102); } else if b.rest { cr.set_source_rgb(0.878, 0.867, 0.839); } else { cr.set_source_rgb(0.925, 0.918, 0.898); }
+            crate::theme::rgb(cr, if hot { pal.screen } else if b.rest { pal.hover } else { pal.key });   // pointed at: dark like the display, in both themes
             cr.rectangle(x, y, bw, bh); let _ = cr.fill();
         }
         if b.marked {
@@ -585,9 +587,9 @@ fn draw_chart(s: &Rc<Storage>, cr: &gtk::cairo::Context, w: f64, h: f64) {
         }
         if bw >= 46.0 && bh >= 34.0 {
             let _ = cr.save(); cr.rectangle(x, y, bw - if b.marked { 14.0 } else { 4.0 }, bh); cr.clip();
-            if hot { cr.set_source_rgb(0.914, 0.902, 0.875); } else if b.free { cr.set_source_rgb(0.373, 0.361, 0.337); } else { cr.set_source_rgb(0.106, 0.106, 0.102); }
+            crate::theme::rgb(cr, if hot { crate::theme::DISPLAY_INK } else if b.free { pal.muted } else { pal.ink });
             layout.set_text(&b.name); cr.move_to(x + 8.0, y + 6.0); pangocairo_show(cr, &layout);
-            if hot { cr.set_source_rgb(0.541, 0.541, 0.525); } else { cr.set_source_rgb(0.490, 0.475, 0.447); }
+            crate::theme::rgb(cr, if hot { crate::theme::DISPLAY_MUTED } else { pal.soft });
             layout.set_text(&fmt(b.size)); cr.move_to(x + 8.0, y + 24.0); pangocairo_show(cr, &layout);
             let _ = cr.restore();
         }

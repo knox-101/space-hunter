@@ -20,7 +20,16 @@ namespace SpaceHunter
     {
         // a frozen copy for a running clean: changing ticks, ages or Reset in the window can't alter it half-way
         public int ScanGen;   // bumped whenever a new measurement starts; an older one finishing late is ignored
-        public Category Snapshot() { var c = (Category)MemberwiseClone(); c.Roots = new List<string>(Roots); return c; }
+        public Category Snapshot() { var c = (Category)MemberwiseClone(); c.Roots = new List<string>(Roots); c.Picks = new HashSet<string>(Picks, StringComparer.OrdinalIgnoreCase); return c; }
+        // Files and folders picked by hand inside an unticked item: cleaned exactly as picked (whatever their age), in the
+        // next clean only. Never saved, so nothing new is ever cleaned by surprise later.
+        public HashSet<string> Picks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public long PickFiles, PickBytes = -1;   // -1: not measured yet
+        public bool Partial { get { return !Checked && Picks.Count > 0; } }
+        public bool Included { get { return Checked || Picks.Count > 0; } }
+        public long CleanBytes { get { return Checked ? Bytes : Partial ? Math.Max(0, PickBytes) : 0; } }
+        // Only items that fill up over time offer "older than"; caches and the like are cleaned all at once.
+        public bool AgeChoice { get { return (Kind == Kind.Contents || Kind == Kind.Subfolders) && (DefaultAgeMinutes > 0 || IsCustom); } }
         public string Id, Name, Note;
         public Level Level;
         public Kind Kind;
@@ -43,7 +52,7 @@ namespace SpaceHunter
         public bool Blocked { get { return AdminOnly && !Engine.IsAdmin; } }   // can't be measured without permission
         public void ResetToDefault()
         {
-            Checked = Level == Level.Safe; AgeMinutes = DefaultAgeMinutes;
+            Checked = Level == Level.Safe; AgeMinutes = DefaultAgeMinutes; Picks.Clear(); PickBytes = -1;
             LastAge = DefaultAgeMinutes > 0 ? DefaultAgeMinutes : 14 * Engine.Day; Recycle = false;
         }
     }
@@ -231,6 +240,7 @@ namespace SpaceHunter
             if (c.Kind == Kind.WindowsOld) { var m = Measure(c); cnt.Files += m.Files; cnt.Bytes += m.Bytes; return; }
 
             if (c.Refused != null) return;   // the safety rules refuse it now
+            if (delete && c.Partial) { ProcessPicks(c, true, cnt); return; }   // only what you picked
             var bin = delete && c.Recycle ? new RecycleBatch(cnt) : null;
             skipNow = Custom.Skip;   // what you unticked under "What's inside" (or inside a folder you added)
             touchedNow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // folders this clean takes files out of
@@ -278,6 +288,43 @@ namespace SpaceHunter
                         if (delete) RemoveEmptyDirs(s, false, exclude, DateTime.MaxValue);   // the whole old session folder goes
                     }
                 }
+            }
+            if (bin != null) bin.Flush();
+        }
+
+        // The files and folders picked by hand in an unticked item: each one is cleaned whole, whatever its age. Only picks
+        // inside the item's own folders count, and protected, kept and "always keep" files still stay.
+        public static void ProcessPicks(Category c, bool delete, Counter cnt)
+        {
+            if (c.Refused != null || c.Blocked) return;
+            var roots = ExistingRoots(c).Select(r => r.TrimEnd('\\')).ToList();
+            List<string> picks; try { picks = c.Picks.ToList(); } catch { return; }
+            picks = picks.Where(p => roots.Any(r => p.StartsWith(r + "\\", StringComparison.OrdinalIgnoreCase)))
+                         .Where(p => !picks.Any(q => q != p && p.StartsWith(q + "\\", StringComparison.OrdinalIgnoreCase))).ToList();   // a pick inside a picked folder is covered
+            var exclude = new HashSet<string>(c.ExcludeDirs, StringComparer.OrdinalIgnoreCase);
+            var bin = delete && c.Recycle ? new RecycleBatch(cnt) : null;
+            skipNow = Custom.Skip;
+            touchedNow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var ext = c.Extensions;
+            foreach (var p in picks)
+            {
+                if (cnt.Cancel) break;
+                try
+                {
+                    if (Keep.IsKept(p) || Custom.IsSkipped(p, skipNow)) continue;
+                    var fi = new FileInfo(p);
+                    if (fi.Exists)
+                    {
+                        if ((fi.Attributes & FileAttributes.ReparsePoint) == 0 && (ext == null || ext.Contains(fi.Extension))) Handle(fi, DateTime.MaxValue, delete, cnt, bin);
+                        continue;
+                    }
+                    var di = new DirectoryInfo(p);
+                    if (!di.Exists || (di.Attributes & FileAttributes.ReparsePoint) != 0 || c.TopLevelOnly || exclude.Contains(di.Name)) continue;
+                    Walk(di, f => { if (ext == null || ext.Contains(f.Extension)) Handle(f, DateTime.MaxValue, delete, cnt, bin); }, cnt, exclude);
+                    if (bin != null) bin.Flush();
+                    if (delete) RemoveEmptyDirs(di, false, exclude, DateTime.MaxValue);   // the picked folder goes too, once empty
+                }
+                catch { cnt.Skipped++; }
             }
             if (bin != null) bin.Flush();
         }
@@ -827,7 +874,7 @@ namespace SpaceHunter
                     var c = cats.FirstOrDefault(x => x.Id == p[0]);
                     if (c == null) continue;
                     c.Checked = p[1] == "1";
-                    int m; if (int.TryParse(p[2], out m) && m >= 0) c.AgeMinutes = m;
+                    int m; if (int.TryParse(p[2], out m) && m >= 0) c.AgeMinutes = c.AgeChoice ? m : 0;   // no age on caches
                     // field 4 (an old per-item Recycle Bin choice) is ignored: the confirm window decides now
                     int la; if (p.Length >= 5 && int.TryParse(p[4], out la) && la > 0) c.LastAge = la;
                 }
