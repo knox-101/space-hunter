@@ -11,7 +11,8 @@ for fixes, the middle number is for new features, and the first number is for bi
 - The Space map shows a small turning indicator while it gets ready and while it sorts folders.
 - In the Space map, clicking **Added** takes a folder back off the cleanup list.
 - The confirm window groups what you ticked under Safe to delete, Review first and Caution, and starts on
-  **Recycle Bin / Trash** whenever anything beyond Safe to delete is ticked.
+  **Recycle Bin / Trash** whenever anything beyond Safe to delete is ticked. "Delete" is now called
+  **Permanently delete**, so the choice can't be misread.
 - Caution is marked with a solid bar and Review with a hatched one, so the two differ without colour.
 
 ## 1.0.0 (2026-11-19)

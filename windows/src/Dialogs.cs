@@ -17,7 +17,7 @@ namespace SpaceHunter
     class ConfirmForm : Form
     {
         public bool Recycle;   // false = delete permanently
-        readonly Key delKey = new Key("delete"), binKey = new Key("recycle bin");
+        readonly Key delKey = new Key("permanently delete"), binKey = new Key("recycle bin");
         readonly Label hint;
         const int RowH = 32, HeadH = 26, MaxPerGroup = 4;
 

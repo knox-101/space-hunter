@@ -1127,7 +1127,7 @@ struct ConfirmSheet: View {
             }
             Text("How to clean").font(Theme.semi(13)).foregroundColor(Theme.muted).padding(.top, 8)
             HStack(spacing: 4) {
-                Button("Delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
+                Button("Permanently delete") { toTrash = false; chosen = true }.buttonStyle(KeyStyle(toggled: !trashing))
                 Button("Move to Trash") { toTrash = true; chosen = true }.buttonStyle(KeyStyle(toggled: trashing))
             }
             Text(trashing ? "Everything goes to the Trash, so you can restore it. The space comes back when you empty the Trash. If the Trash item is ticked, the old Trash is emptied first."
