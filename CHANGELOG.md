@@ -3,7 +3,7 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-11-19)
 
 - **Clearer sections**: **Quick clean** (caches and leftovers that rebuild), **Big caches & history** and
   **Personal & work items**. Each tile shows how much of it is ticked, such as "12 of 12 ticked · 236 MB".
