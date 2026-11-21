@@ -8,6 +8,17 @@ confirmation.** Free for Windows 10/11, macOS 13+ and Linux. No account, no trac
 Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-x86_64.AppImage` (or
 `nix run github:knox-101/space-hunter`) · first-run steps are on the download page.
 
+**On a Mac, move it to Applications before you open it.**
+
+1. Unzip `SpaceHunter-mac.zip` and drag **Space Hunter** into **Applications**.
+2. Open it from Applications. The first time, macOS refuses because the app isn't from the App Store. Go to
+   **System Settings → Privacy & Security** and click **Open Anyway** (on macOS 13–14, right-click the app → **Open**
+   also works).
+
+Opened straight from Downloads, macOS runs the app from a hidden read-only copy, and versions up to 1.6.2 then
+couldn't update ("doesn't have permission to save"). If that happened to you, download the latest version once by
+hand as above; it keeps your settings, and updates install by themselves after that.
+
 ![Space Hunter on Windows](docs/screenshots/windows-main.png)
 
 ## What it does

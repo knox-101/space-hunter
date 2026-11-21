@@ -4,7 +4,7 @@ Double-click it; there's nothing to install. If Windows SmartScreen warns, click
 
 ### Mac → [SpaceHunter-mac.zip](https://github.com/knox-101/space-hunter/releases/download/vVERSION/SpaceHunter-mac.zip)
 
-For macOS 13 or later, Apple silicon or Intel. Unzip it and move **Space Hunter** to Applications. The first time, open it once (macOS will refuse), then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13–14, right-click the app → **Open** also works.
+For macOS 13 or later, Apple silicon or Intel. Unzip it and move **Space Hunter** to Applications **before opening it** (opened straight from Downloads, older versions couldn't update themselves). The first time, open it once (macOS will refuse), then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13–14, right-click the app → **Open** also works.
 
 ### Linux → [SpaceHunter-x86_64.AppImage](https://github.com/knox-101/space-hunter/releases/download/vVERSION/SpaceHunter-x86_64.AppImage)
 
