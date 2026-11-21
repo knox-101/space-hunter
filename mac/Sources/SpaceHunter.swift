@@ -53,6 +53,9 @@ final class Counter {
     var onItem: ((String, Int64, Bool, Bool) -> Void)?   // path, size, ok, toTrash
 }
 
+// What one item freed in a clean (for the list at the end of the cleaning window)
+struct FreedItem { let name: String; let bytes: Int64; let trashed: Int64 }
+
 enum Store2 {   // small text files in ~/Library/Application Support/SpaceHunter
     static var dir: URL {
         let d = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/SpaceHunter")
@@ -387,10 +390,16 @@ enum Engine {
         return holds.isEmpty ? (nil, false) : (holds.prefix(2).joined(separator: ", ") + (holds.count > 2 ? " +\(holds.count - 2)" : ""), false)
     }
 
+    // "1.5 GB" the same way everywhere (and in the log, which is read back): 1000 MB and up shows as GB, 1000 GB as TB,
+    // so a size never reads "1000 MB"
     static func fmt(_ b: Int64) -> String {
+        let kb = 1024.0, mb = kb * 1024, gb = mb * 1024, tb = gb * 1024
+        let v = Double(b)
         if b <= 0 { return "0 MB" }
-        let f = ByteCountFormatter(); f.countStyle = .file; f.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
-        return f.string(fromByteCount: b)
+        if v >= 1000 * gb { return String(format: "%.2f TB", v / tb) }
+        if v >= 1000 * mb { return String(format: "%.1f GB", v / gb) }
+        if v >= mb { return String(format: "%.0f MB", v / mb) }
+        return String(format: "%.0f KB", max(1, v / kb))
     }
 
     static func parts(_ b: Int64) -> (String, String) {
@@ -403,6 +412,11 @@ enum Engine {
         if m % day == 0 { return "\(m / day) day" + (m == day ? "" : "s") }
         if m % hour == 0 { return "\(m / hour) hour" + (m == hour ? "" : "s") }
         return "\(m) min"
+    }
+
+    static func diskName() -> String {
+        let v = try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeNameKey])
+        return v?.volumeName ?? "this Mac"
     }
 
     static func disk() -> (free: Int64, total: Int64) {
@@ -429,7 +443,8 @@ enum Engine {
             let rest = line[r.upperBound...].split(separator: " ")
             guard rest.count >= 2, let v = Double(rest[0].replacingOccurrences(of: ",", with: "")) else { continue }
             let unit = rest[1].uppercased()
-            let mult: Double = unit.hasPrefix("TB") ? 1e12 : unit.hasPrefix("GB") ? 1e9 : unit.hasPrefix("MB") ? 1e6 : 1e3
+            // binary units, as fmt writes them (older lines were decimal; the difference is a few percent)
+            let mult: Double = unit.hasPrefix("TB") ? 1_099_511_627_776 : unit.hasPrefix("GB") ? 1_073_741_824 : unit.hasPrefix("MB") ? 1_048_576 : 1024
             total += Int64(v * mult); n += 1
         }
         return (total, n)
@@ -558,13 +573,19 @@ enum Theme {
     static func monoSemi(_ s: CGFloat) -> Font { .custom("IBMPlexMono-SemiBold", size: s) }
 
     // Names a newcomer can act on without opening anything: the first is the no-worry clean.
-    static func tierName(_ l: Level) -> String { l == .safe ? "Quick clean" : l == .review ? "Big caches & history" : "Personal & work items" }
-    static func tierDesc(_ l: Level) -> String { l == .safe ? "Caches and leftovers that rebuild" : l == .review ? "Big caches that download again, or old history" : "Can hold your work or history. Check before cleaning" }
+    static func tierName(_ l: Level) -> String { l == .safe ? "Quick clean" : l == .review ? "Big caches & history" : "Deep clean" }
+    static func tierDesc(_ l: Level) -> String { l == .safe ? "Caches and leftovers that rebuild" : l == .review ? "Big caches that download again, or old history" : "Old AI chats, old downloads, folders you added" }
     // one plain line under each section's heading, so nobody has to guess what's in it
     static func tierExplain(_ l: Level) -> String {
-        l == .safe ? "Caches, temp files and leftovers that apps and macOS rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once."
-        : l == .review ? "Things that come back by downloading them again, or history you might still want. Read each one before you tick it."
-        : "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes."
+        l == .safe ? "Caches, temp files and leftovers that apps and macOS rebuild or no longer need. Your files, logins and passwords aren't touched."
+        : l == .review ? "Things that download again when they're needed, or history you might still want."
+        : "Old AI agent chats and workspaces, old installers in Downloads, and folders you added. Nothing here is ticked for you."
+    }
+    // the one thing to do in each section, on its own highlighted line
+    static func tierCta(_ l: Level) -> String {
+        l == .safe ? "Clean this every time you open Space Hunter: it's always safe."
+        : l == .review ? "Tick what you won't need soon. Each item says what comes back, and how."
+        : "This may include your work. Open each item and check before cleaning."
     }
 }
 
@@ -675,6 +696,13 @@ final class AppState: ObservableObject {
     @Published var update: ReleaseInfo?
     private var scanGen: [String: Int] = [:]   // per item: which measurement is the newest
     @Published var results: [String] = []      // one plain line per item, shown when a clean is done
+    // for the finish: what each item freed, and the disk measured before and after (never a made-up number)
+    @Published var freedItems: [FreedItem] = []
+    @Published var freeBefore: Int64 = 0
+    @Published var freeAfter: Int64 = -1
+    @Published var diskTotal: Int64 = 0
+    @Published var diskName = ""
+    @Published var cleanSeconds: Double = 0
     private var counter: Counter?
     // a few items are measured at once (an SSD answers several folder reads in parallel)
     private let scanQ = DispatchQueue(label: "scan", attributes: .concurrent)
@@ -718,6 +746,19 @@ final class AppState: ObservableObject {
         cats[i].checked = !picked && !cats[i].checked
         cats[i].picks = []; cats[i].pickBytes = -1; cats[i].pickFiles = 0
         save(cats[i])
+    }
+
+    // The small box on a section's column: ticks every item in it that has something to clean, or unticks them all
+    // when all are ticked already (picks are cleared either way). The open section stays as it is.
+    func tickSection(_ lvl: Level) {
+        let idx = cats.indices.filter { cats[$0].level == lvl && cats[$0].refused == nil && (cats[$0].bytes > 0 || cats[$0].files > 0) }
+        guard !idx.isEmpty else { return }
+        let on = !idx.allSatisfy { cats[$0].checked }
+        for i in idx {
+            cats[i].checked = on
+            cats[i].picks = []; cats[i].pickBytes = -1; cats[i].pickFiles = 0
+            save(cats[i])
+        }
     }
 
     func save(_ c: Cat) {
@@ -778,7 +819,7 @@ final class AppState: ObservableObject {
             save(cats[i])
         }
         scan()
-        status = "Back to default: Quick clean items ticked, default ages. Protected folders stay protected."
+        status = "Back to recommended: Quick clean ticked, the usual ages. Protected folders stay protected."
     }
 
     func clean(toTrash: Bool, sel: [Cat]) {
@@ -788,6 +829,11 @@ final class AppState: ObservableObject {
         let cleanedIDs = Set(sel.map { $0.id })
         expected = max(1, sel.reduce(0) { $0 + $1.bytes })
         freed = 0; trashed = 0; cleanedFiles = 0; skipped = 0; log = []
+        // the disk before anything goes, for the ring at the end
+        let before = Engine.disk()
+        freeBefore = before.free; diskTotal = before.total; freeAfter = -1; diskName = Engine.diskName()
+        freedItems = []; cleanSeconds = 0
+        let started = Date()
         cleanDone = false; cleanStopped = false; cleaning = true; cleanRunning = true
         status = "Cleaning in its own window. You can keep looking around here; Clean is ready again when it's done."
         let cnt = Counter(); counter = cnt
@@ -810,19 +856,24 @@ final class AppState: ObservableObject {
         }
         DispatchQueue.global(qos: .userInitiated).async {
             var summary: [String] = [], lines: [String] = []
+            var items: [FreedItem] = []
             for (i, c) in sel.enumerated() where !cnt.cancel {
                 DispatchQueue.main.async { self.currentItem = "ITEM \(i + 1) OF \(sel.count)  ·  \(c.name.uppercased())" }
                 lock.lock(); let b0 = cnt.bytes, t0 = cnt.trashedBytes, f0 = cnt.files; lock.unlock()
                 Engine.process(c, delete: true, toTrash: toTrash, cnt: cnt)   // the confirm window's choice applies to every item
                 lock.lock(); let b1 = cnt.bytes, t1 = cnt.trashedBytes, f1 = cnt.files; lock.unlock()
+                items.append(FreedItem(name: c.name, bytes: b1 - b0, trashed: t1 - t0))
                 summary.append("\(c.name): freed \(Engine.fmt(b1 - b0))" + (t1 > t0 ? " + \(Engine.fmt(t1 - t0)) to Trash" : "") + ", \(f1 - f0) files")
                 lines.append("\(c.name)   ·   " + (b1 > b0 || t1 == t0 ? "\(Engine.fmt(b1 - b0)) freed" : "") + (t1 > t0 ? (b1 > b0 ? " + " : "") + "\(Engine.fmt(t1 - t0)) to the Trash" : ""))
             }
             Engine.log((cnt.cancel ? "STOPPED " : "CLEANED ") + "\(Engine.fmt(cnt.bytes)), \(cnt.files) files; skipped \(cnt.skipped). " + summary.joined(separator: " | "))
+            let after = Engine.disk()   // the disk once everything has gone
+            let seconds = Date().timeIntervalSince(started)
             DispatchQueue.main.async {
                 timer.fire(); timer.invalidate()
                 self.log.append(contentsOf: summary.map { "— " + $0 })
                 self.results = lines
+                self.freedItems = items; self.freeAfter = after.free; self.cleanSeconds = seconds
                 self.freed = cnt.bytes; self.trashed = cnt.trashedBytes; self.cleanedFiles = cnt.files; self.skipped = cnt.skipped
                 self.cleanStopped = cnt.cancel; self.cleanDone = true; self.cleanRunning = false
                 // picks are for one clean
@@ -1021,32 +1072,41 @@ struct MainView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.openWindow) private var openWindow
     @State private var confirm = false
+    @StateObject private var guide = GuideModel()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Spacer(); ThemeSwitch() }
+            HStack(spacing: 0) {
+                Spacer()
+                TopKeys(guide: { startGuide() })   // the guide key, then Light / Dark / System
+            }
                 .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 6)
-            DisplayView().padding(.horizontal, 18)
+            DisplayView().guidePart(0).padding(.horizontal, 18)
             HStack(spacing: 8) {
                 Button { openWindow(id: "finder") } label: { HStack(spacing: 8) { MapIcon(); Text("Storage map") } }.buttonStyle(KeyStyle(accent: true))
+                    .guidePart(2)
                 Spacer()
                 Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0 || state.cleanRunning)
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
-                Button("Reset to default") { state.resetAll() }.buttonStyle(KeyStyle())
+                    .guidePart(5)
+                Button("Back to recommended") { state.resetAll() }.buttonStyle(KeyStyle())
+                    .guidePart(6)
                     .padding(.trailing, 4)
                 Button(state.cleanRunning ? "Show cleaning" : "Clean \(Engine.fmt(state.selectedBytes))") {
                     if state.cleaning { openWindow(id: "cleaning") } else { confirm = true }
                 }
                 .buttonStyle(KeyStyle(primary: true, big: true))
                 .disabled(!state.cleaning && (state.scanning > 0 || state.selectedBytes == 0))
+                .guidePart(3)
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
-            TierBar().padding(.horizontal, 18).padding(.bottom, 6)
+            TierBar().guidePart(10).padding(.horizontal, 18).padding(.bottom, 4)
             HStack(spacing: 0) {
                 CategoryList()
                 if let c = state.open {
                     DetailPanel(cat: c)
                         .frame(width: 440)
+                        .guidePart(13)
                         .transition(.move(edge: .trailing))
                 }
             }
@@ -1062,40 +1122,138 @@ struct MainView: View {
             }
         }
         .background(Theme.chassis)
+        .background(WindowReader { w in guide.window = w })
+        // the first-run guide: the window dims and a lit cut-out sits on each real part in turn
+        .overlayPreferenceValue(GuideAnchors.self) { anchors in
+            GeometryReader { g in
+                if guide.step != nil {
+                    GuideOverlay(guide: guide, targets: guideTargets(g, anchors), size: g.size)
+                }
+            }
+        }
         .ignoresSafeArea(.container, edges: .top)
         .onAppear {
             ThemeMode.apply(state.theme)
             state.scan()
             Updater.check { r in DispatchQueue.main.async { state.update = r } }   // one quiet check; offline = nothing happens
+            // what a guide step does before it points: open the biggest item's panel, or close the panel
+            let s = state
+            guide.enter = { step in
+                if step == 3 {
+                    let items = s.cats.filter { $0.level == s.tier && ($0.bytes > 0 || $0.files > 0) }
+                    if let first = items.max(by: { $0.bytes < $1.bytes }) { s.openID = first.id }
+                } else if step == 1 || step == 2 || step == 4 {
+                    s.openID = nil
+                }
+            }
         }
         .sheet(isPresented: $confirm) { ConfirmSheet(confirm: $confirm).environmentObject(state) }
         .onChange(of: state.cleaning) { c in if c { openWindow(id: "cleaning") } }
+        // once, the first time a scan finishes (never during a clean); if another window is in front, when this one is
+        .onChange(of: state.scanning) { n in if n == 0 { autoGuide() } }
+    }
+
+    func startGuide() {
+        state.openID = nil   // the item panel closes first
+        guide.start()
+    }
+
+    func autoGuide() {
+        let s = state
+        guide.autoStart(when: { !s.cleaning && !s.cleanRunning }, before: { s.openID = nil })
+    }
+
+    // The parts the nine steps light, in order: the display; the section rail; the first three rows under the list's
+    // header; the item panel; the Storage map key; Protected folders; Back to recommended; Clean; the top-right keys.
+    func guideTargets(_ g: GeometryProxy, _ a: [Int: Anchor<CGRect>]) -> [CGRect?] {
+        func part(_ i: Int) -> CGRect? { a[i].map { g[$0] } }
+        let rail: CGRect? = part(10).map { $0.insetBy(dx: -10, dy: 0) }
+        var rows: CGRect? = nil
+        if let l = part(11) {
+            let top: CGFloat = max(l.minY, part(12).map { $0.maxY } ?? (l.minY + 110))
+            let h: CGFloat = max(20, min(l.maxY - top, 3 * 56))
+            rows = CGRect(x: l.minX + 8, y: top, width: l.width - 16, height: h)
+        }
+        return [part(0), rail, rows, part(13), part(2), part(5), part(6), part(3), part(9)]
     }
 }
 
-// Light / Dark / System: three small segments at the top right. The lit one is ink-filled (a pressed key).
-struct ThemeSwitch: View {
+// Top right: the guide key, then Light / Dark / System as three icon keys. Hovering one names it beside them.
+struct TopKeys: View {
     @EnvironmentObject var state: AppState
-    @State private var hover: Int? = nil
-    let names = ["LIGHT", "DARK", "SYSTEM"]
+    let guide: () -> Void
+    @State private var hover: Int? = nil   // 0...2 theme, 3 guide
     let modes = ["light", "dark", "system"]
+    let names = ["Light", "Dark", "System default"]
     var body: some View {
-        HStack(spacing: 8) {
-            Text("Theme").font(Theme.sans(11.5)).foregroundColor(Theme.muted)
-            HStack(spacing: 0) {
-                ForEach(0..<3, id: \.self) { i in
-                    let on = state.theme == modes[i]
-                    Text(names[i]).font(Theme.semi(10.5)).foregroundColor(on ? Theme.pane : Theme.muted)
-                        .frame(width: 58, height: 19)
-                        .background(RoundedRectangle(cornerRadius: 2).fill(on ? Theme.ink : (hover == i ? Theme.hover : Color.clear)))
-                        .padding(2)
-                        .contentShape(Rectangle())
-                        .onHover { h in if h { hover = i } else if hover == i { hover = nil } }
-                        .onTapGesture { state.setTheme(modes[i]) }
+        let tip: String = hover == nil ? "" : hover == 3 ? "Guide: how Space Hunter works" : names[hover!] + (state.theme == modes[hover!] ? "  (on)" : "")
+        HStack(spacing: 10) {
+            Text(tip).font(Theme.sans(11.5)).foregroundColor(Theme.ink).lineLimit(1)
+            HStack(spacing: 10) {
+                // the guide key: a small key of its own
+                TopIcon(kind: 3, ink: Theme.ink)
+                    .frame(width: 26, height: 24)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(hover == 3 ? Theme.hover : Theme.key))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.keyShadow).offset(y: 2))
+                    .contentShape(Rectangle())
+                    .onHover { h in if h { hover = 3 } else if hover == 3 { hover = nil } }
+                    .onTapGesture { guide() }
+                // the theme group: one strip, the chosen one lit
+                HStack(spacing: 0) {
+                    ForEach(0..<3, id: \.self) { i in
+                        let on = state.theme == modes[i]
+                        TopIcon(kind: i, ink: on ? Theme.pane : Theme.muted)
+                            .frame(width: 26, height: 24)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(on ? Theme.ink : (hover == i ? Theme.hover : Color.clear)).padding(2.5))
+                            .contentShape(Rectangle())
+                            .onHover { h in if h { hover = i } else if hover == i { hover = nil } }
+                            .onTapGesture { state.setTheme(modes[i]) }
+                    }
                 }
+                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.key))
+                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.keyShadow).offset(y: 2))
             }
-            .background(RoundedRectangle(cornerRadius: 3).fill(Theme.key))
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Theme.line, lineWidth: 1))
+            .guidePart(9)
+        }
+    }
+}
+
+// The small icons on the top-right keys: 0 sun, 1 crescent moon, 2 half-filled circle (System), 3 "?" in a circle.
+struct TopIcon: View {
+    let kind: Int
+    let ink: Color
+    var body: some View {
+        Canvas { ctx, size in
+            let cx = size.width / 2, cy = size.height / 2
+            let line = StrokeStyle(lineWidth: 1.6, lineCap: .round)
+            switch kind {
+            case 0:
+                ctx.fill(Path(ellipseIn: CGRect(x: cx - 3.6, y: cy - 3.6, width: 7.2, height: 7.2)), with: .color(ink))
+                var rays = Path()
+                for k in 0..<8 {
+                    let a = Double(k) * Double.pi / 4
+                    rays.move(to: CGPoint(x: cx + CGFloat(cos(a)) * 6, y: cy + CGFloat(sin(a)) * 6))
+                    rays.addLine(to: CGPoint(x: cx + CGFloat(cos(a)) * 8.2, y: cy + CGFloat(sin(a)) * 8.2))
+                }
+                ctx.stroke(rays, with: .color(ink), style: line)
+            case 1:
+                var c = ctx
+                c.clip(to: Path(ellipseIn: CGRect(x: cx - 2.2, y: cy - 9.2, width: 12, height: 12)), options: .inverse)
+                c.fill(Path(ellipseIn: CGRect(x: cx - 6.5, y: cy - 6.5, width: 13, height: 13)), with: .color(ink))
+            case 2:
+                ctx.stroke(Path(ellipseIn: CGRect(x: cx - 6.5, y: cy - 6.5, width: 13, height: 13)), with: .color(ink), style: line)
+                var half = Path()
+                half.move(to: CGPoint(x: cx, y: cy + 6.5))
+                for k in 0...24 {   // the left half, from the bottom round to the top
+                    let a = (90.0 + 180.0 * Double(k) / 24) * Double.pi / 180
+                    half.addLine(to: CGPoint(x: cx + 6.5 * CGFloat(cos(a)), y: cy + 6.5 * CGFloat(sin(a))))
+                }
+                half.closeSubpath()
+                ctx.fill(half, with: .color(ink))
+            default:
+                ctx.stroke(Path(ellipseIn: CGRect(x: cx - 7.5, y: cy - 7.5, width: 15, height: 15)), with: .color(ink), style: line)
+                ctx.draw(Text("?").font(Theme.bold(11)).foregroundColor(ink), at: CGPoint(x: cx, y: cy), anchor: .center)
+            }
         }
     }
 }
@@ -1190,53 +1348,113 @@ struct DiskBar: View {
     }
 }
 
+// The three sections as one rail: three equal columns over a thin line. Each names its section, has a small box for
+// ticking the whole section, says how much of it is ticked, and shows its size with what's in it beside the number.
+// An orange marker on the rail sits under the open section and slides over when you pick another.
 struct TierBar: View {
     @EnvironmentObject var state: AppState
+    @State private var hover: Level? = nil
     var body: some View {
-        HStack(spacing: 10) {
-            ForEach(Level.allCases, id: \.self) { lvl in TierTile(lvl: lvl) }
+        GeometryReader { g in
+            let w = g.size.width / 3
+            ZStack(alignment: .bottomLeading) {
+                Rectangle().fill(Theme.line).frame(height: 2).padding(.bottom, 1)
+                HStack(spacing: 0) {
+                    ForEach(Level.allCases, id: \.self) { lvl in
+                        TierColumn(lvl: lvl, hover: $hover).frame(width: w, height: g.size.height)
+                    }
+                }
+                Rectangle().fill(Theme.orange).frame(width: w, height: 5)
+                    .offset(x: w * CGFloat(state.tier.rawValue))
+                    .animation(.easeOut(duration: 0.32), value: state.tier)
+            }
         }
-        .frame(height: 86)
+        .frame(height: 82)
     }
 }
 
-struct TierTile: View {
+struct TierColumn: View {
     @EnvironmentObject var state: AppState
     let lvl: Level
+    @Binding var hover: Level?
+    @State private var boxHover = false
     var body: some View {
         let items = state.cats.filter { $0.level == lvl }
         let total = items.reduce(Int64(0)) { $0 + $1.bytes }
         let ticked = items.filter { $0.included }.reduce(Int64(0)) { $0 + $1.cleanBytes }
         let nTicked = items.filter { $0.included && ($0.bytes > 0 || $0.files > 0) }.count
-        let on = state.tier == lvl
-        let ink = on ? Theme.screenInk : Theme.ink
-        let soft = on ? Theme.screenMuted : Theme.soft
         let nItems = items.filter { $0.bytes > 0 || $0.files > 0 }.count
-        let sub = nItems == 0 ? "Nothing to clean here right now" : nTicked == 0 ? "None of \(nItems) ticked" : "\(nTicked) of \(nItems) ticked" + (ticked > 0 ? "  ·  \(Engine.fmt(ticked))" : "")
-        Button {
+        let on = state.tier == lvl
+        let hot = hover == lvl && !on
+        let headInk: Color = on || hot ? Theme.ink : Theme.muted
+        let headFont: Font = on ? Theme.semi(13) : Theme.sans(13)
+        // the space, not a count: "none ticked", "all 17 MB ticked", "14 of 17 MB ticked"
+        let sub: String = nItems == 0 ? "nothing to clean" : nTicked == 0 ? "none ticked"
+            : nTicked == nItems && ticked >= total ? "all \(Engine.fmt(total)) ticked" : TierColumn.of(ticked, total) + " ticked"
+        let boxState: Int = nTicked == 0 ? 0 : nTicked == nItems ? 2 : 1
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .center, spacing: 0) {
+                Text(Theme.tierName(lvl)).font(headFont).foregroundColor(headInk).lineLimit(1).fixedSize()
+                if nItems > 0 {
+                    // the box and its words are one target (reaching 5 pt round them): ticks the whole section, or
+                    // unticks it when all of it is ticked; the open section stays as it is
+                    HStack(alignment: .center, spacing: 6) {
+                        SectionBox(state: boxState, ink: on || hot ? Theme.ink : Theme.soft)
+                        Text(sub).font(headFont).foregroundColor(headInk).lineLimit(1).underline(boxHover)
+                    }
+                    .padding(5).contentShape(Rectangle())
+                    .onHover { boxHover = $0 }
+                    .onTapGesture { state.tickSection(lvl) }
+                    .padding(-5)
+                    .padding(.leading, 10)
+                } else {
+                    Text(sub).font(headFont).foregroundColor(headInk).lineLimit(1).padding(.leading, 10)
+                }
+            }
+            HStack(alignment: .center, spacing: 8) {
+                // the open section's size is ink: orange means "ticked" in the display
+                Text(Engine.fmt(total)).font(Theme.display(34)).foregroundColor(on || hot ? Theme.ink : Theme.muted)
+                    .lineLimit(1).fixedSize().layoutPriority(1)
+                Text(Theme.tierDesc(lvl)).font(Theme.sans(12)).foregroundColor(on ? Theme.muted : Theme.soft)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, 4).padding(.trailing, 14).padding(.top, 6).padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .onHover { h in if h { hover = lvl } else if hover == lvl { hover = nil } }
+        .onTapGesture {
             state.tier = lvl
             if let o = state.open, o.level != lvl { state.openID = nil }
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                if lvl != .safe { LevelMark(level: lvl, ink: ink, ground: on ? Theme.screen : Theme.key).frame(width: 5).padding(.vertical, 6) }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(Theme.tierName(lvl)).font(Theme.bold(15)).foregroundColor(ink)
-                    Text(Theme.tierDesc(lvl)).font(Theme.sans(11.5)).foregroundColor(soft)
-                    // how much of it is ticked, at a glance
-                    HStack(spacing: 6) {
-                        Check(on: nTicked > 0).scaleEffect(0.7).frame(width: 12, height: 12)
-                        Text(sub).font(nTicked > 0 ? Theme.semi(11.5) : Theme.sans(11.5)).foregroundColor(nTicked > 0 ? ink : soft)
-                    }
-                }
-                Spacer()
-                Text(Engine.fmt(total) + " found").font(Theme.semi(17)).foregroundColor(ink)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Theme.screen : Theme.key))
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Color.black : Theme.keyShadow).offset(y: 3))
         }
-        .buttonStyle(.plain)
+    }
+
+    // "14 of 17 MB" when both share a unit, else "900 MB of 2.1 GB"
+    static func of(_ a: Int64, _ b: Int64) -> String {
+        let x = Engine.parts(a), y = Engine.parts(b)
+        return (x.1 == y.1 ? x.0 : Engine.fmt(a)) + " of " + Engine.fmt(b)
+    }
+}
+
+// A section's small box: an outline when none of it is ticked, orange with a dash when some, with a tick when all.
+struct SectionBox: View {
+    let state: Int   // 0 none, 1 some, 2 all
+    let ink: Color
+    var body: some View {
+        ZStack {
+            if state == 0 {
+                Rectangle().strokeBorder(ink, lineWidth: 1.4)
+            } else {
+                Rectangle().fill(Theme.orange)
+                if state == 2 {
+                    Path { p in p.move(to: CGPoint(x: 3, y: 7.2)); p.addLine(to: CGPoint(x: 6, y: 10.2)); p.addLine(to: CGPoint(x: 11.2, y: 3.8)) }
+                        .stroke(Theme.onOrange, style: StrokeStyle(lineWidth: 1.7, lineCap: .square))
+                } else {
+                    Rectangle().fill(Theme.onOrange).frame(width: 7, height: 2)
+                }
+            }
+        }
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1248,17 +1466,27 @@ struct CategoryList: View {
         let empty = idx.filter { isEmpty(state.cats[$0]) }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text(Theme.tierName(state.tier).uppercased()).font(Theme.bold(13)).foregroundColor(Theme.ink)
-                    Spacer()
-                    Button("Tick all") { setAll(true, idx) }.buttonStyle(.plain).font(Theme.semi(12))
-                    Button("Untick all") { setAll(false, idx) }.buttonStyle(.plain).font(Theme.semi(12)).padding(.leading, 14)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text(Theme.tierName(state.tier).uppercased()).font(Theme.bold(13)).foregroundColor(Theme.ink)
+                        Spacer()
+                        Button("Tick all") { setAll(true, idx) }.buttonStyle(.plain).font(Theme.semi(12))
+                        Button("Untick all") { setAll(false, idx) }.buttonStyle(.plain).font(Theme.semi(12)).padding(.leading, 14)
+                    }
+                    .padding(.horizontal, 22).padding(.top, 12)
+                    // what this section is, in one plain line
+                    Text(Theme.tierExplain(state.tier)).font(Theme.sans(12)).foregroundColor(Theme.muted)
+                        .frame(maxWidth: 820, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 22).padding(.top, 4)
+                    // the call to action: its own line, an orange bar and orange-deep words
+                    HStack(alignment: .center, spacing: 7) {
+                        Rectangle().fill(Theme.orange).frame(width: 3, height: 17)
+                        Text(Theme.tierCta(state.tier)).font(Theme.semi(13)).foregroundColor(Theme.orangeDeep).lineLimit(1)
+                    }
+                    .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 12)
+                    Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 22)
                 }
-                .padding(.horizontal, 22).padding(.top, 12)
-                Text(Theme.tierExplain(state.tier)).font(Theme.sans(12)).foregroundColor(Theme.muted)
-                    .frame(maxWidth: 760, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 22).padding(.top, 4).padding(.bottom, 12)
-                Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 22)
+                .guidePart(12)
                 ForEach(full, id: \.self) { i in Row(index: i, compact: false) }
                 if !empty.isEmpty {
                     Text("Nothing to clean right now (\(empty.count))").font(Theme.sans(12)).foregroundColor(Theme.soft)
@@ -1269,6 +1497,7 @@ struct CategoryList: View {
             .padding(.bottom, 12)
         }
         .background(Theme.chassis)
+        .guidePart(11)
     }
 
     func isEmpty(_ c: Cat) -> Bool { c.refused == nil && c.scanned && c.bytes == 0 && c.files == 0 }
@@ -1626,94 +1855,550 @@ final class BarGlide {
     }
 }
 
+// The finish, in milliseconds from the moment a clean is done (about 2.5 s; the same beats as the Windows version):
+// the display grows over the log, the bar gives way to the disk drawn as a ring, the freed wedge lifts out and
+// crumbles, the free figure counts up, one "Done" pulse, then the list of what went.
+enum FinishBeat {
+    static let grow = 420.0, ringAt = 250.0, ringMs = 520.0, liftAt = 820.0, liftMs = 300.0, crumbleAt = 1120.0, crumbleMs = 520.0
+    static let closeAt = 1250.0, closeMs = 520.0, doneAt = 1820.0, pulseMs = 650.0, listAt = 2150.0, listMs = 320.0
+    static var total: Double { listAt + listMs }
+    static func ease(_ t: Double) -> Double { let x = max(0, min(1, t)); return 1 - pow(1 - x, 3) }
+
+    // the freed wedge's dust: made once, the same every time
+    struct Speck { let a: Double, r: Double, vx: Double, vy: Double, s: Double, delay: Double }
+    static let specks: [Speck] = {
+        var seed: UInt64 = 7
+        func next() -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double(seed >> 11) / 9007199254740992.0
+        }
+        var out: [Speck] = []
+        for _ in 0..<90 {
+            let a = next(), r = next() - 0.5, vx = next() * 1.6 + 0.4, vy = -next() * 1.4 - 0.2, s = next() * 3 + 2, d = next() * 180
+            out.append(Speck(a: a, r: r, vx: vx, vy: vy, s: s, delay: d))
+        }
+        return out
+    }()
+
+    // an arc as short straight pieces: degrees, 0 = 3 o'clock, -90 = 12 o'clock, positive = clockwise on screen
+    static func arc(_ c: CGPoint, _ r: CGFloat, _ startDeg: Double, _ extDeg: Double) -> Path {
+        var p = Path()
+        let n = max(2, Int(abs(extDeg) / 2) + 1)
+        for k in 0...n {
+            let a = (startDeg + extDeg * Double(k) / Double(n)) * Double.pi / 180
+            let pt = CGPoint(x: c.x + r * CGFloat(cos(a)), y: c.y + r * CGFloat(sin(a)))
+            if k == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+        }
+        return p
+    }
+
+    // The bar while cleaning; at the end it fades and the disk appears as a ring (measured before and after).
+    static func draw(_ ctx: inout GraphicsContext, size: CGSize, ms: Double, bar: CGFloat, details: Bool, binOnly: Bool,
+                     before: Int64, after: Int64, total: Int64, disk: String) {
+        let W = size.width, pad: CGFloat = 20
+        let fin = ms >= 0
+        let by: CGFloat = 118, bh: CGFloat = 12
+        if !fin || details || ms < ringAt + 200 {
+            let a: Double = fin && !details ? 1 - ease(ms / (ringAt + 200)) : 1
+            let bw = W - 2 * pad
+            ctx.fill(Path(CGRect(x: pad, y: by, width: bw, height: bh)), with: .color(Theme.track.opacity(a)))
+            ctx.fill(Path(CGRect(x: pad, y: by, width: bw * (fin ? 1 : bar), height: bh)), with: .color(Theme.orange.opacity(a)))
+            if !fin || details { return }
+        }
+        guard total > 0, after >= 0 else { return }
+        var usedAfter = min(1, max(0, 1 - Double(after) / Double(total)))
+        var slice: Double = binOnly ? 0 : max(0, Double(after - before) / Double(total))
+        // a small clean still shows a wedge (at least 5 degrees for 1 MB or more); the numbers stay exact
+        if slice > 0 && slice * 360 < 5 { slice = after - before >= Int64(1 << 20) ? 5.0 / 360 : 0 }
+        if usedAfter + slice > 1 { usedAfter = 1 - slice }
+        let R: CGFloat = 104, sw: CGFloat = 26
+        // centred while it plays; it moves to the right when the list arrives
+        let cxEnd = W - pad - R - sw / 2 - 40, cxMid = W / 2
+        let c = CGPoint(x: cxMid + (cxEnd - cxMid) * CGFloat(ease((ms - listAt) / 380)), y: 214)
+        let box = CGRect(x: c.x - R, y: c.y - R, width: 2 * R, height: 2 * R)
+        let sweep = ease((ms - ringAt) / ringMs)                                     // the ring draws itself round
+        let lift = slice > 0 ? ease((ms - liftAt) / liftMs) : 0                       // the freed wedge lifts out...
+        let crumble = slice > 0 ? max(0, min(1, (ms - crumbleAt) / crumbleMs)) : 1    // ...turns to dust...
+        let close = slice > 0 ? ease((ms - closeAt) / closeMs) : 1                    // ...and free space grows into the gap
+        let gap = slice * (1 - close)
+        func deg(_ f: Double) -> Double { -90 + 360 * f }
+        let butt = StrokeStyle(lineWidth: sw, lineCap: .butt)
+        // free space: from the end of the gap round to the top
+        let fExt = 360 * (1 - usedAfter - gap)
+        if sweep > 0 && fExt > 0.3 {
+            ctx.stroke(arc(c, R, deg(usedAfter + gap), fExt), with: .color(Theme.track.opacity(min(1, sweep * 2))), style: butt)
+        }
+        // used space, sweeping round; the freed wedge sits at its end in orange until it lifts out
+        let drawn = (usedAfter + slice) * sweep
+        let used = 360 * min(drawn, usedAfter)
+        if used > 0.3 { ctx.stroke(arc(c, R, -90, used), with: .color(Theme.used), style: butt) }
+        let start = deg(usedAfter)
+        if slice > 0 && crumble < 1 && drawn > usedAfter {
+            let ext = 360 * min(slice, drawn - usedAfter)
+            let mid = (start + ext / 2) * Double.pi / 180, off = 16 * lift
+            let wc = CGPoint(x: c.x + CGFloat(cos(mid) * off), y: c.y + CGFloat(sin(mid) * off))
+            let wa = 1 - ease(crumble * 1.4)
+            if ext > 0.3 && wa > 0 { ctx.stroke(arc(wc, R, start, ext), with: .color(Theme.orange.opacity(wa)), style: butt) }
+        }
+        if slice > 0 && ms >= crumbleAt {   // the wedge turns to dust and falls away
+            for sp in specks {
+                let tt = (ms - crumbleAt - sp.delay) / 1000
+                if tt <= 0 { continue }
+                let pa = max(0, 1 - tt / 0.75)
+                if pa <= 0 { continue }
+                let an = (start + 360 * slice * sp.a) * Double.pi / 180
+                let rr = Double(R) + sp.r * Double(sw)
+                let mx = cos(an), my = sin(an)
+                let px = Double(c.x) + mx * (rr + 16) + mx * sp.vx * 90 * tt
+                let py = Double(c.y) + my * (rr + 16) + sp.vy * 90 * tt + 260 * tt * tt
+                ctx.fill(Path(CGRect(x: px, y: py, width: sp.s, height: sp.s)), with: .color(Theme.orange.opacity(pa)))
+            }
+        }
+        if slice > 0 && close > 0 {   // what you gained stays marked: an orange edge on the outer rim of the newly free span
+            let ee = 360 * (slice - gap)
+            if ee > 0.3 { ctx.stroke(arc(c, R + sw / 2 - 2, deg(usedAfter + gap), ee), with: .color(Theme.orange), style: StrokeStyle(lineWidth: 4, lineCap: .butt)) }
+        }
+        if ms >= doneAt {   // done: the whole ring flashes orange once and settles
+            let pt = (ms - doneAt) / pulseMs
+            if pt < 1 {
+                ctx.stroke(Path(ellipseIn: box), with: .color(Theme.orange.opacity(150.0 / 255 * (1 - pt) * (1 - pt))), lineWidth: sw + 2)
+            }
+        }
+        if sweep > 0 {   // in the middle: free space, counting up as the ring closes, and what you gained
+            let ca = min(1, sweep * 1.5)
+            let shown = before + Int64(Double(after - before) * close)
+            ctx.draw(Text(Engine.fmt(shown)).font(Theme.display(30)).foregroundColor(Theme.screenInk.opacity(ca)),
+                     at: CGPoint(x: c.x, y: c.y - 34), anchor: .top)
+            let sub = "free of \(Engine.fmt(total)) on \(disk)"
+            var gainY = c.y + 22
+            if sub.count <= 28 {
+                ctx.draw(Text(sub).font(Theme.sans(12)).foregroundColor(Theme.screenMuted.opacity(ca)), at: CGPoint(x: c.x, y: c.y + 2), anchor: .top)
+            } else {   // a long disk name: two lines, so it stays inside the ring
+                ctx.draw(Text("free of \(Engine.fmt(total))").font(Theme.sans(12)).foregroundColor(Theme.screenMuted.opacity(ca)), at: CGPoint(x: c.x, y: c.y + 2), anchor: .top)
+                ctx.draw(Text("on \(disk)").font(Theme.sans(12)).foregroundColor(Theme.screenMuted.opacity(ca)), at: CGPoint(x: c.x, y: c.y + 17), anchor: .top)
+                gainY = c.y + 37
+            }
+            let gain = after - before
+            if gain > 0 && close > 0 {
+                ctx.draw(Text("+ " + Engine.fmt(gain)).font(Theme.monoSemi(12.5)).foregroundColor(Theme.orange.opacity(close)),
+                         at: CGPoint(x: c.x, y: gainY), anchor: .top)
+            }
+        }
+    }
+}
+
+struct DottedRule: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path(); p.move(to: CGPoint(x: r.minX, y: r.midY)); p.addLine(to: CGPoint(x: r.maxX, y: r.midY)); return p
+    }
+}
+
 struct ProgressSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var finishStart: Date?   // the finish: the bar clears and the number counts up, about a second
+    @State private var finishStart: Date?     // the finish is playing
+    @State private var settled = false        // the finish has played (or was skipped)
+    @State private var grown = false          // the log has sunk away
+    @State private var doneBeat = false       // the Done key is up
+    @State private var listShown = false      // "What was cleaned" is up
+    @State private var details = false        // the log back under a small display
+    @State private var gen = 0
     @State private var glide = BarGlide()
+    private let baseH: CGFloat = 150
+
+    var finished: Bool { state.cleanDone && !state.cleanStopped }
+    var canClose: Bool { state.cleanDone && (state.cleanStopped || doneBeat) }
+    var windowTitle: String { !state.cleanDone ? "Cleaning" : state.cleanStopped ? "Stopped" : doneBeat ? "Done" : "Cleaning" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // redrawn every frame while cleaning (the bar glides) and during the finish; still once it has settled
-            TimelineView(.animation(paused: state.cleanDone && finishStart == nil)) { tl in
-                let finished = state.cleanDone && !state.cleanStopped
-                let t: Double = finished ? (finishStart.map { min(1, tl.date.timeIntervalSince($0) / 1.2) } ?? 1) : 1
-                let ease = 1 - pow(1 - t, 3)   // quick at first, settling on the real total
-                let binOnly = state.freed == 0 && state.trashed > 0
-                let shown = Int64(Double(binOnly ? state.trashed : state.freed) * (finished ? ease : 1))
-                let p = Engine.parts(shown)
-                let fraction = min(1, CGFloat(Double(state.freed + state.trashed) / Double(state.expected)))
-                let barFraction: CGFloat = state.cleanDone ? fraction : glide.step(fraction, at: tl.date)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(state.cleanDone ? (state.cleanStopped ? "Stopped  ·  nothing else will be cleaned" : t < 1 ? "Clearing up…" : "Done  ·  all ticked items cleaned") : "Cleaning  ·  " + state.currentItem)
-                        .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(p.0).font(Theme.display(60))
-                        Text(p.1 + (binOnly ? " TO TRASH" : " FREED")).font(Theme.display(24))
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("\(Int64(Double(state.cleanedFiles) * (finished ? ease : 1))) files  ·  \(state.skipped) skipped").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
-                            if state.trashed > 0 && !binOnly { Text("+ \(Engine.fmt(state.trashed)) moved to the Trash").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
-                            if binOnly && state.cleanDone { Text("Empty the Trash to get this space back").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
-                        }
-                    }.foregroundColor(Theme.orange)
+            ZStack(alignment: .top) {
+                logView
+                    .padding(.top, baseH + 10)
+                    .offset(y: finished && grown && !details ? 360 : 0)   // sinks away as the display grows
+                    .opacity(finished && grown && !details ? 0 : 1)
+                // redrawn every frame while cleaning (the bar glides) and during the finish; still once it has settled
+                TimelineView(.animation(paused: state.cleanDone && finishStart == nil)) { tl in
                     GeometryReader { g in
-                        ZStack(alignment: .leading) {
-                            Rectangle().fill(Theme.track).frame(height: 12)
-                            if finished {
-                                // the full bar breaks into pieces that drop away left to right: the space is cleared
-                                HStack(spacing: 2) {
-                                    ForEach(0..<28, id: \.self) { k in
-                                        let local = max(0, min(1, (t - 0.55 * Double(k) / 28) / 0.4))
-                                        let fall = local * local
-                                        Rectangle().fill(Theme.orange)
-                                            .frame(height: 12 * (1 - fall * 0.6))
-                                            .offset(y: 16 * fall)
-                                            .opacity(1 - fall)
-                                    }
-                                }
-                                .frame(height: 12, alignment: .top)
-                            } else {
-                                Rectangle().fill(Theme.orange).frame(width: g.size.width * barFraction, height: 12)
-                            }
-                        }
-                    }.frame(height: 12).padding(.top, 6)
+                        let ms = msNow(tl.date)
+                        let grow: CGFloat = !finished || details ? 0 : settled ? 1 : CGFloat(FinishBeat.ease(ms / FinishBeat.grow))
+                        display(ms: ms, date: tl.date, width: g.size.width)
+                            .frame(width: g.size.width, height: baseH + max(0, g.size.height - baseH) * grow)
+                    }
                 }
+                .allowsHitTesting(false)
             }
-            .padding(20).background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
-            .onChange(of: state.cleanDone) { d in
-                if d && !state.cleanStopped && !reduceMotion {
-                    finishStart = Date()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { finishStart = nil }   // stop redrawing once it has settled
-                }
-            }
+            .clipped()
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array((state.cleanDone && !state.results.isEmpty ? ["What was cleaned", ""] + state.results + ["", "Every file:"] + state.log : state.log).enumerated()), id: \.offset) { i, line in
-                            Text(line).font(Theme.mono(11)).foregroundColor(Theme.ink).lineLimit(1).truncationMode(.middle).id(i)
-                        }
-                    }.padding(12)
+            HStack(spacing: 16) {
+                if finished && listShown {
+                    Button { details.toggle() } label: { Text(details ? "Back to the summary" : "What was cleaned").underline() }
+                        .buttonStyle(.plain).font(Theme.semi(13)).foregroundColor(Theme.ink)
                 }
-                .background(Theme.pane)
-                .onChange(of: state.log.count) { n in if n > 0 { proxy.scrollTo(n - 1, anchor: .bottom) } }
-                .onChange(of: state.cleanDone) { d in if d { proxy.scrollTo(0, anchor: .top) } }   // the summary sits on top
-            }
-
-            HStack {
-                if state.cleanDone { Button("Open log") { NSWorkspace.shared.open(Engine.logURL) }.buttonStyle(KeyStyle()) }
+                if state.cleanDone && (state.cleanStopped || details) {
+                    Button("Open log file") { NSWorkspace.shared.open(Engine.logURL) }.buttonStyle(KeyStyle())
+                }
                 Spacer()
-                if !state.cleanDone { Button("Minimise") { NSApp.keyWindow?.miniaturize(nil) }.buttonStyle(KeyStyle()) }
-                // Done closes the window; it's the one orange key once a clean has finished
-                Button(state.cleanDone ? (state.cleanStopped ? "Close" : "Done") : "Stop") { if state.cleanDone { state.finishCleaning(); dismiss() } else { state.stop() } }
-                    .buttonStyle(KeyStyle(primary: state.cleanDone && !state.cleanStopped))
+                if !state.cleanDone {
+                    Button("Minimise") { NSApp.keyWindow?.miniaturize(nil) }.buttonStyle(KeyStyle())
+                    Button("Stop") { state.stop() }.buttonStyle(KeyStyle())
+                } else if state.cleanStopped {
+                    Button("Close") { close() }.buttonStyle(KeyStyle()).keyboardShortcut(.defaultAction)
+                } else if !doneBeat {
+                    Button("Finishing") { }.buttonStyle(KeyStyle()).disabled(true)
+                } else {
+                    // Done closes the window; it's the one orange key once a clean has finished
+                    Button("Done") { close() }.buttonStyle(KeyStyle(primary: true)).keyboardShortcut(.defaultAction)
+                }
             }
+            .frame(minHeight: 34)
         }
         .padding(20)
         .frame(minWidth: 680, minHeight: 480)
         .background(Theme.chassis)
+        // Esc closes it too, once it's done
+        .background(Button("") { if canClose { close() } }.keyboardShortcut(.cancelAction).opacity(0).allowsHitTesting(false))
+        .navigationTitle(windowTitle)
+        .onAppear {
+            // opened again after the clean ended (it was closed while cleaning): straight to the end
+            if state.cleanDone { if state.cleanStopped { settled = true } else { settle() } }
+        }
+        .onChange(of: state.cleanRunning) { r in
+            if r { gen += 1; finishStart = nil; settled = false; grown = false; doneBeat = false; listShown = false; details = false }
+        }
+        .onChange(of: state.cleanDone) { d in if d { beginFinish() } }
         .onDisappear { if state.cleanDone { state.finishCleaning() } }
+    }
+
+    func close() { state.finishCleaning(); dismiss() }
+
+    func msNow(_ d: Date) -> Double {
+        if !finished { return -1 }                  // cleaning, or stopped
+        if settled { return FinishBeat.total }
+        guard let s = finishStart else { return 0 }
+        return max(0, d.timeIntervalSince(s) * 1000)
+    }
+
+    func settle() {
+        gen += 1
+        finishStart = nil; grown = true; doneBeat = true; listShown = true; settled = true
+    }
+
+    func beginFinish() {
+        if state.cleanStopped { settled = true; return }   // stopped: no finish; the log stays, so you can see where it stopped
+        if reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { settle(); return }
+        gen += 1
+        let g = gen
+        finishStart = Date()
+        withAnimation(.easeOut(duration: FinishBeat.grow / 1000)) { grown = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + FinishBeat.doneAt / 1000) { if gen == g { doneBeat = true } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + FinishBeat.listAt / 1000) { if gen == g { listShown = true } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + FinishBeat.total / 1000 + 0.1) {   // stop redrawing once it has settled
+            if gen == g { settled = true; finishStart = nil }
+        }
+    }
+
+    @ViewBuilder
+    func display(ms: Double, date: Date, width W: CGFloat) -> some View {
+        let fin = ms >= 0
+        let beat = fin && ms >= FinishBeat.doneAt
+        let binOnly = state.freed == 0 && state.trashed > 0
+        let total = binOnly ? state.trashed : state.freed
+        let p = Engine.parts(total)   // the real total the whole time: no count-up
+        let fraction = min(1, CGFloat(Double(state.freed + state.trashed) / Double(max(1, state.expected))))
+        let barFraction: CGFloat = state.cleanDone ? fraction : glide.step(fraction, at: date)
+        let label: String = !state.cleanDone ? "Cleaning  ·  " + state.currentItem
+            : state.cleanStopped ? "Stopped  ·  nothing else will be cleaned"
+            : !beat ? "Finishing"
+            : binOnly ? "Done  ·  moved to the Trash" : "Done  ·  everything you ticked is cleaned"
+        let showDetails = details
+        let before = state.freeBefore, after = state.freeAfter, diskTotal = state.diskTotal, disk = state.diskName
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 7).fill(Theme.screen)
+            Canvas { ctx, size in
+                FinishBeat.draw(&ctx, size: size, ms: ms, bar: barFraction, details: showDetails, binOnly: binOnly,
+                                before: before, after: after, total: diskTotal, disk: disk)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if beat {
+                    // "DONE" at the size of "GB FREED", then what it means, small
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("DONE").font(Theme.display(24)).foregroundColor(Theme.screenInk)
+                        Text(label.replacingOccurrences(of: "Done  ·  ", with: "·  ")).font(Theme.semi(12)).foregroundColor(Theme.screenMuted).lineLimit(1)
+                    }
+                    .frame(height: 16, alignment: .bottomLeading)
+                } else {
+                    Text(label).font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(p.0).font(Theme.display(60))
+                    Text(p.1 + (binOnly ? " TO TRASH" : " FREED")).font(Theme.display(24))
+                    Spacer()
+                    if !fin || showDetails {   // while cleaning: files and skipped
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text("\(state.cleanedFiles) files  ·  \(state.skipped) skipped").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                            if state.trashed > 0 && !binOnly { Text("+ \(Engine.fmt(state.trashed)) moved to the Trash").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
+                            if binOnly && state.cleanDone { Text("Empty the Trash to get this space back").font(Theme.sans(12)).foregroundColor(Theme.screenMuted) }
+                        }
+                    }
+                }.foregroundColor(Theme.orange)
+            }
+            .padding(.horizontal, 20).padding(.top, 18)
+            if fin && ms >= FinishBeat.listAt && !showDetails {
+                resultList(width: W, binOnly: binOnly, total: total)
+                    .opacity(FinishBeat.ease((ms - FinishBeat.listAt) / FinishBeat.listMs))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    // The list of what went, beside the ring: the biggest items, the rest, and at the bottom the total, like a slip.
+    func resultList(width W: CGFloat, binOnly: Bool, total: Int64) -> some View {
+        let items = state.freedItems.filter { $0.bytes + $0.trashed > 0 }.sorted { $0.bytes + $0.trashed > $1.bytes + $1.trashed }
+        let show = items.count > 5 ? 4 : items.count
+        let rest = Array(items.dropFirst(show))
+        let restBytes = rest.reduce(Int64(0)) { $0 + $1.bytes + $1.trashed }
+        let colW = max(140, W - 334 - 20)
+        let secs = max(1, Int(ceil(state.cleanSeconds)))   // never 0:00
+        let time = String(format: "%ld:%02ld", secs / 60, secs % 60)
+        let kept = state.skipped
+        let files = "\(state.cleanedFiles) file" + (state.cleanedFiles == 1 ? "" : "s") + (kept > 0 ? "  ·  \(kept) kept (in use or too new)" : "")
+        let mono = Theme.mono(12.5)
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<show, id: \.self) { i in
+                slipLine(items[i].name, Engine.fmt(items[i].bytes + items[i].trashed) + (items[i].trashed > 0 && items[i].bytes == 0 ? "  Trash" : ""), Theme.screenInk, mono)
+            }
+            if !rest.isEmpty { slipLine("+ \(rest.count) more", Engine.fmt(restBytes), Theme.screenMuted, mono) }
+            if items.isEmpty { slipLine("Nothing needed cleaning", "", Theme.screenMuted, mono) }
+            Spacer(minLength: 6)
+            DottedRule().stroke(Theme.track, style: StrokeStyle(lineWidth: 1, dash: [1, 2])).frame(height: 1).padding(.bottom, 4)
+            slipLine(binOnly ? "MOVED TO THE TRASH" : "FREED", Engine.fmt(total), Theme.orange, Theme.monoSemi(12.5))
+            if state.trashed > 0 && !binOnly { slipLine("+ moved to the Trash (empty it to get this back)", Engine.fmt(state.trashed), Theme.screenMuted, mono) }
+            if binOnly { slipLine("Empty the Trash to get this space back", "", Theme.screenMuted, mono) }
+            slipLine(files, time, Theme.screenMuted, mono)
+        }
+        .frame(width: colW, alignment: .leading)
+        .padding(.leading, 20).padding(.top, 124).padding(.bottom, 18)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    func slipLine(_ l: String, _ r: String, _ ink: Color, _ font: Font) -> some View {
+        HStack(spacing: 12) {
+            Text(l).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 0)
+            Text(r).lineLimit(1).fixedSize()
+        }
+        .font(font).foregroundColor(ink).frame(height: 22)
+    }
+
+    var logView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array((state.cleanDone && !state.results.isEmpty ? ["What was cleaned", ""] + state.results + ["", "Every file:"] + state.log : state.log).enumerated()), id: \.offset) { i, line in
+                        Text(line).font(Theme.mono(11)).foregroundColor(Theme.ink).lineLimit(1).truncationMode(.middle).id(i)
+                    }
+                }.padding(12)
+            }
+            .background(Theme.pane)
+            .onChange(of: state.log.count) { n in if n > 0 { proxy.scrollTo(n - 1, anchor: .bottom) } }
+            .onChange(of: state.cleanDone) { d in if d { proxy.scrollTo(0, anchor: .top) } }   // the summary sits on top
+        }
+    }
+}
+
+// MARK: - First-run guide
+// The window dims, a lit cut-out sits on the real part, and a small display-style card explains it. The cut-out
+// glides from one part to the next. Skip on every step; "?" replays it.
+
+struct GuideAnchors: PreferenceKey {
+    static var defaultValue: [Int: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [Int: Anchor<CGRect>], nextValue: () -> [Int: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+extension View {
+    // marks a part the guide can light (0 display, 2 Storage map, 3 Clean, 5 Protected folders, 6 Back to recommended,
+    // 9 top-right keys, 10 section rail, 11 list, 12 list header, 13 item panel)
+    func guidePart(_ i: Int) -> some View { anchorPreference(key: GuideAnchors.self, value: .bounds) { [i: $0] } }
+}
+
+// Finds the window a view is in (the guide only starts when the main window is the one in front).
+struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { [weak v] in found(v?.window) }
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let w = nsView.window
+        if w != nil { DispatchQueue.main.async { found(w) } }
+    }
+}
+
+final class GuideModel: ObservableObject {
+    static let steps: [(title: String, body: String)] = [
+        ("This is what you can free", "The big number is what's ticked right now. The bar is your disk: orange is ticked, hatched is what you could still free. On the right, your disk's free space."),
+        ("Three sections, by how careful to be", "Quick clean is safe and ticked for you. Big caches come back when they're needed. Deep clean may include your work. The small box ticks or unticks a whole section."),
+        ("Each row is one thing to clean", "Tick a row to include it; the size is what it would free. Click the row itself to see what it is."),
+        ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
+        ("See what fills your disk", "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list."),
+        ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
+        ("Back to recommended", "Puts the ticks and ages back to how they started. Scan again measures everything afresh."),
+        ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
+        ("Your look, and this guide", "Light, dark or your Mac's setting. The ? key shows this guide again whenever you want."),
+    ]
+    // what a step does before it points (open or close the item panel); set by the main window
+    var enter: ((Int) -> Void)?
+    static let seenKey = "guideSeen"
+    static var seen: Bool { UserDefaults.standard.bool(forKey: seenKey) }
+
+    @Published var step: Int? = nil
+    @Published var shown = false   // the veil, faded in
+    weak var window: NSWindow?
+    private var closing = false
+    private var keyMonitor: Any?
+    private var waitObserver: NSObjectProtocol?
+
+    func start() {
+        guard step == nil else { return }
+        closing = false
+        enter?(0)
+        step = 0
+        DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.18)) { self.shown = true } }
+        // Esc skips; Enter, Space and the right arrow go on; the left arrow goes back. The window behind gets no keys.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self = self, self.step != nil else { return e }
+            if e.modifierFlags.contains(.command) { return e }
+            if let w = self.window, e.window !== w { return e }
+            switch e.keyCode {
+            case 53: self.finish()
+            case 36, 76, 49, 124: self.next()
+            case 123: self.back()
+            default: break
+            }
+            return nil
+        }
+    }
+
+    func go(_ n: Int) {
+        guard step != nil, !closing, n >= 0 else { return }
+        if n >= GuideModel.steps.count { finish(); return }
+        enter?(n)   // e.g. the panel opens first; the cut-out then glides to where the part is now
+        withAnimation(.easeOut(duration: 0.3)) { step = n }
+    }
+    func next() { go((step ?? 0) + 1) }
+    func back() { if let s = step, s > 0 { go(s - 1) } }
+
+    // skipped or finished: remembered, so it starts by itself only once
+    func finish() {
+        guard step != nil, !closing else { return }
+        closing = true
+        UserDefaults.standard.set(true, forKey: GuideModel.seenKey)
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        withAnimation(.easeOut(duration: 0.18)) { shown = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self = self else { return }
+            self.step = nil; self.closing = false
+        }
+    }
+
+    // Once, the first time a scan finishes: now if this window is the one in front, else when it next is.
+    func autoStart(when ok: @escaping () -> Bool, before: @escaping () -> Void) {
+        guard !GuideModel.seen, step == nil, waitObserver == nil else { return }
+        if NSApp.isActive, let w = window, w.isKeyWindow {
+            if ok() { before(); start() }
+            return
+        }
+        waitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
+            guard let self = self else { return }
+            if let w = self.window, (note.object as? NSWindow) !== w { return }
+            if let o = self.waitObserver { NotificationCenter.default.removeObserver(o); self.waitObserver = nil }
+            if !GuideModel.seen, self.step == nil, ok() { before(); self.start() }
+        }
+    }
+}
+
+// The veil with a rounded cut-out (veil: true), or just the cut-out's outline. The cut-out glides between steps.
+struct GuideShape: Shape {
+    var hole: CGRect
+    var veil: Bool
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
+        get { AnimatablePair(AnimatablePair(hole.minX, hole.minY), AnimatablePair(hole.width, hole.height)) }
+        set { hole = CGRect(x: newValue.first.first, y: newValue.first.second, width: newValue.second.first, height: newValue.second.second) }
+    }
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        if veil { p.addRect(rect) }
+        p.addRoundedRect(in: hole, cornerSize: CGSize(width: 6, height: 6))
+        return p
+    }
+}
+
+struct GuideCardHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+struct GuideOverlay: View {
+    @ObservedObject var guide: GuideModel
+    let targets: [CGRect?]
+    let size: CGSize
+    @State private var cardH: CGFloat = 170
+    private let cardW: CGFloat = 320
+
+    var body: some View {
+        let step = min(max(guide.step ?? 0, 0), GuideModel.steps.count - 1)
+        let fallback = CGRect(x: size.width / 2 - 80, y: size.height / 2 - 40, width: 160, height: 80)
+        let target: CGRect = (step < targets.count ? targets[step] : nil) ?? fallback
+        let spot = target.insetBy(dx: -6, dy: -6)
+        let o = cardOrigin(spot)
+        let last = step == GuideModel.steps.count - 1
+        ZStack(alignment: .topLeading) {
+            Color.clear.contentShape(Rectangle()).onTapGesture { }   // the window behind waits
+            GuideShape(hole: spot, veil: true).fill(Color(hex: 0x121212).opacity(0.58), style: FillStyle(eoFill: true))
+            GuideShape(hole: spot, veil: false).stroke(Theme.orange, lineWidth: 2)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(GuideModel.steps[step].title).font(Theme.bold(16.5)).foregroundColor(Theme.screenInk)
+                Text(GuideModel.steps[step].body).font(Theme.sans(13)).foregroundColor(Theme.screenInk.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
+                HStack(spacing: 14) {
+                    Text("\(step + 1) / \(GuideModel.steps.count)").font(Theme.mono(11.5)).foregroundColor(Theme.screenMuted)
+                    Spacer(minLength: 8)
+                    if step > 0 {
+                        Button { guide.back() } label: { Text("Back").underline() }
+                            .buttonStyle(.plain).font(Theme.semi(12)).foregroundColor(Theme.screenInk)
+                    }
+                    if !last {
+                        Button { guide.finish() } label: { Text("Skip").underline() }
+                            .buttonStyle(.plain).font(Theme.semi(12)).foregroundColor(Theme.screenInk)
+                    }
+                    Button(last ? "Got it" : "Next") { guide.next() }.buttonStyle(KeyStyle(primary: true))
+                }
+                .padding(.top, 14)
+            }
+            .padding(14)
+            .frame(width: cardW, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Theme.screen))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(hex: 0x5A564F), lineWidth: 1))
+            .shadow(color: Color.black.opacity(0.3), radius: 10, x: 3, y: 6)
+            .background(GeometryReader { p in Color.clear.preference(key: GuideCardHeight.self, value: p.size.height) })
+            .offset(x: o.x, y: o.y)
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .opacity(guide.shown ? 1 : 0)
+        .onPreferenceChange(GuideCardHeight.self) { h in if h > 0 { cardH = h } }
+    }
+
+    // under the lit part if there's room, else above it; always inside the window
+    func cardOrigin(_ spot: CGRect) -> CGPoint {
+        let x = max(16, min(size.width - cardW - 16, spot.midX - cardW / 2))
+        var y = spot.maxY + 14 + cardH < size.height - 12 ? spot.maxY + 14 : spot.minY - 14 - cardH
+        if y < 12 { y = min(size.height - cardH - 12, spot.minY + 24) }
+        return CGPoint(x: x, y: y)
     }
 }
 
@@ -1985,7 +2670,7 @@ struct FinderView: View {
             } else {
                 Spacer()
             }
-            Text("\u{201C}Add to list\u{201D} puts a folder or file in Personal & work items, unticked. Nothing here deletes anything.")
+            Text("\u{201C}Add to list\u{201D} puts a folder or file in Deep clean, unticked. Nothing here deletes anything.")
                 .font(Theme.sans(12)).foregroundColor(Theme.muted)
         }
         .padding(18).frame(minWidth: 760, minHeight: 520).background(Theme.chassis)

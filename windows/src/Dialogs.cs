@@ -124,8 +124,19 @@ namespace SpaceHunter
         volatile int index; volatile bool done;
         readonly List<string> results = new List<string>();   // one plain line per item, shown when the clean is done
         Key hideKey;
-        // the finish: for about a second the bar clears segment by segment and the number counts up to the total
-        const double FinishMs = 1200;
+        // The finish (about 2 s): the display grows over the log, the same orange bar turns into the disk (used space
+        // slides in, the freed slice drains into free space), a held "Done" beat, then the list of what went.
+        const double GrowMs = 420, RingAt = 250, RingMs = 520, LiftAt = 820, LiftMs = 300, CrumbleAt = 1120, CrumbleMs = 520, CloseAt = 1250, CloseMs = 520,
+                     DoneAt = 1820, PulseMs = 650, ListAt = 2150, ListMs = 320;
+        struct Speck { public float A, R, Vx, Vy, S, Delay; }
+        Speck[] specks;   // the freed wedge's dust, made once
+        const double FinishMs = ListAt + ListMs;
+        class Freed { public string Name; public long Bytes, Binned, Kept; }
+        readonly List<Freed> freed = new List<Freed>();   // one per item, for the result list
+        readonly string diskRoot = Path.GetPathRoot(Engine.W);
+        long diskTotal, freeBefore, freeAfter = -1;
+        bool details;   // "What was cleaned": the log back under a small display
+        LinkLabel whatLink; Panel logHolder; int baseH, fullH;
         readonly Stopwatch finishClock = new Stopwatch();
         System.Windows.Forms.Timer finishTick;
         readonly System.Windows.Forms.Timer frame = new System.Windows.Forms.Timer { Interval = 15 };
@@ -139,7 +150,7 @@ namespace SpaceHunter
         public int ItemNow { get { return Math.Min(index, sel.Count - 1) + 1; } }
         public int ItemCount { get { return sel.Count; } }
         public string SnapshotPath;
-        Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fStat = Theme.CSemi(10.5f), fStat2 = Theme.CSans(10f);
+        Font fRing = Theme.CDisplay(22f), fGain = Theme.CMonoSemi(10f), fList = Theme.CMono(9.5f), fListB = Theme.CMonoSemi(9.5f), fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fUnit = Theme.CDisplay(17f), fStat = Theme.CSemi(10.5f), fStat2 = Theme.CSans(10f);
 
         public ProgressForm(List<Category> selection, long expectedBytes)
         {
@@ -152,7 +163,7 @@ namespace SpaceHunter
             display = new CanvasPanel { Location = Theme.P(18, 18), Size = Theme.D(744, 150) };
             display.Draw += PaintDisplay;
             current = new Label { Font = Theme.Sans(9f), ForeColor = Theme.Muted, AutoEllipsis = true, Location = Theme.P(20, 180), Size = Theme.D(740, 20), UseMnemonic = false };
-            var logHolder = new Panel { Location = Theme.P(18, 206), Size = Theme.D(744, 272), BackColor = Theme.Pane, Padding = Theme.Pad(12, 10, 4, 10) };
+            logHolder = new Panel { Location = Theme.P(18, 206), Size = Theme.D(744, 272), BackColor = Theme.Pane, Padding = Theme.Pad(12, 10, 4, 10) };
             log = new ListBox { Dock = DockStyle.Fill, Font = Theme.Mono(8.5f), BorderStyle = BorderStyle.None, IntegralHeight = false, BackColor = Theme.Pane, ForeColor = Theme.Ink, SelectionMode = SelectionMode.None };
             log.HandleCreated += (s, e) => Theme.SetWindowTheme(log.Handle, "Explorer", null);
             logHolder.Controls.Add(log);
@@ -163,7 +174,14 @@ namespace SpaceHunter
             logKey.Location = Theme.P(18, 498);
             stopKey.Click += (s, e) => { if (done) Close(); else { cnt.Cancel = true; stopKey.Enabled = false; stopKey.Text = "stopping"; } };
             logKey.Click += (s, e) => { try { Process.Start("notepad.exe", Path.Combine(Engine.AppDir, "log.txt")); } catch { } };
-            Controls.AddRange(new Control[] { display, current, logHolder, stopKey, hideKey, logKey });
+            whatLink = new LinkLabel { Text = "What was cleaned", AutoSize = true, Font = Theme.Semi(10f), LinkColor = Theme.Ink, ActiveLinkColor = Theme.OrangeDeep, VisitedLinkColor = Theme.Ink,
+                                       LinkBehavior = LinkBehavior.AlwaysUnderline, BackColor = Theme.Chassis, Location = Theme.P(20, 507), Visible = false, UseMnemonic = false };
+            whatLink.LinkClicked += (s, e) => ShowDetails(!details);
+            baseH = display.Height; fullH = Theme.D(462);
+            try { var di = new DriveInfo(diskRoot); diskTotal = di.TotalSize; freeBefore = di.AvailableFreeSpace; } catch { }
+            KeyPreview = true;
+            KeyDown += (s, e) => { if (done && (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Escape)) Close(); };
+            Controls.AddRange(new Control[] { display, current, logHolder, stopKey, hideKey, logKey, whatLink });
             FormClosing += (s, e) => { if (!done) { e.Cancel = true; cnt.Cancel = true; } };
 
             cnt.OnItem = (path, len, ok) =>
@@ -179,19 +197,36 @@ namespace SpaceHunter
             FormClosed += (s, e) => frame.Stop();
         }
 
+        static double Ease(double t) { t = Math.Max(0, Math.Min(1, t)); return 1 - Math.Pow(1 - t, 3); }
+        double Ms { get { return !done || cnt.Cancel ? -1 : finishClock.IsRunning || finishClock.ElapsedMilliseconds > 0 ? finishClock.ElapsedMilliseconds : FinishMs; } }
+
         void PaintDisplay(object s, PaintEventArgs e)
         {
             var g = e.Graphics; float W = display.LW, H = display.LH, pad = 20;
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             int i = Math.Min(index, sel.Count - 1);
-            string label = done ? (cnt.Cancel ? "Stopped  ·  nothing else will be cleaned" : Finishing ? "Clearing up\u2026" : "Done  ·  all ticked items cleaned")
-                                : "Cleaning  ·  item " + (i + 1) + " of " + sel.Count + "  ·  " + sel[i].Name;
-            // ease-out: quick at first, settling on the real total
-            double t = done && !cnt.Cancel ? FinishT : 1, ease = 1 - Math.Pow(1 - t, 3);
-            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
+            double ms = Ms;                       // -1 while cleaning (or when stopped)
+            bool fin = ms >= 0, beat = fin && ms >= DoneAt;
             bool binOnly = cnt.Bytes == 0 && cnt.RecycledBytes > 0;
-            long shown = (long)((binOnly ? cnt.RecycledBytes : cnt.Bytes) * (done && !cnt.Cancel ? ease : 1));
+            long total = binOnly ? cnt.RecycledBytes : cnt.Bytes;
+
+            // the label: what's happening, then the plain result
+            string label = !done ? "Cleaning  ·  item " + (i + 1) + " of " + sel.Count + "  ·  " + sel[i].Name
+                         : cnt.Cancel ? "Stopped  ·  nothing else will be cleaned"
+                         : !beat ? "Finishing"
+                         : binOnly ? "Done  ·  moved to the Recycle Bin"
+                         : "Done  ·  everything you ticked is cleaned";
+            if (beat && !cnt.Cancel)
+            {
+                using (var b = new SolidBrush(Theme.DisplayInk)) g.DrawString("DONE", fUnit, b, pad - 3, 4);
+                float dw = g.MeasureString("DONE", fUnit).Width;
+                using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString(label.Replace("Done  ·  ", "·  "), fLabel, b, pad - 3 + dw - 2, 12);
+            }
+            else using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
+            // the big number counts to the real total as the last files go
+            double count = fin ? Ease(ms / 300.0) : 1;
+            long shown = (long)(total * (fin ? 0.97 + 0.03 * count : 1));
             string num, unit; Theme.SizeParts(shown, out num, out unit);
             using (var b = new SolidBrush(Theme.Orange))
             {
@@ -199,35 +234,132 @@ namespace SpaceHunter
                 g.DrawString(num, fBig, b, pad - 5, 28);
                 g.DrawString(unit + (binOnly ? " TO RECYCLE BIN" : " FREED"), fUnit, b, pad - 5 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
             }
-            string stat = ((long)(cnt.Files * (done && !cnt.Cancel ? ease : 1))).ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
-            using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
-            if (binOnly && done)   // honest about where the space is: it comes back when the bin is emptied
-                using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "Empty the Recycle Bin to get this space back"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
-            if (cnt.RecycledBytes > 0 && !binOnly)
-                using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
-            double f = Math.Min(1.0, (double)(cnt.Bytes + cnt.RecycledBytes) / expected);
-            float bx = pad, bw = W - 2 * pad, by = 118, bh = 12;
-            using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, bx, by, bw, bh);
-            if (done && !cnt.Cancel)
+            if (!fin)   // while cleaning: files, skipped, time
             {
-                // the full bar breaks into segments that drop away left to right: the space is cleared
-                const int N = 28; float sw = bw / N;
-                for (int k = 0; k < N; k++)
-                {
-                    double start = 0.55 * k / N, local = Math.Max(0, Math.Min(1, (t - start) / 0.4));
-                    if (local >= 1) continue;
-                    double fall = local * local;   // ease-in: each piece lets go, then falls
-                    int a = (int)(255 * (1 - fall));
-                    using (var b = new SolidBrush(Color.FromArgb(a, Theme.Orange)))
-                        g.FillRectangle(b, bx + k * sw + 1, by + (float)(fall * 16), sw - 2, bh * (float)(1 - fall * 0.6));
-                }
+                string stat = cnt.Files.ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
+                using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
+                if (cnt.RecycledBytes > 0 && !binOnly)
+                    using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
             }
-            else
+
+            // the bar while cleaning; at the end it gives way to your drive, drawn as a ring
+            float bx = pad, bw = W - 2 * pad, by = 118, bh = 12;
+            if (!fin || ms < RingAt + 200)
             {
-                // glide toward the real figure instead of stepping each time it changes
+                double f = Math.Min(1.0, (double)(cnt.Bytes + cnt.RecycledBytes) / expected);
+                if (done) f = 1;
                 long now = frameClock.ElapsedMilliseconds; double dt = Math.Max(0, now - lastFrame) / 1000.0; lastFrame = now;
                 barShown = barShown < 0 || f < barShown ? f : barShown + (f - barShown) * (1 - Math.Exp(-dt / 0.12));
-                using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, bx, by, (float)(bw * barShown), bh);
+                int ba = fin ? (int)(255 * (1 - Ease(ms / (RingAt + 200)))) : 255;
+                using (var b = new SolidBrush(Color.FromArgb(ba, Theme.DisplayTrack))) g.FillRectangle(b, bx, by, bw, bh);
+                using (var b = new SolidBrush(Color.FromArgb(ba, Theme.Orange))) g.FillRectangle(b, bx, by, (float)(bw * (fin ? 1 : barShown)), bh);
+                if (!fin) return;
+            }
+            // the drive, measured before and after (never a made-up number)
+            double usedAfter = diskTotal > 0 && freeAfter >= 0 ? 1 - (double)freeAfter / diskTotal : 0;
+            double slice = diskTotal > 0 && freeAfter >= 0 && !binOnly ? Math.Max(0, (double)(freeAfter - freeBefore) / diskTotal) : 0;
+            if (slice > 0 && slice * 360 < 5) slice = freeAfter - freeBefore >= (1L << 20) ? 5 / 360.0 : 0;   // a small clean still shows a wedge; the numbers stay exact
+            if (usedAfter + slice > 1) usedAfter = 1 - slice;
+            // centred while it plays; it moves right when the list arrives
+            float R = 104, sw = 26, cxEnd = W - pad - R - sw / 2 - 40, cxMid = W / 2;
+            float cx = cxMid + (cxEnd - cxMid) * (float)Ease((ms - ListAt) / 380), cy = 214;
+            var box = new RectangleF(cx - R, cy - R, 2 * R, 2 * R);
+            double sweep = Ease((ms - RingAt) / RingMs);                       // the ring draws itself round
+            double lift = slice > 0 ? Ease((ms - LiftAt) / LiftMs) : 0;         // the freed wedge lifts out...
+            double crumble = slice > 0 ? Math.Max(0, Math.Min(1, (ms - CrumbleAt) / CrumbleMs)) : 1;   // ...turns to dust...
+            double close = slice > 0 ? Ease((ms - CloseAt) / CloseMs) : 1;     // ...and free space grows into the gap it left
+            double gap = slice * (1 - close);
+            Func<double, float> deg = f => (float)(-90 + 360 * f);
+            int ta = (int)(255 * Math.Min(1, sweep * 2));
+            // free space: from the end of the gap round to the top
+            float fStart = deg(usedAfter + gap), fExt = (float)(360 * (1 - usedAfter - gap));
+            if (fExt > 0.3f) using (var pen = new Pen(Color.FromArgb(ta, Theme.DisplayTrack), sw)) g.DrawArc(pen, box, fStart, fExt);
+            // used space, sweeping round; the freed wedge sits at its end in orange until it lifts out
+            double drawn = (usedAfter + slice) * sweep;
+            float used = (float)(360 * Math.Min(drawn, usedAfter));
+            if (used > 0.3f) using (var pen = new Pen(Theme.DisplayUsed, sw)) g.DrawArc(pen, box, -90, used);
+            if (slice > 0 && crumble < 1 && drawn > usedAfter)
+            {
+                float start = deg(usedAfter), ext = (float)(360 * Math.Min(slice, drawn - usedAfter));
+                double mid = (start + ext / 2) * Math.PI / 180, off = 16 * lift;
+                var wb = box; wb.Offset((float)(Math.Cos(mid) * off), (float)(Math.Sin(mid) * off));
+                int wa = (int)(255 * (1 - Ease(crumble * 1.4)));
+                if (ext > 0.3f && wa > 0) using (var pen = new Pen(Color.FromArgb(wa, Theme.Orange), sw)) g.DrawArc(pen, wb, start, ext);
+            }
+            if (slice > 0 && ms >= CrumbleAt)   // the wedge turns to dust and falls away
+            {
+                if (specks == null)
+                {
+                    var rnd = new Random(7); specks = new Speck[90];
+                    for (int k = 0; k < specks.Length; k++)
+                        specks[k] = new Speck { A = (float)rnd.NextDouble(), R = (float)(rnd.NextDouble() - 0.5), Vx = (float)(rnd.NextDouble() * 1.6 + 0.4), Vy = (float)(-rnd.NextDouble() * 1.4 - 0.2), S = (float)(rnd.NextDouble() * 3 + 2), Delay = (float)(rnd.NextDouble() * 180) };
+                }
+                float start = deg(usedAfter);
+                foreach (var sp in specks)
+                {
+                    double tt = (ms - CrumbleAt - sp.Delay) / 1000.0; if (tt <= 0) continue;
+                    double an = (start + 360 * slice * sp.A) * Math.PI / 180, rr = R + sp.R * sw;
+                    double mx = Math.Cos(an), my = Math.Sin(an);
+                    float px = (float)(cx + mx * (rr + 16) + mx * sp.Vx * 90 * tt), py = (float)(cy + my * (rr + 16) + sp.Vy * 90 * tt + 260 * tt * tt);
+                    int pa = (int)(255 * Math.Max(0, 1 - tt / 0.75)); if (pa <= 0) continue;
+                    using (var b = new SolidBrush(Color.FromArgb(pa, Theme.Orange))) g.FillRectangle(b, px, py, sp.S, sp.S);
+                }
+            }
+            if (slice > 0 && close > 0)   // what you gained stays marked: an orange edge on the newly free span
+            {
+                var eb = new RectangleF(cx - R - sw / 2 + 2, cy - R - sw / 2 + 2, 2 * R + sw - 4, 2 * R + sw - 4);
+                float e0 = deg(usedAfter + gap), ee = (float)(360 * (slice - gap));
+                if (ee > 0.3f) using (var pen = new Pen(Theme.Orange, 4f)) g.DrawArc(pen, eb, e0, ee);
+            }
+            if (beat)   // done: the whole ring flashes orange once and settles
+            {
+                double pt = (ms - DoneAt) / PulseMs;
+                if (pt < 1) using (var pen = new Pen(Color.FromArgb((int)(150 * (1 - pt) * (1 - pt)), Theme.Orange), sw + 2)) g.DrawEllipse(pen, box);
+            }
+            // in the middle: free space, counting up as the ring closes, and what you gained
+            if (freeAfter >= 0 && sweep > 0)
+            {
+                int ca = (int)(255 * Math.Min(1, sweep * 1.5));
+                long fShown = freeBefore + (long)((freeAfter - freeBefore) * close);
+                string fn, fu; Theme.SizeParts(fShown, out fn, out fu);
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center })
+                {
+                    using (var b = new SolidBrush(Color.FromArgb(ca, Theme.DisplayInk))) g.DrawString(fn + " " + fu, fRing, b, cx, cy - 34, sf);
+                    using (var m = new SolidBrush(Color.FromArgb(ca, Theme.DisplayMuted))) g.DrawString("free of " + Engine.Fmt(diskTotal) + " on " + diskRoot.TrimEnd('\\'), fStat2, m, cx, cy + 2, sf);
+                    long gain = freeAfter - freeBefore;
+                    if (gain > 0 && close > 0)
+                        using (var o = new SolidBrush(Color.FromArgb((int)(255 * close), Theme.Orange))) g.DrawString("+ " + Engine.Fmt(gain), fGain, o, cx, cy + 22, sf);
+                }
+            }
+            if (ms < ListAt || details) return;
+            // the list of what went: the biggest items, the rest, the total
+            int a = (int)(255 * Ease((ms - ListAt) / ListMs));
+            List<Freed> items; lock (freed) items = freed.Where(x => x.Bytes + x.Binned > 0).OrderByDescending(x => x.Bytes + x.Binned).ToList();
+            float y = by + 6, lh = 22, rx = W - pad - 2 * 104 - 26 - 80;
+            using (var ink = new SolidBrush(Color.FromArgb(a, Theme.DisplayInk))) using (var mut = new SolidBrush(Color.FromArgb(a, Theme.DisplayMuted)))
+            using (var org = new SolidBrush(Color.FromArgb(a, Theme.Orange)))
+            {
+                Action<string, string, Brush, Font> line = (l, r, br, f) =>
+                {
+                    var rm = g.MeasureString(r, f);
+                    using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                        g.DrawString(l, f, br, new RectangleF(pad, y, rx - pad - rm.Width - 12, lh), sf);
+                    g.DrawString(r, f, br, rx - rm.Width, y); y += lh;
+                };
+                int show = items.Count > 5 ? 4 : items.Count;
+                foreach (var it in items.Take(show)) line(it.Name, Engine.Fmt(it.Bytes + it.Binned) + (it.Binned > 0 && it.Bytes == 0 ? "  bin" : ""), ink, fList);
+                if (items.Count > show) line("+ " + (items.Count - show) + " more", Engine.Fmt(items.Skip(show).Sum(x => x.Bytes + x.Binned)), mut, fList);
+                if (items.Count == 0) line("Nothing needed cleaning", "", mut, fList);
+                // the total sits at the bottom of the display, like the total on a slip
+                int after = 2 + ((cnt.RecycledBytes > 0 && !binOnly) || binOnly ? 1 : 0);
+                y = Math.Max(y + 6, H - 18 - after * lh - 10);
+                using (var pen = new Pen(Color.FromArgb(a, Theme.DisplayTrack)) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot }) g.DrawLine(pen, pad, y - 3, rx, y - 3);
+                y += 4;
+                line(binOnly ? "MOVED TO THE RECYCLE BIN" : "FREED", Engine.Fmt(total), org, fListB);
+                if (cnt.RecycledBytes > 0 && !binOnly) line("+ moved to the Recycle Bin (empty it to get this back)", Engine.Fmt(cnt.RecycledBytes), mut, fList);
+                if (binOnly) line("Empty the Recycle Bin to get this space back", "", mut, fList);
+                long kept = cnt.Skipped;
+                line(cnt.Files.ToString("N0") + (cnt.Files == 1 ? " file" : " files") + (kept > 0 ? "  ·  " + kept.ToString("N0") + " kept (in use or too new)" : ""), TimeSpan.FromSeconds(Math.Max(1, Math.Ceiling(clock.Elapsed.TotalSeconds))).ToString(@"m\:ss"), mut, fList);
             }
         }
 
@@ -247,6 +379,7 @@ namespace SpaceHunter
                     summary.Add(sel[i].Name + ": freed " + Engine.Fmt(cnt.Bytes - b0) + (cnt.RecycledBytes > r0 ? " + " + Engine.Fmt(cnt.RecycledBytes - r0) + " to Recycle Bin" : "") +
                                 ", " + (cnt.Files - f0).ToString("N0") + " files, skipped " + (cnt.Skipped - s0).ToString("N0"));
                     long fb = cnt.Bytes - b0, rb = cnt.RecycledBytes - r0, sk = cnt.Skipped - s0;
+                    lock (freed) freed.Add(new Freed { Name = sel[i].Name, Bytes = fb, Binned = rb, Kept = sk });
                     lock (results) results.Add(sel[i].Name.PadRight(44).Substring(0, 44) + "  " +
                         (fb > 0 || rb == 0 ? Engine.Fmt(fb) + " freed" : "") + (rb > 0 ? (fb > 0 ? " + " : "") + Engine.Fmt(rb) + " to the Recycle Bin" : "") +
                         (sk > 0 ? "   (" + sk.ToString("N0") + " kept: in use or too new)" : ""));
@@ -256,7 +389,9 @@ namespace SpaceHunter
                 {
                     index = sel.IndexOf(sys[0]);
                     cnt.Current = "Waiting for Windows to allow cleaning its system folders...";
+                    long sb0 = cnt.Bytes;
                     string sr = RunSystemHelper(sys);
+                    lock (freed) freed.Add(new Freed { Name = "Windows system folders", Bytes = cnt.Bytes - sb0 });
                     summary.Add(sr);
                     lock (results) results.Add(sr);
                 }
@@ -264,9 +399,35 @@ namespace SpaceHunter
                            (cnt.RecycledBytes > 0 ? Engine.Fmt(cnt.RecycledBytes) + " to Recycle Bin; " : "") + "skipped " +
                            cnt.Skipped.ToString("N0") + " (in use, recent or too big for the bin). " + string.Join(" | ", summary));
                 foreach (var line in summary) feed.Enqueue("— " + line);
+                try { freeAfter = new DriveInfo(diskRoot).AvailableFreeSpace; } catch { }
                 done = true;
             });
             t.IsBackground = true; t.Start();
+        }
+
+        void SetStop(string text, bool on)
+        {
+            stopKey.Text = text; stopKey.Primary = on; stopKey.Enabled = on; stopKey.FitWidth();
+            stopKey.Left = ClientSize.Width - stopKey.Width - Theme.D(18); stopKey.Invalidate();
+        }
+
+        // 0 = cleaning layout, 1 = the display fills the window and the log has sunk away
+        void Grow(double t)
+        {
+            display.Height = baseH + (int)((fullH - baseH) * t);
+            logHolder.Top = Theme.D(206) + (int)(Theme.D(330) * t); logHolder.Visible = t < 1;
+            current.Visible = t <= 0;
+        }
+
+        void ShowDetails(bool on)
+        {
+            details = on;
+            if (on) { display.Height = baseH; logHolder.Top = Theme.D(206); logHolder.Visible = true; current.Visible = false; logKey.Visible = true; }
+            else { Grow(1); logKey.Visible = false; }
+            whatLink.Text = on ? (cnt.Cancel ? "What was cleaned" : "Back to the summary") : "What was cleaned";
+            if (cnt.Cancel) whatLink.Visible = false;
+            logKey.Left = whatLink.Right + Theme.D(16);
+            display.Invalidate();
         }
 
         // Fallback when the app isn't elevated: one permission prompt, an elevated copy cleans just the system items.
@@ -326,23 +487,41 @@ namespace SpaceHunter
                 stopKey.Text = cnt.Cancel ? "close" : "done"; stopKey.Primary = !cnt.Cancel; stopKey.Enabled = true; stopKey.Invalidate();
                 hideKey.Visible = false; Text = "Space Hunter  ·  " + (cnt.Cancel ? "stopped" : "done");
                 stopKey.Left = ClientSize.Width - stopKey.Width - Theme.D(18); logKey.Visible = true;
-                if (!cnt.Cancel && SystemInformation.UIEffectsEnabled)   // a moment of "clearing up"; skipped when Windows is set to reduce effects
+                hideKey.Visible = false; logKey.Visible = false;
+                whatLink.Visible = !SystemInformation.UIEffectsEnabled; logKey.Left = whatLink.Right + Theme.D(16); logKey.Top = stopKey.Top;
+                if (cnt.Cancel) { whatLink.Visible = false; ShowDetails(true); }   // stopped: the log stays, so you can see where it stopped
+                else if (!SystemInformation.UIEffectsEnabled) { finishClock.Reset(); Grow(1); }   // reduce effects: straight to the result
+                else
                 {
+                    SetStop("finishing", false); Text = "Space Hunter  ·  cleaning";
                     finishClock.Restart();
-                    finishTick = new System.Windows.Forms.Timer { Interval = 16 };
-                    finishTick.Tick += (s2, e2) => { display.Invalidate(); if (finishClock.ElapsedMilliseconds >= FinishMs) { finishTick.Stop(); finishClock.Stop(); display.Invalidate(); } };
+                    finishTick = new System.Windows.Forms.Timer { Interval = 15 };
+                    finishTick.Tick += (s2, e2) =>
+                    {
+                        double ms = finishClock.ElapsedMilliseconds;
+                        if (!details) Grow(Ease(ms / GrowMs));
+                        if (ms >= ListAt && !whatLink.Visible) whatLink.Visible = true;
+                        if (ms >= DoneAt && !stopKey.Enabled) { SetStop("done", true); Text = "Space Hunter  ·  done"; }   // the way to the full log, once the summary is up
+                        display.Invalidate();
+                        if (ms >= FinishMs) { finishTick.Stop(); finishClock.Stop(); display.Invalidate(); }
+                    };
                     finishTick.Start();
                 }
                 display.Invalidate();
-                if (SnapshotPath != null)   // test hook: one frame mid-way, then the end
+                if (SnapshotPath != null)   // test hook: the display at set moments of the finish, then the whole window at the end
                 {
-                    var snap = new System.Windows.Forms.Timer { Interval = 450 };
-                    int step = 0;
+                    var snap = new System.Windows.Forms.Timer { Interval = 15 };
+                    var at = new[] { 500, 900, 1250, 1500, 1950 }; int next = 0;
                     snap.Tick += (s3, e3) =>
                     {
-                        step++;
-                        if (step == 1) { using (var bmp = new Bitmap(display.Width, display.Height)) { display.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(SnapshotPath.Replace(".png", "-mid.png")); } }
-                        if (step >= 4) { snap.Stop(); Program.Snap(this, SnapshotPath); Close(); }
+                        long ms = finishClock.ElapsedMilliseconds;
+                        if (next < at.Length && ms >= at[next])
+                        {
+                            display.Refresh();
+                            using (var bmp = new Bitmap(display.Width, display.Height)) { display.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(SnapshotPath.Replace(".png", "-t" + at[next] + ".png")); }
+                            next++;
+                        }
+                        if (ms >= FinishMs + 300 || (!finishClock.IsRunning && next >= at.Length)) { snap.Stop(); Program.Snap(this, SnapshotPath); Close(); }
                     };
                     snap.Start();
                 }

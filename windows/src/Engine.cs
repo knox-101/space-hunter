@@ -449,8 +449,8 @@ namespace SpaceHunter
         public static string Fmt(long b)
         {
             var inv = CultureInfo.InvariantCulture;   // "1.5 GB" everywhere, so the log reads back the same in every country
-            if (b >= 1L << 40) return (b / 1099511627776.0).ToString("0.00", inv) + " TB";
-            if (b >= 1L << 30) return (b / 1073741824.0).ToString("0.0", inv) + " GB";
+            if (b >= 1000L << 30) return (b / 1099511627776.0).ToString("0.00", inv) + " TB";
+            if (b >= 1000L << 20) return (b / 1073741824.0).ToString("0.0", inv) + " GB";
             if (b >= 1L << 20) return (b / 1048576.0).ToString("0", inv) + " MB";
             if (b > 0) return (b / 1024.0).ToString("0", inv) + " KB";
             return "0 MB";

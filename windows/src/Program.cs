@@ -261,6 +261,7 @@ namespace SpaceHunter
 
             Updater.CleanUpOld();
             var form = new MainForm { SnapshotPath = snap, OpenPanelFor = Arg(args, "--open"), FramesDir = Arg(args, "--frames"), KeepPlaceOut = Arg(args, "--test-keep-place") };
+            if (Arg(args, "--guide") != null) form.GuideAt = int.Parse(Arg(args, "--guide"));   // test hook: the guide at step N
             if (Arg(args, "--pick") != null) form.PickPaths = Arg(args, "--pick").Split('|').ToList();
             if (Has(args, "--test-update-bar"))   // test hook: show the update bar with a made-up newer version
                 form.Shown += (s, e) => form.ShowUpdate(new Release { Version = new Version(Updater.Current.Major, Updater.Current.Minor + 1, 0), Tag = "test" });

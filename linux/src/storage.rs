@@ -214,7 +214,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
     let sw = gtk::ScrolledWindow::builder().child(&rows).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
     sw.set_margin_top(6);
     v.append(&sw);
-    let hint = label("\u{201C}Add to list\u{201D} puts a folder or file in Personal & work items, unticked. Nothing here deletes anything.", "status");
+    let hint = label("\u{201C}Add to list\u{201D} puts a folder or file in Deep clean, unticked. Nothing here deletes anything.", "status");
     v.append(&hint);
     win.set_child(Some(&v));
 
@@ -394,7 +394,7 @@ fn toggle_add(s: &Rc<Storage>, p: &Path) {
         s.hint.set_text(&format!("Taken off the cleanup list: {}.", home_short(p)));
     } else {
         engine::custom::add(&ps);
-        s.hint.set_text(&format!("Added: {}. It's on the cleanup list, in Personal & work items, unticked. Press \u{201C}Added\u{201D} to undo.", home_short(p)));
+        s.hint.set_text(&format!("Added: {}. It's on the cleanup list, in Deep clean, unticked. Press \u{201C}Added\u{201D} to undo.", home_short(p)));
     }
     s.sm.borrow_mut().changed = true;
     show(s);

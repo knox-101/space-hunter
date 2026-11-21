@@ -79,12 +79,6 @@ button.key:active { box-shadow: none; margin-top: 2px; margin-bottom: -2px; }
 button.key.accent { box-shadow: inset 0 0 0 2px #FF5B1F, 0 2px 0 $KSHADOW; }
 button.key.primary { background: #FF5B1F; color: #1B1B1A; box-shadow: 0 2px 0 #B5400F; font-size: 11.5pt; padding: 12px 28px; }
 button.key.primary:disabled { background: $KOFF; color: $DISABLED; box-shadow: 0 2px 0 $LINE; }
-.tile { background: $KFACE; border-radius: 6px; box-shadow: 0 3px 0 $KSHADOW; padding: 10px 16px 12px 16px; }
-.tile.on { background: $SCREEN; box-shadow: 0 3px 0 #000000; }
-.tile-name { color: $INK; font-weight: 700; font-size: 11.5pt; }
-.tile.on .tile-name { color: #E9E6DF; }
-.tile-desc { color: $SOFT; font-size: 9pt; }
-.tile.on .tile-desc { color: #8A8A86; }
 .section-title { color: $INK; font-weight: 700; font-size: 10pt; }
 .explain { color: $MUTED; font-size: 9pt; }
 .note { color: $SOFT; font-size: 9.5pt; }
@@ -93,17 +87,6 @@ button.key.primary:disabled { background: $KOFF; color: $DISABLED; box-shadow: 0
 button.key.on { background: $INK; color: $PANE; box-shadow: 0 2px 0 #000000; }
 button.key.small { font-size: 8.5pt; padding: 5px 10px; }
 button.key:disabled { background: $KOFF; color: $DISABLED; box-shadow: 0 2px 0 $LINE; }
-button.tile { background: $KFACE; background-image: none; border: none; border-radius: 6px; box-shadow: 0 3px 0 $KSHADOW; padding: 10px 16px 12px 16px; }
-button.tile:hover { background: $KHOVER; }
-button.tile.on { background: $SCREEN; box-shadow: 0 3px 0 #000000; }
-button.tile label.tile-name { color: $INK; font-weight: 700; font-size: 11.5pt; }
-button.tile.on label.tile-name { color: #E9E6DF; }
-button.tile label.tile-size { color: $INK; font-weight: 600; font-size: 12.5pt; }
-button.tile.on label.tile-size { color: #E9E6DF; }
-button.tile label.tile-desc { color: $SOFT; font-size: 9pt; }
-button.tile.on label.tile-desc { color: #8A8A86; }
-button.tile label.tile-count { color: $MUTED; font-weight: 600; font-size: 9pt; }
-button.tile.on label.tile-count { color: #E9E6DF; }
 button.link-btn { background: none; border: none; box-shadow: none; padding: 2px 4px; color: $INK; font-weight: 600; font-size: 9pt; border-bottom: 1px solid $INK; border-radius: 0; min-height: 0; }
 button.link-btn:hover { color: $ODEEP; border-bottom-color: $ODEEP; }
 .rowline { border-bottom: 1px solid $LINE; }
@@ -156,12 +139,9 @@ button.key.primary-small { background: #FF5B1F; color: #1B1B1A; box-shadow: 0 2p
 .update-sub { color: #A8A49C; font-size: 9pt; }
 .update-dot { color: #FF5B1F; font-size: 14pt; }
 textview.log, textview.log text { background: $PANE; color: $INK; font-family: "IBM Plex Mono"; font-size: 8.5pt; }
-.theme-label { color: $MUTED; font-size: 8.5pt; }
-.seg-box { background: $KFACE; border: 1px solid $LINE; border-radius: 3px; padding: 2px; }
-button.seg { background: none; background-image: none; border: none; box-shadow: none; border-radius: 2px; padding: 2px 12px; min-height: 0; min-width: 0; color: $MUTED; font-weight: 600; font-size: 7.75pt; }
-button.seg:hover { background: $HOVER; }
-button.seg.on { background: $INK; color: $PANE; }
 popover contents { background: $PANE; color: $INK; }
+.cta-bar { background: #FF5B1F; }
+.cta { color: $ODEEP; font-weight: 600; font-size: 9.75pt; }
 "#;
 
 // Light, Dark or System (follows the desktop). Two style sheets are made from the one above, and the one wanted now is
@@ -390,6 +370,8 @@ fn main() -> glib::ExitCode {
         storage: args.iter().position(|a| a == "--storage").and_then(|i| args.get(i + 1)).cloned(),
         drill: args.iter().position(|a| a == "--drill").and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(0),
         protect: args.iter().any(|a| a == "--protect"),
+        guide: args.iter().position(|a| a == "--guide").and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()),
+        quiet: quit_after.is_some(),
     };
     app.connect_activate(move |app| {
         let _ui = ui::build(app, opts.clone());

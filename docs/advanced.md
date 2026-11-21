@@ -6,7 +6,7 @@
 |---|---|---|
 | **Quick clean**: caches and leftovers that rebuild | yes | Temp folders, Windows Update leftovers, Windows logs, crash dumps, thumbnail cache, graphics shader caches (including Steam's), graphics driver installer leftovers, browser caches (Chrome, Edge, Brave, Vivaldi, Opera, Firefox), chat app caches, app logs (e.g. OneDrive, Zoom), game launcher caches (e.g. Epic, Battle.net), Adobe media cache, AI app caches and logs (e.g. Claude), code editor and IDE caches (e.g. VS Code, JetBrains), npm / Yarn / pip / uv / Go build caches, Win+R history |
 | **Big caches & history**: big caches that download again, or old history | no | The previous Windows installation (`Windows.old`), Prefetch, Steam and Spotify caches, AI agent VM images (e.g. Claude Cowork), downloaded AI models (e.g. Hugging Face), AI tool runtimes (e.g. Codex), npx packages, browser-automation browsers, Gradle, Maven, NuGet, Cargo, Go module, pnpm and conda caches, game engine caches (e.g. Unity, Unreal), Android emulator snapshots, the Recycle Bin |
-| **Personal & work items**: can hold your work or history | no | Old AI agent chat history (Claude Code, Codex), old AI agent workspaces, old installers and archives in Downloads, and any folder or file you add yourself |
+| **Deep clean**: may include your work, check first | no | Old AI agent chat history (Claude Code, Codex), old AI agent workspaces, old installers and archives in Downloads, and any folder or file you add yourself |
 
 There are 43 items on Windows and 33 on Mac; the Mac has the macOS equivalents (app caches, logs, Mail attachment
 copies, Xcode DerivedData, simulator caches, old iPhone and iPad backups, the Trash). Every clean is logged in

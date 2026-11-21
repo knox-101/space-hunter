@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Blesson Reji (knox-101). Space Hunter is free software under the GNU GPL v3 or later; see LICENSE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Space Hunter (Linux) - the main window: the display, the keys, the three section tiles, the list, the item panel,
+// Space Hunter (Linux) - the main window: the display, the keys, the section rail, the list, the item panel,
 // the confirm window and the cleaning window. Same layout and wording as the Windows and Mac apps.
 
 use crate::engine::{self, fmt, Cat, Counter, Kind, Level};
@@ -24,6 +24,8 @@ pub struct Opts {
     pub storage: Option<String>,       // test hook: open the Storage map on this folder
     pub drill: usize,                  // test hook: open the biggest folder this many levels down
     pub protect: bool,                 // test hook: open Protected folders
+    pub guide: Option<usize>,          // test hook: open the first-run guide at this step once measured
+    pub quiet: bool,                   // a test run (--quit-after): the guide never starts by itself
 }
 
 struct St {
@@ -50,9 +52,25 @@ pub struct Ui {
     legend_not: gtk::Label,
     clean: gtk::Button,
     scan_key: gtk::Button,
-    tiles: Vec<(gtk::Button, gtk::Label, gtk::Label)>,
+    map_key: gtk::Button,
+    protect_key: gtk::Button,
+    reset_key: gtk::Button,
+    top_keys: gtk::DrawingArea,               // the guide key and the Light / Dark / System keys
+    rail_box_hover: Cell<i32>,                // the column whose tick box (and its words) is under the pointer
+    display: gtk::Box,
+    overlay: gtk::Overlay,                    // over everything: the first-run guide
+    rail: gtk::DrawingArea,                   // the three sections on one rail
+    rail_hover: Cell<i32>,                    // the column under the pointer (-1: none)
+    rail_boxes: Cell<[R4; 3]>,                // each column's tick-all box, as last drawn (width 0: none)
+    mark: Cell<f64>,                          // the orange marker's place, in columns (0, 1, 2)
+    sliding: Cell<bool>,
+    slide_gen: Cell<u64>,
     title: gtk::Label,
     explain: gtk::Label,
+    cta: gtk::Label,                          // the section's call to action, under the explain line
+    list_sw: gtk::ScrolledWindow,
+    guide: RefCell<Option<Rc<Guide>>>,
+    guide_pending: Cell<bool>,                // start the guide when the window is next active
     rows: gtk::Box,
     panel_rev: gtk::Revealer,
     panel: gtk::Box,
@@ -69,6 +87,48 @@ pub struct Ui {
     described: RefCell<std::collections::HashMap<String, String>>,       // what's inside folders you added, worked out once
     more: Cell<bool>,                                                    // the item panel shows its full notes
 }
+
+type R4 = (f64, f64, f64, f64);   // x, y, width, height
+
+const ORANGE: u32 = 0xFF5B1F;
+const ON_ORANGE: u32 = 0x1B1B1A;    // text and ticks on orange, in both themes
+const TRACK: u32 = 0x3A3A38;        // the display's empty track
+const USED: u32 = 0x6F6C66;         // the display's used space
+const SC: f64 = gtk::pango::SCALE as f64;
+
+fn ease(t: f64) -> f64 { let t = t.clamp(0.0, 1.0); 1.0 - (1.0 - t).powi(3) }
+
+fn animations_on() -> bool { gtk::Settings::default().map(|s| s.is_gtk_enable_animations()).unwrap_or(true) }
+
+fn rgba(cr: &gtk::cairo::Context, c: u32, a: f64) {
+    cr.set_source_rgba(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0, a.clamp(0.0, 1.0));
+}
+
+fn round_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    use std::f64::consts::PI;
+    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
+    cr.arc(x + r, y + h - r, r, PI / 2.0, PI);
+    cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+    cr.close_path();
+}
+
+// text drawn by hand, in the app's own type ("Schibsted Grotesk Semi-Bold 10", "Big Shoulders Display Black 24", ...)
+fn layout(w: &gtk::DrawingArea, font: &str) -> gtk::pango::Layout {
+    let l = w.create_pango_layout(None);
+    l.set_font_description(Some(&gtk::pango::FontDescription::from_string(font)));
+    l
+}
+
+fn show_at(cr: &gtk::cairo::Context, l: &gtk::pango::Layout, text: &str, x: f64, y: f64) {
+    l.set_text(text);
+    cr.move_to(x, y);
+    pangocairo::functions::show_layout(cr, l);
+}
+
+fn inside(r: R4, x: f64, y: f64) -> bool { r.2 > 0.0 && x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
@@ -160,41 +220,169 @@ fn hatch(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64) {
     let _ = cr.restore();
 }
 
-// Light / Dark / System: three small segments at the top right, above the display. The lit one is ink-filled.
-fn theme_switch() -> gtk::Box {
+// Top right: the guide key, then Light / Dark / System as three icon keys in one strip, the chosen one lit. Hovering a
+// key names it beside them, at the left. All drawn by hand; the guide key's click is wired up in build().
+const TK_C: f64 = 26.0;     // one key
+const TK_GAP: f64 = 10.0;   // between the guide key and the strip
+const TK_H: f64 = 26.0;
+
+// 0..2 the theme keys, 3 the guide key
+fn top_cells(w: f64) -> [R4; 4] {
+    let x0 = w - TK_C * 3.0;
+    [(x0, 1.0, TK_C, TK_H - 2.0), (x0 + TK_C, 1.0, TK_C, TK_H - 2.0), (x0 + 2.0 * TK_C, 1.0, TK_C, TK_H - 2.0), (x0 - TK_GAP - TK_C, 1.0, TK_C, TK_H - 2.0)]
+}
+fn top_hit(w: f64, x: f64, y: f64) -> i32 { top_cells(w).iter().position(|r| inside(*r, x, y)).map(|i| i as i32).unwrap_or(-1) }
+
+fn top_icon(cr: &gtk::cairo::Context, da: &gtk::DrawingArea, i: usize, r: R4, ink: u32) {
+    use std::f64::consts::PI;
+    let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+    crate::theme::rgb(cr, ink);
+    cr.set_line_width(1.6);
+    cr.set_line_cap(gtk::cairo::LineCap::Round);
+    cr.new_path();
+    match i {
+        0 => {   // sun
+            cr.arc(cx, cy, 3.6, 0.0, 2.0 * PI);
+            let _ = cr.fill();
+            for k in 0..8 {
+                let a = k as f64 * PI / 4.0;
+                cr.move_to(cx + a.cos() * 6.0, cy + a.sin() * 6.0);
+                cr.line_to(cx + a.cos() * 8.2, cy + a.sin() * 8.2);
+            }
+            let _ = cr.stroke();
+        }
+        1 => {   // crescent moon: a disc with a bite out of it
+            let _ = cr.save();
+            cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
+            cr.rectangle(r.0, r.1, r.2, r.3);
+            cr.arc(cx + 3.8, cy - 3.2, 6.0, 0.0, 2.0 * PI);
+            cr.clip();
+            cr.set_fill_rule(gtk::cairo::FillRule::Winding);
+            cr.new_path();
+            cr.arc(cx, cy, 6.5, 0.0, 2.0 * PI);
+            let _ = cr.fill();
+            let _ = cr.restore();
+        }
+        2 => {   // system: half light, half dark
+            cr.arc(cx, cy, 6.5, 0.0, 2.0 * PI);
+            let _ = cr.stroke();
+            cr.new_path();
+            cr.move_to(cx, cy);
+            cr.arc(cx, cy, 6.5, PI / 2.0, 1.5 * PI);
+            cr.close_path();
+            let _ = cr.fill();
+        }
+        _ => {   // the guide: a "?" in a circle
+            cr.arc(cx, cy, 7.5, 0.0, 2.0 * PI);
+            let _ = cr.stroke();
+            let q = layout(da, "Schibsted Grotesk Bold 8.5");
+            q.set_text("?");
+            let (qw, qh) = q.pixel_size();
+            cr.move_to(cx - qw as f64 / 2.0, cy - qh as f64 / 2.0);
+            pangocairo::functions::show_layout(cr, &q);
+        }
+    }
+    cr.set_line_cap(gtk::cairo::LineCap::Butt);
+}
+
+fn draw_top_keys(da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, hover: i32) {
     use crate::theme::Mode;
-    let strip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let pal = crate::theme::pal();
+    let cells = top_cells(w);
+    let modes = [Mode::Light, Mode::Dark, Mode::System];
+    // the guide key: a small key of its own, with a keycap shadow
+    let g = cells[3];
+    round_rect(cr, g.0, g.1 + 2.0, g.2, g.3, 4.0);
+    crate::theme::rgb(cr, pal.key_shadow);
+    let _ = cr.fill();
+    round_rect(cr, g.0, g.1, g.2, g.3, 4.0);
+    crate::theme::rgb(cr, if hover == 3 { pal.key_hover } else { pal.key });
+    let _ = cr.fill();
+    top_icon(cr, da, 3, g, pal.ink);
+    // the theme strip
+    let (sx, sy, sw, sh) = (cells[0].0, 1.0, TK_C * 3.0, TK_H - 2.0);
+    round_rect(cr, sx, sy + 2.0, sw, sh, 4.0);
+    crate::theme::rgb(cr, pal.key_shadow);
+    let _ = cr.fill();
+    round_rect(cr, sx, sy, sw, sh, 4.0);
+    crate::theme::rgb(cr, pal.key);
+    let _ = cr.fill();
+    let now = crate::theme::mode();
+    for i in 0..3 {
+        let r = cells[i];
+        let on = now == modes[i];
+        if on || hover == i as i32 {
+            round_rect(cr, r.0 + 2.5, r.1 + 2.5, r.2 - 5.0, r.3 - 5.0, 3.0);
+            crate::theme::rgb(cr, if on { pal.ink } else { pal.hover });
+            let _ = cr.fill();
+        }
+        top_icon(cr, da, i, r, if on { pal.pane } else { pal.muted });
+    }
+    // the name of what's under the pointer, at the left of the keys
+    if hover >= 0 {
+        let names = ["Light", "Dark", "System default"];
+        let t = if hover == 3 { "Guide: how Space Hunter works".to_string() }
+                else { format!("{}{}", names[hover as usize], if now == modes[hover as usize] { "  (on)" } else { "" }) };
+        let l = layout(da, "Schibsted Grotesk 8.75");
+        l.set_text(&t);
+        let (tw, th) = l.pixel_size();
+        crate::theme::rgb(cr, pal.ink);
+        cr.move_to(g.0 - 10.0 - tw as f64, (TK_H - th as f64) / 2.0 + 1.0);
+        pangocairo::functions::show_layout(cr, &l);
+    }
+}
+
+fn theme_switch() -> (gtk::Box, gtk::DrawingArea) {
+    use crate::theme::Mode;
+    let strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     strip.set_margin_top(8); strip.set_margin_start(18); strip.set_margin_end(18);
     strip.append(&hspacer());
-    let l = label("Theme", "theme-label"); l.set_valign(gtk::Align::Center);
-    strip.append(&l);
-    let segs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    segs.add_css_class("seg-box");
-    segs.set_valign(gtk::Align::Center);
-    let modes = [(Mode::Light, "LIGHT"), (Mode::Dark, "DARK"), (Mode::System, "SYSTEM")];
-    let buttons: Rc<Vec<(gtk::Button, Mode)>> = Rc::new(modes.iter().map(|(m, t)| {
-        let b = gtk::Button::with_label(t);
-        b.add_css_class("seg");
-        if crate::theme::mode() == *m { b.add_css_class("on"); }
-        (b, *m)
-    }).collect());
-    for (b, m) in buttons.iter() {
-        segs.append(b);
-        let (all, m) = (buttons.clone(), *m);
-        b.connect_clicked(move |_| {
-            crate::theme::set_mode(m);
-            for (x, xm) in all.iter() { if *xm == m { x.add_css_class("on"); } else { x.remove_css_class("on"); } }
+    let da = gtk::DrawingArea::new();
+    da.set_content_width(340);
+    da.set_content_height(TK_H as i32 + 3);
+    let hover = Rc::new(Cell::new(-1i32));
+    {
+        let hv = hover.clone();
+        da.set_draw_func(move |da, cr, w, _| draw_top_keys(da, cr, w as f64, hv.get()));
+    }
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let (hv, dw) = (hover.clone(), da.downgrade());
+        motion.connect_motion(move |_, x, y| {
+            if let Some(d) = dw.upgrade() {
+                let h = top_hit(d.width() as f64, x, y);
+                d.set_cursor_from_name(Some(if h >= 0 { "pointer" } else { "default" }));
+                if h != hv.get() { hv.set(h); d.queue_draw(); }
+            }
+        });
+        let (hv, dw) = (hover.clone(), da.downgrade());
+        motion.connect_leave(move |_| { hv.set(-1); if let Some(d) = dw.upgrade() { d.queue_draw(); } });
+    }
+    da.add_controller(motion);
+    let click = gtk::GestureClick::new();
+    {
+        let dw = da.downgrade();
+        click.connect_pressed(move |_, _, x, y| {
+            if let Some(d) = dw.upgrade() {
+                let i = top_hit(d.width() as f64, x, y);
+                if (0..3).contains(&i) {
+                    crate::theme::set_mode([Mode::Light, Mode::Dark, Mode::System][i as usize]);
+                    d.queue_draw();
+                }
+            }
         });
     }
-    strip.append(&segs);
-    strip
+    da.add_controller(click);
+    strip.append(&da);
+    (strip, da)
 }
 
 pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let win = gtk::ApplicationWindow::builder().application(app).title("Space Hunter").default_width(1180).default_height(760).build();
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("chassis");
-    root.append(&theme_switch());
+    let (strip, top_keys) = theme_switch();
+    root.append(&strip);
 
     // the dark display: the number you get back, the disk as one bar with a clear legend
     let display = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -250,50 +438,18 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     keys.append(&hspacer());
     let scan_key = key("scan again", &[]);
     let protect = key("protected folders", &[]);
-    let reset = key("reset to default", &[]);
+    let reset = key("back to recommended", &[]);
     reset.set_margin_end(4);
     let clean = key("clean", &["primary"]);
     keys.append(&scan_key); keys.append(&protect); keys.append(&reset); keys.append(&clean);
     root.append(&keys);
 
-    // the three sections
-    let tile_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    tile_box.set_homogeneous(true);
-    tile_box.set_margin_start(18); tile_box.set_margin_end(18);
-    let mut tiles = Vec::new();
-    for lvl in ORDER {
-        let b = gtk::Button::new();
-        b.add_css_class("tile");
-        let v = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        line.append(&label(engine::tier_name(lvl), "tile-name"));
-        line.append(&hspacer());
-        let size = label("", "tile-size");
-        line.append(&size);
-        v.append(&line);
-        v.append(&label(engine::tier_desc(lvl), "tile-desc"));
-        let count = label("", "tile-count");
-        let cl = gtk::Box::new(gtk::Orientation::Horizontal, 7);
-        let mark = gtk::DrawingArea::new();
-        mark.set_content_width(11); mark.set_content_height(11); mark.set_valign(gtk::Align::Center);
-        let cc = count.clone();
-        mark.set_draw_func(move |_, cr, w, h| {   // filled orange with a tick when anything is ticked, else an outline
-            let (w, h) = (w as f64, h as f64);
-            if cc.has_css_class("some") {
-                cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
-                cr.set_source_rgb(0.106, 0.106, 0.102); cr.set_line_width(1.6);
-                cr.move_to(2.5, 5.5); cr.line_to(4.8, 8.0); cr.line_to(8.8, 3.0); let _ = cr.stroke();
-            } else if cc.has_css_class("none") {
-                cr.set_source_rgb(0.49, 0.475, 0.447); cr.set_line_width(1.3); cr.rectangle(0.5, 0.5, w - 1.0, h - 1.0); let _ = cr.stroke();
-            }
-        });
-        cl.append(&mark); cl.append(&count);
-        v.append(&cl);
-        b.set_child(Some(&v));
-        tile_box.append(&b);
-        tiles.push((b, size, count));
-    }
-    root.append(&tile_box);
+    // the three sections: three columns on one rail, an orange marker under the open one
+    let rail = gtk::DrawingArea::new();
+    rail.set_content_height(88);
+    rail.set_margin_start(18); rail.set_margin_end(18); rail.set_margin_top(4);
+    rail.set_cursor_from_name(Some("pointer"));
+    root.append(&rail);
 
     // the list of the chosen section, and the item panel that slides in at the right
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -312,6 +468,18 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let explain = label("", "explain");
     explain.set_wrap(true); explain.set_max_width_chars(110);
     listside.append(&explain);
+    // the one thing to do in this section: its own line, a 3 px orange bar and orange-deep words
+    let cta_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    cta_row.set_margin_top(4);
+    let cbar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    cbar.add_css_class("cta-bar");
+    cbar.set_size_request(3, 17); cbar.set_valign(gtk::Align::Center);
+    cta_row.append(&cbar);
+    let cta = label("", "cta");
+    cta.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    cta.set_hexpand(true);
+    cta_row.append(&cta);
+    listside.append(&cta_row);
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
     rows.set_margin_top(10);
     let sw = gtk::ScrolledWindow::builder().child(&rows).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
@@ -336,12 +504,16 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     status_row.append(&ver);
     bottom.append(&status_row);
     root.append(&bottom);
-    win.set_child(Some(&root));
+    let overlay = gtk::Overlay::new();   // the guide lies over all of it
+    overlay.set_child(Some(&root));
+    win.set_child(Some(&overlay));
 
     let ui = Rc::new(Ui {
         st: RefCell::new(St { cats: Vec::new(), tier: Level::Safe, open: None, pending: 0, cleaning: false, first_scan_done: false }),
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
-        legend_ticked, legend_not, clean, scan_key, tiles, title, explain, rows, panel_rev, panel,
+        legend_ticked, legend_not, clean, scan_key, map_key: map.clone(), protect_key: protect.clone(), reset_key: reset.clone(), top_keys, display, overlay, rail, rail_box_hover: Cell::new(-1),
+        rail_hover: Cell::new(-1), rail_boxes: Cell::new([(0.0, 0.0, 0.0, 0.0); 3]), mark: Cell::new(0.0), sliding: Cell::new(false), slide_gen: Cell::new(0),
+        title, explain, cta, list_sw: sw.clone(), guide: RefCell::new(None), guide_pending: Cell::new(false), rows, panel_rev, panel,
         psw: psw.clone(), panel_for: RefCell::new(None), scroll_gen: Cell::new(0), status,
         prog_win: RefCell::new(None), opts,
         bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
@@ -375,17 +547,51 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
             }
         });
     }
-    for (i, (b, _, _)) in ui.tiles.iter().enumerate() {
+    {   // the rail: drawn by hand; a column switches the section, its small box ticks or unticks all of it
         let u = ui.clone();
-        b.connect_clicked(move |_| {
-            {
-                let mut st = u.st.borrow_mut();
-                st.tier = ORDER[i];
-                let open_level = st.open.as_ref().and_then(|id| st.cats.iter().find(|c| &c.id == id).map(|c| c.level));
-                if open_level.is_some() && open_level != Some(ORDER[i]) { st.open = None; }
-            }
-            if u.st.borrow().open.is_none() { u.panel_rev.set_reveal_child(false); }
-            refresh(&u);
+        ui.rail.set_draw_func(move |da, cr, w, h| draw_rail(&u, da, cr, w as f64, h as f64));
+        let motion = gtk::EventControllerMotion::new();
+        let u = ui.clone();
+        motion.connect_motion(move |_, x, y| {
+            let w = u.rail.width() as f64;
+            let i = if w > 0.0 { ((x / (w / 3.0)) as i32).clamp(0, 2) } else { -1 };
+            let b = u.rail_boxes.get().iter().position(|b| b.2 > 0.0 && inside((b.0 - 5.0, b.1 - 5.0, b.2 + 10.0, b.3 + 10.0), x, y)).map(|k| k as i32).unwrap_or(-1);
+            if i != u.rail_hover.get() || b != u.rail_box_hover.get() { u.rail_hover.set(i); u.rail_box_hover.set(b); u.rail.queue_draw(); }
+        });
+        let u = ui.clone();
+        motion.connect_leave(move |_| { u.rail_hover.set(-1); u.rail_box_hover.set(-1); u.rail.queue_draw(); });
+        ui.rail.add_controller(motion);
+        let click = gtk::GestureClick::new();
+        let u = ui.clone();
+        click.connect_pressed(move |_, _, x, y| rail_click(&u, x, y));
+        ui.rail.add_controller(click);
+    }
+    {   // the guide: "?" plays it again; while it's up it takes the keys (Esc skips, Enter / Right / Space next, Left back)
+        let u = ui.clone();
+        let gclick = gtk::GestureClick::new();
+        gclick.connect_pressed(move |_, _, x, y| {
+            if top_hit(u.top_keys.width() as f64, x, y) == 3 { start_guide(&u, 0); }
+        });
+        ui.top_keys.add_controller(gclick);
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let u = ui.clone();
+        keys.connect_key_pressed(move |_, k, _, _| {
+            let g = u.guide.borrow().clone();
+            let g = match g { Some(g) => g, None => return glib::Propagation::Proceed };
+            use gtk::gdk::Key;
+            if k == Key::Escape { guide_finish(&u, &g); }
+            else if k == Key::Return || k == Key::KP_Enter || k == Key::Right || k == Key::space { guide_go(&u, &g, g.step.get() + 1); }
+            else if k == Key::Left && g.step.get() > 0 { guide_go(&u, &g, g.step.get() - 1); }
+            glib::Propagation::Stop
+        });
+        ui.win.add_controller(keys);
+        // it starts by itself only while you're looking at the window
+        let u = ui.clone();
+        ui.win.connect_is_active_notify(move |w| {
+            if !w.is_active() || !u.guide_pending.get() { return; }
+            u.guide_pending.set(false);
+            if u.guide.borrow().is_none() && !u.st.borrow().cleaning && !guide_seen() { start_guide(&u, 0); }
         });
     }
     {
@@ -407,7 +613,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
                 }
                 engine::settings::save(&st.cats);
             }
-            u.status.set_text("Back to default: Quick clean items ticked, default ages. Protected folders stay protected.");
+            u.status.set_text("Back to recommended: Quick clean ticked, the usual ages. Protected folders stay protected.");
             scan(&u, None);
         });
         let u = ui.clone();
@@ -440,7 +646,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         });
     }
     ui.win.present();
-    let hooks = ui.opts.open.is_some() || ui.opts.confirm || ui.opts.progress_dir.is_some() || ui.opts.storage.is_some() || ui.opts.protect;
+    let hooks = ui.opts.open.is_some() || ui.opts.confirm || ui.opts.progress_dir.is_some() || ui.opts.storage.is_some() || ui.opts.protect || ui.opts.guide.is_some();
     if !hooks { check_update(&ui); }
     if let Some(p) = ui.opts.storage.clone() { let d = ui.opts.drill; open_storage(&ui, Some(PathBuf::from(p)), d); }
     if ui.opts.protect { let u2 = ui.clone(); crate::storage::open_protect(&ui.win, Rc::new(move || reload(&u2))); }
@@ -457,7 +663,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
 fn open_storage(u: &Rc<Ui>, start: Option<PathBuf>, drill: usize) {
     let cats = u.st.borrow().cats.clone();
     let u2 = u.clone();
-    crate::storage::open(&u.win, cats, Rc::new(move || { reload(&u2); u2.status.set_text("Cleanup list updated. What you added is in Personal & work items, unticked."); }), start, drill);
+    crate::storage::open(&u.win, cats, Rc::new(move || { reload(&u2); u2.status.set_text("Cleanup list updated. What you added is in Deep clean, unticked."); }), start, drill);
 }
 
 // Build the list again (after the cleanup list or protected folders changed) and measure it.
@@ -562,7 +768,7 @@ fn set_all(u: &Rc<Ui>, on: bool) {
 // Everything on screen from the current state.
 fn refresh(u: &Rc<Ui>) { refresh_top(u); rebuild_rows(u); }
 
-// The display, keys and tiles (not the list, so a tick box isn't replaced while it's being clicked).
+// The display, keys and section rail (not the list, so a tick box isn't replaced while it's being clicked).
 fn refresh_top(u: &Rc<Ui>) {
     let st = u.st.borrow();
     let selected: u64 = st.cats.iter().filter(|c| c.included()).map(|c| c.clean_bytes()).sum();
@@ -596,24 +802,186 @@ fn refresh_top(u: &Rc<Ui>) {
     u.clean.set_label(&if st.cleaning { "SHOW CLEANING".to_string() } else { format!("CLEAN {}", fmt(selected)) });
     u.clean.set_sensitive(st.cleaning || can_clean);
     u.scan_key.set_sensitive(st.pending == 0 && !st.cleaning);
-    for (i, (b, size, count)) in u.tiles.iter().enumerate() {
-        let lvl = ORDER[i];
+    // the rail redraws from the state; the marker sits under the open section unless it's sliding there
+    if !u.sliding.get() { u.mark.set(ORDER.iter().position(|l| *l == st.tier).unwrap_or(0) as f64); }
+    u.rail.queue_draw();
+    u.title.set_text(&engine::tier_name(st.tier).to_uppercase());
+    u.explain.set_text(engine::tier_explain(st.tier));
+    u.cta.set_text(engine::tier_cta(st.tier));
+}
+
+// "14 of 17 MB" when both share a unit, else "900 MB of 2.1 GB"
+fn size_of(a: u64, b: u64) -> String {
+    let (x, y) = (fmt(a), fmt(b));
+    let ux = x.rsplit(' ').next().unwrap_or("");
+    let uy = y.rsplit(' ').next().unwrap_or("");
+    if ux == uy { format!("{} of {}", x.rsplit_once(' ').map(|p| p.0).unwrap_or(x.as_str()), y) } else { format!("{} of {}", x, y) }
+}
+
+// The rail: per section its name, a small box (all / some / none ticked) with how much of it is ticked, the big size and
+// what's in it; a 2 px line along the bottom with the orange marker under the open section.
+fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64) {
+    let pal = crate::theme::pal();
+    let st = u.st.borrow();
+    let rail_y = h - 3.0;
+    crate::theme::rgb(cr, pal.line);
+    cr.rectangle(0.0, rail_y, w, 2.0);
+    let _ = cr.fill();
+    let tw = w / 3.0;
+    let hover = u.rail_hover.get();
+    let box_hover = u.rail_box_hover.get();
+    let mut boxes = [(0.0, 0.0, 0.0, 0.0); 3];
+    for (i, lvl) in ORDER.iter().enumerate() {
+        let lvl = *lvl;
+        let on = st.tier == lvl;
+        let hot = hover == i as i32 && !on;
         let items: Vec<&Cat> = st.cats.iter().filter(|c| c.level == lvl).collect();
-        let found: u64 = items.iter().map(|c| c.bytes).sum();
+        let total: u64 = items.iter().map(|c| c.bytes).sum();
         let ticked: u64 = items.iter().filter(|c| c.included()).map(|c| c.clean_bytes()).sum();
         let n_items = items.iter().filter(|c| c.bytes > 0 || c.files > 0).count();
         let n_ticked = items.iter().filter(|c| c.included() && (c.bytes > 0 || c.files > 0)).count();
-        size.set_text(&format!("{} found", fmt(found)));
-        count.set_text(&if n_items == 0 { "Nothing to clean here right now".to_string() }
-                        else if n_ticked == 0 { format!("None of {} ticked", n_items) }
-                        else { format!("{} of {} ticked{}", n_ticked, n_items, if ticked > 0 { format!("  \u{00B7}  {}", fmt(ticked)) } else { String::new() }) });
-        count.remove_css_class("some"); count.remove_css_class("none");
-        if n_items > 0 { count.add_css_class(if n_ticked > 0 { "some" } else { "none" }); }
-        if let Some(m) = count.prev_sibling() { m.set_visible(n_items > 0); m.queue_draw(); }
-        if st.tier == lvl { b.add_css_class("on"); } else { b.remove_css_class("on"); }
+        let x0 = i as f64 * tw;
+        let x = x0 + 4.0;
+        let ty = 8.0;
+        let text_ink = if on || hot { pal.ink } else { pal.muted };
+        let hl = layout(da, if on { "Schibsted Grotesk Semi-Bold 9.75" } else { "Schibsted Grotesk 9.75" });
+        hl.set_text(engine::tier_name(lvl));
+        let (nw, nh) = hl.pixel_size();
+        let nh = nh as f64;
+        crate::theme::rgb(cr, text_ink);
+        cr.move_to(x, ty);
+        pangocairo::functions::show_layout(cr, &hl);
+        let mut bx = x + nw as f64 + 10.0;
+        let box_x = bx;
+        let by = (ty + nh / 2.0 - 7.0).round();
+        if n_items > 0 {   // the box, centred on the line: filled with a tick (all), a dash (some), or empty (none)
+            if n_ticked == 0 {
+                crate::theme::rgb(cr, if on || hot { pal.ink } else { pal.soft });
+                cr.set_line_width(1.4);
+                cr.rectangle(bx + 0.7, by + 0.7, 12.6, 12.6);
+                let _ = cr.stroke();
+            } else {
+                rgba(cr, ORANGE, 1.0);
+                cr.rectangle(bx, by, 14.0, 14.0);
+                let _ = cr.fill();
+                rgba(cr, ON_ORANGE, 1.0);
+                if n_ticked == n_items {
+                    cr.set_line_width(1.7);
+                    cr.move_to(bx + 3.0, by + 7.2); cr.line_to(bx + 6.0, by + 10.2); cr.line_to(bx + 11.2, by + 3.8);
+                    let _ = cr.stroke();
+                } else {
+                    cr.rectangle(bx + 3.5, by + 6.0, 7.0, 2.0);
+                    let _ = cr.fill();
+                }
+            }
+            bx += 14.0 + 6.0;
+        }
+        // how much of it is ticked, in space
+        let words = if n_items == 0 { "nothing to clean".to_string() }
+                    else if n_ticked == 0 { "none ticked".to_string() }
+                    else if n_ticked == n_items && ticked >= total { format!("all {} ticked", fmt(total)) }
+                    else { format!("{} ticked", size_of(ticked, total)) };
+        let room = (x0 + tw - bx - 10.0).max(10.0);
+        hl.set_width((room * SC) as i32);
+        hl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        crate::theme::rgb(cr, text_ink);
+        show_at(cr, &hl, &words, bx, ty);
+        if n_items > 0 {   // the box and its words are one target, underlined on hover
+            let cw = (hl.pixel_size().0 as f64).min(room);
+            boxes[i] = (box_x, by, bx + cw - box_x, 14.0);
+            if box_hover == i as i32 {
+                crate::theme::rgb(cr, text_ink);
+                cr.set_line_width(1.0);
+                cr.move_to(bx, ty + nh + 0.5);
+                cr.line_to(bx + cw, ty + nh + 0.5);
+                let _ = cr.stroke();
+            }
+        }
+        // the big size, and what's in it beside the number (at most two lines)
+        let bl = layout(da, "Big Shoulders Display Black 24");
+        bl.set_text(&fmt(total));
+        let (sw, sh) = bl.pixel_size();
+        let ny = 30.0;
+        crate::theme::rgb(cr, if on || hot { pal.ink } else { pal.muted });
+        cr.move_to(x0, ny);
+        pangocairo::functions::show_layout(cr, &bl);
+        let dx = x0 + sw as f64 + 10.0;
+        let dw = x0 + tw - dx - 12.0;
+        if dw > 60.0 {
+            let dl = layout(da, "Schibsted Grotesk 9");
+            dl.set_width((dw * SC) as i32);
+            dl.set_wrap(gtk::pango::WrapMode::WordChar);
+            dl.set_height(-2);
+            dl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            dl.set_text(engine::tier_desc(lvl));
+            let (_, dh) = dl.pixel_size();
+            crate::theme::rgb(cr, if on { pal.muted } else { pal.soft });
+            cr.move_to(dx, ny + sh as f64 / 2.0 - dh as f64 / 2.0 + 1.0);
+            pangocairo::functions::show_layout(cr, &dl);
+        }
     }
-    u.title.set_text(&engine::tier_name(st.tier).to_uppercase());
-    u.explain.set_text(engine::tier_explain(st.tier));
+    u.rail_boxes.set(boxes);
+    rgba(cr, ORANGE, 1.0);
+    cr.rectangle(u.mark.get() * tw, rail_y - 2.0, tw, 5.0);
+    let _ = cr.fill();
+}
+
+fn rail_click(u: &Rc<Ui>, x: f64, y: f64) {
+    for (i, b) in u.rail_boxes.get().iter().enumerate() {
+        if b.2 > 0.0 && inside((b.0 - 5.0, b.1 - 5.0, b.2 + 10.0, b.3 + 10.0), x, y) { tick_section(u, ORDER[i]); return; }
+    }
+    let w = u.rail.width() as f64;
+    if w <= 0.0 { return; }
+    let i = ((x.max(0.0) / (w / 3.0)) as usize).min(2);
+    if u.st.borrow().tier == ORDER[i] { return; }
+    slide_to(u, i);
+    {
+        let mut st = u.st.borrow_mut();
+        st.tier = ORDER[i];
+        let open_level = st.open.as_ref().and_then(|id| st.cats.iter().find(|c| &c.id == id).map(|c| c.level));
+        if open_level.is_some() && open_level != Some(ORDER[i]) { st.open = None; }
+    }
+    if u.st.borrow().open.is_none() { u.panel_rev.set_reveal_child(false); }
+    refresh(u);
+}
+
+// The small box: tick the whole section if anything in it isn't ticked, else untick it all (picks go either way).
+fn tick_section(u: &Rc<Ui>, lvl: Level) {
+    let open_now = {
+        let mut st = u.st.borrow_mut();
+        let all = st.cats.iter().filter(|c| c.level == lvl && c.refused().is_none() && (c.bytes > 0 || c.files > 0)).all(|c| c.checked);
+        let mut any = false;
+        for c in st.cats.iter_mut().filter(|c| c.level == lvl && c.refused().is_none() && (c.bytes > 0 || c.files > 0)) {
+            c.checked = !all; c.picks.clear(); c.pick_bytes = None; any = true;
+        }
+        if !any { return; }
+        engine::settings::save(&st.cats);
+        st.open.is_some()
+    };
+    refresh(u);
+    if open_now { fill_panel(u); }
+}
+
+// The marker slides to another column (ease-out, 0.32 s, by the frame clock).
+fn slide_to(u: &Rc<Ui>, to: usize) {
+    let from = u.mark.get();
+    let gen = u.slide_gen.get() + 1;
+    u.slide_gen.set(gen);
+    if !animations_on() { u.sliding.set(false); u.mark.set(to as f64); u.rail.queue_draw(); return; }
+    u.sliding.set(true);
+    let start = Cell::new(None::<i64>);
+    let uu = Rc::downgrade(u);
+    u.rail.add_tick_callback(move |w, clock| {
+        let u = match uu.upgrade() { Some(u) => u, None => return glib::ControlFlow::Break };
+        if u.slide_gen.get() != gen { return glib::ControlFlow::Break; }
+        let ft = clock.frame_time();
+        let s = start.get().unwrap_or(ft);
+        start.set(Some(s));
+        let t = ((ft - s) as f64 / 320_000.0).min(1.0);
+        u.mark.set(from + (to as f64 - from) * ease(t));
+        w.queue_draw();
+        if t >= 1.0 { u.sliding.set(false); glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+    });
 }
 
 fn rebuild_rows(u: &Rc<Ui>) {
@@ -1267,6 +1635,17 @@ fn after_first_scan(u: &Rc<Ui>) {
         if let Some(l) = lvl { u.st.borrow_mut().tier = l; open_panel(u, &id); refresh(u); }
     }
     if u.opts.confirm { confirm(u); }
+    // the first-run guide: once, the first time a scan finishes (never during a clean or a test run)
+    let test_run = u.opts.quiet || u.opts.open.is_some() || u.opts.confirm || u.opts.progress_dir.is_some() || u.opts.storage.is_some() || u.opts.protect;
+    if let Some(n) = u.opts.guide {   // test hook: let the new rows be laid out first
+        let uu = u.clone();
+        glib::timeout_add_local_once(Duration::from_millis(300), move || start_guide(&uu, n));
+    } else if !test_run && !guide_seen() && u.guide.borrow().is_none() && !u.st.borrow().cleaning {
+        if u.win.is_active() {
+            let uu = u.clone();
+            glib::idle_add_local_once(move || { if uu.guide.borrow().is_none() && !uu.st.borrow().cleaning { start_guide(&uu, 0); } });
+        } else { u.guide_pending.set(true); }
+    }
 }
 
 // Shown every time Clean is pressed: what will go, grouped by risk, and how (Trash or permanently).
@@ -1363,7 +1742,347 @@ fn confirm_row(name: &str, size: &str) -> gtk::Box {
     r
 }
 
-enum Msg { Line(String), Result(String), Totals(u64, u64, u64, u64), Current(String), Done(bool) }
+enum Msg { Line(String), Result(String), Freed(String, u64, u64, bool), Totals(u64, u64, u64, u64), Current(String), Done(bool, Option<u64>) }
+
+// The finish of a clean, in ms from the moment it's done (as on Windows): the display grows over the log, the bar gives
+// way to the drive drawn as a ring, the freed wedge lifts out and crumbles, free space counts up, one pulse, the list.
+const GROW_MS: f64 = 420.0;
+const RING_AT: f64 = 250.0;
+const RING_MS: f64 = 520.0;
+const LIFT_AT: f64 = 820.0;
+const LIFT_MS: f64 = 300.0;
+const CRUMBLE_AT: f64 = 1120.0;
+const CRUMBLE_MS: f64 = 520.0;
+const CLOSE_AT: f64 = 1250.0;
+const CLOSE_MS: f64 = 520.0;
+const DONE_AT: f64 = 1820.0;
+const PULSE_MS: f64 = 650.0;
+const LIST_AT: f64 = 2150.0;
+const LIST_MS: f64 = 320.0;
+const FINISH_MS: f64 = LIST_AT + LIST_MS;
+const BASE_H: i32 = 150;   // the display's height while cleaning
+
+struct Speck { a: f64, r: f64, vx: f64, vy: f64, s: f64, delay: f64 }
+
+// the freed wedge's dust: always the same 90 specks
+fn make_specks() -> Vec<Speck> {
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15 ^ 7;
+    let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; (seed >> 11) as f64 / (1u64 << 53) as f64 };
+    let mut v = Vec::with_capacity(90);
+    for _ in 0..90 {
+        let a = rnd(); let r = rnd() - 0.5; let vx = rnd() * 1.6 + 0.4; let vy = -rnd() * 1.4 - 0.2; let s = rnd() * 3.0 + 2.0; let delay = rnd() * 180.0;
+        v.push(Speck { a, r, vx, vy, s, delay });
+    }
+    v
+}
+
+// What the cleaning window's display shows; it's all drawn by hand from this.
+struct Prog {
+    label: String,                          // while cleaning: which item
+    totals: (u64, u64, u64, u64),           // freed, to the Trash, files, skipped
+    frac: f64,                              // the share done
+    shown: f64,                             // what the bar shows: it glides toward frac (below 0: nothing yet)
+    done: bool,
+    stopped: bool,
+    ms: f64,                                // where the finish is (below 0: cleaning, or stopped)
+    details: bool,                          // "What was cleaned": the log back under a small display
+    freed: Vec<(String, u64, u64, bool)>,   // per item: name, freed, to the Trash, cleaned by the password helper
+    disk: String,                           // where the home folder is
+    total: u64,
+    free_before: u64,
+    free_after: Option<u64>,
+    started: std::time::Instant,
+    secs: Option<f64>,
+    specks: Vec<Speck>,
+}
+
+fn mmss(secs: f64) -> String { let s = secs.max(0.0) as u64; format!("{}:{:02}", s / 60, s % 60) }
+
+// the mount point that holds a path ("/" or "/home", say), as the disk's name
+fn mount_of(p: &std::path::Path) -> String {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let mut best = String::from("/");
+    for l in mounts.lines() {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() < 2 { continue; }
+        let mp = f[1].replace("\\040", " ");
+        if mp.len() > best.len() && p.starts_with(&mp) { best = mp; }
+    }
+    best
+}
+
+// one line of the result list: the left text cut short with "..." so the right text always fits
+fn slip_row(cr: &gtk::cairo::Context, lay: &gtk::pango::Layout, pad: f64, rx: f64, y: f64, left: &str, right: &str) {
+    lay.set_width(-1);
+    lay.set_ellipsize(gtk::pango::EllipsizeMode::None);
+    lay.set_text(right);
+    let (rw, _) = lay.pixel_size();
+    cr.move_to(rx - rw as f64, y);
+    pangocairo::functions::show_layout(cr, lay);
+    lay.set_width(((rx - pad - rw as f64 - 12.0).max(10.0) * SC) as i32);
+    lay.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    lay.set_text(left);
+    cr.move_to(pad, y);
+    pangocairo::functions::show_layout(cr, lay);
+}
+
+fn draw_prog(da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64, p: &Prog) {
+    use crate::theme::{DISPLAY_INK, DISPLAY_MUTED};
+    use std::f64::consts::PI;
+    let pad = 20.0;
+    round_rect(cr, 0.0, 0.0, w, h, 7.0);
+    crate::theme::rgb(cr, crate::theme::pal().screen);
+    let _ = cr.fill();
+    let ms = p.ms;
+    let fin = ms >= 0.0;
+    let beat = fin && ms >= DONE_AT;
+    let (bytes, trashed, files, skipped) = p.totals;
+    let bin_only = bytes == 0 && trashed > 0;
+    let total = if bin_only { trashed } else { bytes };
+
+    // the label: what's happening, then the plain result
+    let text = if !p.done { p.label.clone() }
+               else if p.stopped { "Stopped  \u{00B7}  nothing else will be cleaned".to_string() }
+               else if !beat { "Finishing".to_string() }
+               else if bin_only { "Done  \u{00B7}  moved to the Trash".to_string() }
+               else { "Done  \u{00B7}  everything you ticked is cleaned".to_string() };
+    let ll = layout(da, "Schibsted Grotesk Semi-Bold 10");
+    if beat {   // done: "DONE" in the display type, then the plain result, small and muted
+        let dl = layout(da, "Big Shoulders Display Black 17");
+        dl.set_text("DONE");
+        let (dw, _) = dl.pixel_size();
+        rgba(cr, DISPLAY_INK, 1.0);
+        cr.move_to(pad - 3.0, 6.0);
+        pangocairo::functions::show_layout(cr, &dl);
+        ll.set_text(&text.replace("Done  \u{00B7}  ", "\u{00B7}  "));
+        ll.set_width(((w - 2.0 * pad - dw as f64 - 8.0).max(10.0) * SC) as i32);
+        ll.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        rgba(cr, DISPLAY_MUTED, 1.0);
+        cr.move_to(pad - 3.0 + dw as f64 + 8.0, 6.0 + (dl.baseline() - ll.baseline()) as f64 / SC);
+        pangocairo::functions::show_layout(cr, &ll);
+    } else {
+        ll.set_width(((w - 2.0 * pad).max(10.0) * SC) as i32);
+        ll.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        rgba(cr, 0xB4B1AA, 1.0);
+        show_at(cr, &ll, &text, pad, 12.0);
+    }
+
+    // the big number: what this clean freed (it stays put)
+    let (num, unit) = split(total);
+    let bl = layout(da, "Big Shoulders Display Black 40");
+    bl.set_text(&num);
+    let (nw, _) = bl.pixel_size();
+    let ul = layout(da, "Big Shoulders Display Black 17");
+    ul.set_text(&format!("{} {}", unit, if bin_only { "TO TRASH" } else { "FREED" }));
+    rgba(cr, ORANGE, 1.0);
+    cr.move_to(pad - 2.0, 30.0);
+    pangocairo::functions::show_layout(cr, &bl);
+    cr.move_to(pad - 2.0 + nw as f64 + 8.0, 30.0 + (bl.baseline() - ul.baseline()) as f64 / SC);
+    pangocairo::functions::show_layout(cr, &ul);
+
+    let ring = fin && !p.details;
+    if !ring {   // files, skipped and time at the right, as while cleaning
+        let secs = p.secs.unwrap_or_else(|| p.started.elapsed().as_secs_f64());
+        let sl = layout(da, "Schibsted Grotesk Semi-Bold 10.5");
+        sl.set_text(&format!("{} files  \u{00B7}  {} skipped  \u{00B7}  {}", files, skipped, mmss(secs)));
+        let (sw, _) = sl.pixel_size();
+        rgba(cr, DISPLAY_INK, 1.0);
+        cr.move_to(w - pad - sw as f64, 44.0);
+        pangocairo::functions::show_layout(cr, &sl);
+        let second = if trashed > 0 && !bin_only { format!("+ {} moved to the Trash", fmt(trashed)) }
+                     else if bin_only && p.done { "Empty the Trash to get this space back".to_string() }
+                     else { String::new() };
+        if !second.is_empty() {
+            let ml = layout(da, "Schibsted Grotesk 10");
+            ml.set_text(&second);
+            let (mw, _) = ml.pixel_size();
+            rgba(cr, DISPLAY_MUTED, 1.0);
+            cr.move_to(w - pad - mw as f64, 68.0);
+            pangocairo::functions::show_layout(cr, &ml);
+        }
+    }
+
+    // the bar while cleaning; at the end it fades and gives way to the drive, drawn as a ring
+    let (bx, bw, by, bh) = (pad, w - 2.0 * pad, 118.0, 12.0);
+    if !ring || ms < RING_AT + 200.0 {
+        let f = if p.done && !p.stopped { 1.0 } else { p.shown.clamp(0.0, 1.0) };
+        let ba = if ring { 1.0 - ease(ms / (RING_AT + 200.0)) } else { 1.0 };
+        rgba(cr, TRACK, ba);
+        cr.rectangle(bx, by, bw, bh);
+        let _ = cr.fill();
+        rgba(cr, ORANGE, ba);
+        cr.rectangle(bx, by, bw * f, bh);
+        let _ = cr.fill();
+    }
+    if !ring { return; }
+
+    // the drive, measured before and after the clean (never a made-up number)
+    let known = p.total > 0 && p.free_after.is_some();
+    let t = p.total.max(1) as f64;
+    let fa = p.free_after.unwrap_or(0) as f64;
+    let fb = p.free_before as f64;
+    let mut used_after = if known { (1.0 - fa / t).clamp(0.0, 1.0) } else { 0.0 };
+    let user_freed: u64 = p.freed.iter().filter(|f| !f.3).map(|f| f.1).sum();   // the helper cleans system folders
+    let mut slice = if known && !bin_only && user_freed > 0 { ((fa - fb) / t).max(0.0) } else { 0.0 };
+    if slice > 0.0 && slice * 360.0 < 5.0 { slice = if fa - fb >= 1048576.0 { 5.0 / 360.0 } else { 0.0 }; }   // a small clean still shows; the numbers stay exact
+    slice = slice.min(1.0);
+    if used_after + slice > 1.0 { used_after = 1.0 - slice; }
+    // centred while it plays; it slides to the right when the list arrives
+    let (r, lw) = (104.0, 26.0);
+    let cx_end = w - pad - r - lw / 2.0 - 40.0;
+    let cx_mid = w / 2.0;
+    let cx = cx_mid + (cx_end - cx_mid) * ease((ms - LIST_AT) / 380.0);
+    let cy = 214.0;
+    let sweep = ease((ms - RING_AT) / RING_MS);                                                 // the ring draws itself round
+    let lift = if slice > 0.0 { ease((ms - LIFT_AT) / LIFT_MS) } else { 0.0 };                   // the freed wedge lifts out...
+    let crumble = if slice > 0.0 { ((ms - CRUMBLE_AT) / CRUMBLE_MS).clamp(0.0, 1.0) } else { 1.0 };   // ...turns to dust...
+    let close = if slice > 0.0 { ease((ms - CLOSE_AT) / CLOSE_MS) } else { 1.0 };                // ...and free space grows into the gap
+    let gap = slice * (1.0 - close);
+    let top = -PI / 2.0;
+    let ang = |f: f64| top + 2.0 * PI * f;
+    cr.set_line_width(lw);
+    // free space: from the end of the gap round to the top
+    let free_ext = 1.0 - used_after - gap;
+    if free_ext > 0.0008 {
+        rgba(cr, TRACK, (sweep * 2.0).min(1.0));
+        cr.new_path();
+        cr.arc(cx, cy, r, ang(used_after + gap), ang(1.0));
+        let _ = cr.stroke();
+    }
+    // used space, sweeping round; the freed wedge sits at its end in orange until it lifts out
+    let drawn = (used_after + slice) * sweep;
+    let used = drawn.min(used_after);
+    if used > 0.0008 {
+        rgba(cr, USED, 1.0);
+        cr.new_path();
+        cr.arc(cx, cy, r, top, ang(used));
+        let _ = cr.stroke();
+    }
+    if slice > 0.0 && crumble < 1.0 && drawn > used_after {
+        let ext = slice.min(drawn - used_after);
+        let (a0, a1) = (ang(used_after), ang(used_after + ext));
+        let mid = (a0 + a1) / 2.0;
+        let off = 16.0 * lift;
+        let wa = 1.0 - ease(crumble * 1.4);
+        if ext > 0.0008 && wa > 0.0 {
+            rgba(cr, ORANGE, wa);
+            cr.new_path();
+            cr.arc(cx + mid.cos() * off, cy + mid.sin() * off, r, a0, a1);
+            let _ = cr.stroke();
+        }
+    }
+    if slice > 0.0 && ms >= CRUMBLE_AT {   // the wedge turns to dust and falls away
+        let start = ang(used_after);
+        for sp in &p.specks {
+            let tt = (ms - CRUMBLE_AT - sp.delay) / 1000.0;
+            if tt <= 0.0 { continue; }
+            let pa = 1.0 - tt / 0.75;
+            if pa <= 0.0 { continue; }
+            let an = start + 2.0 * PI * slice * sp.a;
+            let rr = r + sp.r * lw;
+            let (mx, my) = (an.cos(), an.sin());
+            let px = cx + mx * (rr + 16.0) + mx * sp.vx * 90.0 * tt;
+            let py = cy + my * (rr + 16.0) + sp.vy * 90.0 * tt + 260.0 * tt * tt;
+            rgba(cr, ORANGE, pa);
+            cr.rectangle(px, py, sp.s, sp.s);
+            let _ = cr.fill();
+        }
+    }
+    if slice > 0.0 && close > 0.0 && slice - gap > 0.0008 {   // what you gained stays marked: an orange edge on the outer rim
+        rgba(cr, ORANGE, 1.0);
+        cr.set_line_width(4.0);
+        cr.new_path();
+        cr.arc(cx, cy, r + lw / 2.0 - 2.0, ang(used_after + gap), ang(used_after + slice));
+        let _ = cr.stroke();
+    }
+    if beat {   // done: the whole ring flashes orange once and settles
+        let pt = (ms - DONE_AT) / PULSE_MS;
+        if pt < 1.0 {
+            rgba(cr, ORANGE, 150.0 / 255.0 * (1.0 - pt) * (1.0 - pt));
+            cr.set_line_width(lw + 2.0);
+            cr.new_path();
+            cr.arc(cx, cy, r, 0.0, 2.0 * PI);
+            let _ = cr.stroke();
+        }
+    }
+    if known && sweep > 0.0 {   // in the middle: free space, counting up as the ring closes, and what you gained
+        let ca = (sweep * 1.5).min(1.0);
+        let shown = (fb + (fa - fb) * close).max(0.0) as u64;
+        let fl = layout(da, "Big Shoulders Display Black 22");
+        fl.set_text(&fmt(shown));
+        let (fw, _) = fl.pixel_size();
+        rgba(cr, DISPLAY_INK, ca);
+        cr.move_to(cx - fw as f64 / 2.0, cy - 34.0);
+        pangocairo::functions::show_layout(cr, &fl);
+        let sl = layout(da, "Schibsted Grotesk 10");
+        sl.set_text(&format!("free of {} on {}", fmt(p.total), p.disk));
+        let (sw, _) = sl.pixel_size();
+        rgba(cr, DISPLAY_MUTED, ca);
+        cr.move_to(cx - sw as f64 / 2.0, cy + 2.0);
+        pangocairo::functions::show_layout(cr, &sl);
+        if fa > fb && close > 0.0 {
+            let gl = layout(da, "IBM Plex Mono Semi-Bold 10");
+            gl.set_text(&format!("+ {}", fmt((fa - fb) as u64)));
+            let (gw, _) = gl.pixel_size();
+            rgba(cr, ORANGE, close);
+            cr.move_to(cx - gw as f64 / 2.0, cy + 22.0);
+            pangocairo::functions::show_layout(cr, &gl);
+        }
+    }
+    if ms < LIST_AT { return; }
+
+    // the list of what went, at the left: the biggest items, the rest, and the total at the bottom like on a slip
+    let a = ease((ms - LIST_AT) / LIST_MS);
+    let mut items: Vec<&(String, u64, u64, bool)> = p.freed.iter().filter(|f| f.1 + f.2 > 0).collect();
+    items.sort_by(|x, y| (y.1 + y.2).cmp(&(x.1 + x.2)));
+    let lh = 22.0;
+    let rx = w - pad - 2.0 * r - lw - 80.0;
+    let mono = layout(da, "IBM Plex Mono 9.5");
+    let mono_b = layout(da, "IBM Plex Mono Semi-Bold 9.5");
+    let mut y = by + 6.0;
+    let show = if items.len() > 5 { 4 } else { items.len() };
+    rgba(cr, DISPLAY_INK, a);
+    for it in items.iter().take(show) {
+        slip_row(cr, &mono, pad, rx, y, &it.0, &format!("{}{}", fmt(it.1 + it.2), if it.2 > 0 && it.1 == 0 { "  trash" } else { "" }));
+        y += lh;
+    }
+    rgba(cr, DISPLAY_MUTED, a);
+    if items.len() > show {
+        let rest: u64 = items.iter().skip(show).map(|f| f.1 + f.2).sum();
+        slip_row(cr, &mono, pad, rx, y, &format!("+ {} more", items.len() - show), &fmt(rest));
+        y += lh;
+    }
+    if items.is_empty() {
+        slip_row(cr, &mono, pad, rx, y, "Nothing needed cleaning", "");
+        y += lh;
+    }
+    let after = if trashed > 0 { 3.0 } else { 2.0 };
+    y = (y + 6.0).max(h - 18.0 - after * lh - 10.0);
+    rgba(cr, TRACK, a);
+    cr.set_line_width(1.0);
+    cr.set_dash(&[1.0, 2.0], 0.0);
+    cr.new_path();
+    cr.move_to(pad, y - 2.5);
+    cr.line_to(rx, y - 2.5);
+    let _ = cr.stroke();
+    cr.set_dash(&[], 0.0);
+    y += 4.0;
+    rgba(cr, ORANGE, a);
+    slip_row(cr, &mono_b, pad, rx, y, if bin_only { "MOVED TO THE TRASH" } else { "FREED" }, &fmt(total));
+    y += lh;
+    rgba(cr, DISPLAY_MUTED, a);
+    if trashed > 0 && !bin_only {
+        slip_row(cr, &mono, pad, rx, y, "+ moved to the Trash (empty it to get this back)", &fmt(trashed));
+        y += lh;
+    }
+    if bin_only {
+        slip_row(cr, &mono, pad, rx, y, "Empty the Trash to get this space back", "");
+        y += lh;
+    }
+    let secs = p.secs.unwrap_or(0.0).ceil().max(1.0);
+    let kept = if skipped > 0 { format!("  \u{00B7}  {} kept (in use or too new)", skipped) } else { String::new() };
+    slip_row(cr, &mono, pad, rx, y, &format!("{} file{}{}", files, if files == 1 { "" } else { "s" }, kept), &mmss(secs));
+}
 
 // The cleaning window: it doesn't block the main window, and it can be minimised while it works.
 fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
@@ -1374,51 +2093,39 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     let v = gtk::Box::new(gtk::Orientation::Vertical, 10);
     v.add_css_class("chassis");
     v.set_margin_start(18); v.set_margin_end(18); v.set_margin_top(18); v.set_margin_bottom(18);
-    let disp = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    disp.add_css_class("display");
-    let headl = label("Cleaning", "display-label");
-    disp.append(&headl);
-    let hl = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let big = label("0", "hero");
-    let bigu = label("MB FREED", "hero-unit"); bigu.set_valign(gtk::Align::End); bigu.set_margin_bottom(12);
-    hl.append(&big); hl.append(&bigu); hl.append(&hspacer());
-    let stat = label("", "beside"); stat.set_valign(gtk::Align::Center);
-    hl.append(&stat);
-    disp.append(&hl);
-    let pbar = gtk::DrawingArea::new(); pbar.set_content_height(12);
-    let frac = Rc::new(Cell::new(0.0f64));
-    let fin = Rc::new(Cell::new(-1.0f64));   // the finish, 0..1 (below 0: not finishing)
-    let shown = Rc::new(Cell::new(-1.0f64)); // what the bar shows: it glides toward frac (below 0: nothing yet)
-    let (f2, fin2) = (shown.clone(), fin.clone());
-    pbar.set_content_height(28);
-    pbar.set_draw_func(move |_, cr, w, _| {
-        let (w, h) = (w as f64, 12.0);
-        cr.set_source_rgb(0.227, 0.227, 0.220); cr.rectangle(0.0, 0.0, w, h); let _ = cr.fill();
-        let t = fin2.get();
-        if t >= 0.0 {
-            // the full bar breaks into pieces that drop away left to right: the space is cleared
-            let n = 28; let sw = w / n as f64;
-            for k in 0..n {
-                let local = ((t - 0.55 * k as f64 / n as f64) / 0.4).clamp(0.0, 1.0);
-                if local >= 1.0 { continue; }
-                let fall = local * local;
-                cr.set_source_rgba(1.0, 0.357, 0.122, 1.0 - fall);
-                cr.rectangle(k as f64 * sw + 1.0, fall * 16.0, sw - 2.0, h * (1.0 - fall * 0.6));
-                let _ = cr.fill();
-            }
-        } else {
-            cr.set_source_rgb(1.0, 0.357, 0.122); cr.rectangle(0.0, 0.0, w * f2.get().max(0.0), h); let _ = cr.fill();
-        }
-    });
-    let totals = Rc::new(Cell::new((0u64, 0u64, 0u64, 0u64)));
-    disp.append(&pbar);
-    v.append(&disp);
+    // the disk the home folder is on, measured now and again when the clean is done
+    let home = engine::home();
+    let home_s = home.to_string_lossy().to_string();
+    let (free_before, disk_total) = crate::disk(&home_s);
+    let p = Rc::new(RefCell::new(Prog {
+        label: "Cleaning".to_string(), totals: (0, 0, 0, 0), frac: 0.0, shown: -1.0, done: false, stopped: false, ms: -1.0,
+        details: false, freed: Vec::new(), disk: mount_of(&home), total: disk_total, free_before, free_after: None,
+        started: std::time::Instant::now(), secs: None, specks: Vec::new(),
+    }));
+    // the display lies over the top of the log; at the end it grows over all of it and the log fades away
+    let stage = gtk::Overlay::new();
+    stage.set_vexpand(true);
     let tv = gtk::TextView::new();
     tv.set_editable(false); tv.set_cursor_visible(false); tv.add_css_class("log");
     tv.set_left_margin(12); tv.set_top_margin(12);
     let lsw = gtk::ScrolledWindow::builder().child(&tv).vexpand(true).build();
-    v.append(&lsw);
+    lsw.set_margin_top(BASE_H + 10);
+    stage.set_child(Some(&lsw));
+    let disp = gtk::DrawingArea::new();
+    disp.set_content_height(BASE_H);
+    disp.set_valign(gtk::Align::Start);
+    {
+        let p = p.clone();
+        disp.set_draw_func(move |da, cr, w, h| draw_prog(da, cr, w as f64, h as f64, &p.borrow()));
+    }
+    stage.add_overlay(&disp);
+    v.append(&stage);
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let what = gtk::Button::with_label("What was cleaned");
+    what.add_css_class("link-btn"); what.set_valign(gtk::Align::Center); what.set_visible(false);
+    let log_key = key("open log file", &[]);
+    log_key.set_visible(false); log_key.set_margin_start(8);
+    keys.append(&what); keys.append(&log_key);
     keys.append(&hspacer());
     let minimise = key("minimise", &[]);
     let stop = key("stop", &[]);
@@ -1426,40 +2133,149 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     v.append(&keys);
     w.set_child(Some(&v));
     *u.prog_win.borrow_mut() = Some(w.clone());
+    let log_path = glib::user_data_dir().join("space-hunter").join("last-clean.txt");
 
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Rc::new(Cell::new(false));
+    let close_win: Rc<dyn Fn()> = {
+        let (uu, ww) = (u.clone(), w.clone());
+        Rc::new(move || {
+            {
+                let mut pw = uu.prog_win.borrow_mut();
+                if pw.as_ref() == Some(&ww) { *pw = None; }
+            }
+            ww.close();
+        })
+    };
     let ww = w.clone();
     minimise.connect_clicked(move |_| ww.minimize());
-    let (c2, d2, uu) = (cancel.clone(), done.clone(), u.clone());
+    let (c2, d2, cw) = (cancel.clone(), done.clone(), close_win.clone());
     stop.connect_clicked(move |b| {
-        if d2.get() { if let Some(w) = uu.prog_win.borrow_mut().take() { w.close(); } return; }
+        if d2.get() { (*cw)(); return; }
         c2.store(true, Ordering::Relaxed); b.set_label("STOPPING"); b.set_sensitive(false);
     });
-    {   // while cleaning, the bar glides toward the real share every frame (time-based, so a late frame never jumps);
-        // it goes straight down if the share ever drops, and stops when the clean is done or the window is gone
-        let (frac, shown, done) = (frac.clone(), shown.clone(), done.clone());
-        let last = Cell::new(std::time::Instant::now());
-        pbar.add_tick_callback(move |bar, _| {
-            let target = frac.get();
-            if done.get() { shown.set(target); bar.queue_draw(); return glib::ControlFlow::Break; }
-            let now = std::time::Instant::now();
-            let dt = now.duration_since(last.get()).as_secs_f64();
-            last.set(now);
-            let s = shown.get();
-            shown.set(if s < 0.0 || target < s { target } else { s + (target - s) * (1.0 - (-dt / 0.12).exp()) });
-            bar.queue_draw();
-            glib::ControlFlow::Continue
+    {   // once the clean is done, Enter or Esc closes the window
+        let kc = gtk::EventControllerKey::new();
+        kc.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let (d2, cw) = (done.clone(), close_win.clone());
+        kc.connect_key_pressed(move |_, k, _, _| {
+            use gtk::gdk::Key;
+            if d2.get() && (k == Key::Return || k == Key::KP_Enter || k == Key::Escape) { (*cw)(); return glib::Propagation::Stop; }
+            glib::Propagation::Proceed
+        });
+        w.add_controller(kc);
+    }
+    {
+        let lp = log_path.clone();
+        log_key.connect_clicked(move |_| {
+            let _ = gtk::gio::AppInfo::launch_default_for_uri(&gtk::gio::File::for_path(&lp).uri(), None::<&gtk::gio::AppLaunchContext>);
         });
     }
-    let d3 = done.clone();
-    w.connect_close_request(move |w| {
-        if d3.get() { glib::Propagation::Proceed } else { w.minimize(); glib::Propagation::Stop }   // closing mid-clean just tucks it away
-    });
+    // 0 = the cleaning layout, 1 = the display fills the window and the log has gone
+    let full = Rc::new(Cell::new(0i32));
+    let grow: Rc<dyn Fn(f64)> = {
+        let (disp, lsw, stage, full) = (disp.clone(), lsw.clone(), stage.clone(), full.clone());
+        Rc::new(move |t: f64| {
+            if full.get() <= BASE_H { full.set(stage.height()); }
+            let f = full.get().max(BASE_H);
+            disp.set_content_height(BASE_H + ((f - BASE_H) as f64 * t).round() as i32);
+            disp.set_valign(if t >= 1.0 { gtk::Align::Fill } else { gtk::Align::Start });
+            lsw.set_opacity(1.0 - t);
+            lsw.set_visible(t < 1.0);
+        })
+    };
+    // "What was cleaned": the old log view (small display, the log, Open log file); and back to the summary
+    let show_details: Rc<dyn Fn(bool)> = {
+        let (p, disp, lsw, log_key, what, grow) = (p.clone(), disp.clone(), lsw.clone(), log_key.clone(), what.clone(), grow.clone());
+        Rc::new(move |on: bool| {
+            p.borrow_mut().details = on;
+            let stopped = p.borrow().stopped;
+            if on {
+                disp.set_valign(gtk::Align::Start);
+                disp.set_content_height(BASE_H);
+                lsw.set_visible(true); lsw.set_opacity(1.0);
+                log_key.set_visible(true);
+            } else {
+                (*grow)(1.0);
+                log_key.set_visible(false);
+            }
+            what.set_label(if on && !stopped { "Back to the summary" } else { "What was cleaned" });
+            if stopped { what.set_visible(false); }
+            disp.queue_draw();
+        })
+    };
+    {
+        let (p, sd) = (p.clone(), show_details.clone());
+        what.connect_clicked(move |_| { let on = !p.borrow().details; (*sd)(on); });
+    }
+    let link_shown = Rc::new(Cell::new(false));
+    let set_done_key: Rc<dyn Fn()> = {   // Done closes the window; it's the one orange key once the clean is over
+        let (stop, w2) = (stop.clone(), w.clone());
+        Rc::new(move || {
+            stop.set_label("DONE"); stop.add_css_class("primary"); stop.set_sensitive(true);
+            w2.set_title(Some("Space Hunter \u{00B7} done"));
+        })
+    };
+    // straight to the end of the finish (reduce motion, or a screen whose frame clock doesn't run)
+    let finish_now: Rc<dyn Fn()> = {
+        let (p, grow, what, link_shown, set_done_key, disp) = (p.clone(), grow.clone(), what.clone(), link_shown.clone(), set_done_key.clone(), disp.clone());
+        Rc::new(move || {
+            let (ms, details) = { let pb = p.borrow(); (pb.ms, pb.details) };
+            if ms >= FINISH_MS { return; }
+            p.borrow_mut().ms = FINISH_MS;
+            if !details { (*grow)(1.0); }
+            link_shown.set(true);
+            what.set_visible(true);
+            (*set_done_key)();
+            disp.queue_draw();
+        })
+    };
+    {   // every frame: while cleaning the bar glides toward the real share (time-based, so a late frame never jumps; it
+        // goes straight down if the share ever drops); once done, the finish plays by the frame clock
+        let (p, grow, what, link_shown, set_done_key) = (p.clone(), grow.clone(), what.clone(), link_shown.clone(), set_done_key.clone());
+        let last = Cell::new(None::<i64>);
+        let fin_start = Cell::new(None::<i64>);
+        let key_done = Cell::new(false);
+        disp.add_tick_callback(move |da, clock| {
+            let ft = clock.frame_time();
+            let (is_done, stopped, ms_now, details) = { let pb = p.borrow(); (pb.done, pb.stopped, pb.ms, pb.details) };
+            if !is_done {
+                let dt = last.get().map(|l| (ft - l) as f64 / 1e6).unwrap_or(0.0).max(0.0);
+                last.set(Some(ft));
+                {
+                    let mut pb = p.borrow_mut();
+                    let (s, target) = (pb.shown, pb.frac);
+                    pb.shown = if s < 0.0 || target < s { target } else { s + (target - s) * (1.0 - (-dt / 0.12).exp()) };
+                }
+                da.queue_draw();
+                return glib::ControlFlow::Continue;
+            }
+            if stopped || ms_now >= FINISH_MS { da.queue_draw(); return glib::ControlFlow::Break; }
+            let s = fin_start.get().unwrap_or(ft);
+            fin_start.set(Some(s));
+            let ms = ((ft - s) as f64 / 1000.0).min(FINISH_MS);
+            p.borrow_mut().ms = ms;
+            if !details { (*grow)(ease(ms / GROW_MS)); }
+            if ms >= LIST_AT && !link_shown.get() { link_shown.set(true); what.set_visible(true); }
+            if ms >= DONE_AT && !key_done.get() { key_done.set(true); (*set_done_key)(); }
+            da.queue_draw();
+            if ms >= FINISH_MS { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+        });
+    }
+    {
+        let (d3, uu) = (done.clone(), u.clone());
+        w.connect_close_request(move |w| {
+            if !d3.get() { w.minimize(); return glib::Propagation::Stop; }   // closing mid-clean just tucks it away
+            let mut pw = uu.prog_win.borrow_mut();
+            if pw.as_ref() == Some(w) { *pw = None; }
+            glib::Propagation::Proceed
+        });
+    }
 
     let cleaned_ids: Vec<String> = sel.iter().map(|c| c.id.clone()).collect();   // their picks are for this clean only
     let (tx, rx) = mpsc::channel::<Msg>();
     let c3 = cancel.clone();
+    let home_t = home_s.clone();
     std::thread::spawn(move || {
         let (mut bytes, mut trashed, mut files, mut skipped) = (0u64, 0u64, 0u64, 0u64);
         let user: Vec<&Cat> = sel.iter().filter(|c| !c.admin).collect();
@@ -1477,6 +2293,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             engine::process(c, true, to_trash, &mut cnt);   // Quick clean too; the engine keeps the Trash item and journal deleting
             bytes += cnt.bytes; trashed += cnt.trashed; files += cnt.files; skipped += cnt.skipped;
             let _ = tx.send(Msg::Totals(bytes, trashed, files, skipped));
+            let _ = tx.send(Msg::Freed(c.name.clone(), cnt.bytes, cnt.trashed, false));
             let _ = tx.send(Msg::Line(format!("\u{2014} {}: freed {}{}, {} files", c.name, fmt(cnt.bytes), if cnt.trashed > 0 { format!(" + {} to the Trash", fmt(cnt.trashed)) } else { String::new() }, cnt.files)));
             let _ = tx.send(Msg::Result(format!("{}   \u{00B7}   {}{}", c.name, if cnt.bytes > 0 || cnt.trashed == 0 { format!("{} freed", fmt(cnt.bytes)) } else { String::new() },
                                                  if cnt.trashed > 0 { format!("{}{} to the Trash", if cnt.bytes > 0 { " + " } else { "" }, fmt(cnt.trashed)) } else { String::new() })));
@@ -1488,6 +2305,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                     bytes += r.bytes; files += r.files; skipped += r.skipped;
                     let _ = tx.send(Msg::Line(format!("\u{2014} {}: freed {}, {} files", r.id, fmt(r.bytes), r.files)));
                     let name = admin.iter().find(|c| c.id == r.id).map(|c| c.name.clone()).unwrap_or(r.id.clone());
+                    let _ = tx.send(Msg::Freed(name.clone(), r.bytes, 0, true));
                     let _ = tx.send(Msg::Result(format!("{}   \u{00B7}   {} freed", name, fmt(r.bytes))));
                 },
                 None => { let _ = tx.send(Msg::Line("\u{2014} System folders skipped: the password wasn't given.".into())); }
@@ -1495,11 +2313,13 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             let _ = tx.send(Msg::Totals(bytes, trashed, files, skipped));
         }
         engine::history::record(bytes, trashed);
-        let _ = tx.send(Msg::Done(c3.load(Ordering::Relaxed)));
+        let (fa, ftotal) = crate::disk(&home_t);
+        let _ = tx.send(Msg::Done(c3.load(Ordering::Relaxed), if ftotal > 0 { Some(fa) } else { None }));
     });
 
     let buf = tv.buffer();
     let uu = u.clone();
+    let wt = w.clone();
     let mut lines = 0usize;
     let mut results: Vec<String> = Vec::new();
     glib::timeout_add_local(Duration::from_millis(120), move || {
@@ -1509,18 +2329,16 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             match m {
                 Msg::Line(l) => { if lines < 3000 { batch.push_str(&l); batch.push('\n'); lines += 1; } }
                 Msg::Totals(b, t, f, s) => {
-                    totals.set((b, t, f, s));
-                    let bin_only = b == 0 && t > 0;
-                    let (num, unit) = split(if bin_only { t } else { b });
-                    big.set_text(&num);
-                    bigu.set_text(&format!("{} {}", unit, if bin_only { "TO TRASH" } else { "FREED" }));
-                    stat.set_text(&format!("{} files  \u{00B7}  {} skipped{}", f, s, if t > 0 && !bin_only { format!("  \u{00B7}  + {} to the Trash", fmt(t)) } else { String::new() }));
-                    frac.set(((b + t) as f64 / expected as f64).min(1.0));
-                    pbar.queue_draw();
+                    {
+                        let mut pb = p.borrow_mut();
+                        pb.totals = (b, t, f, s);
+                        pb.frac = ((b + t) as f64 / expected as f64).min(1.0);
+                    }
                     uu.status.set_text(&format!("Cleaning  \u{00B7}  {} freed{} so far.  You can keep looking around.", fmt(b), if t > 0 { format!(" + {} to the Trash", fmt(t)) } else { String::new() }));
                 }
-                Msg::Current(c) => headl.set_text(&c),
-                Msg::Done(stopped) => finished = Some(stopped),
+                Msg::Current(c) => p.borrow_mut().label = c,
+                Msg::Freed(n, b, t, admin) => p.borrow_mut().freed.push((n, b, t, admin)),
+                Msg::Done(stopped, after) => finished = Some((stopped, after)),
                 Msg::Result(r) => results.push(r),
             }
         }
@@ -1530,41 +2348,39 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
             let mark = buf.create_mark(None, &buf.end_iter(), false);
             tv.scroll_mark_onscreen(&mark);
         }
-        if let Some(stopped) = finished {
+        if let Some((stopped, after)) = finished {
             done.set(true);
             if !results.is_empty() {   // what was cleaned, item by item, above every single file
                 let mut start = buf.start_iter();
                 buf.insert(&mut start, &format!("What was cleaned\n\n{}\n\nEvery file:\n", results.join("\n")));
                 tv.scroll_to_iter(&mut buf.start_iter(), 0.0, false, 0.0, 0.0);
             }
-            headl.set_text(if stopped { "Stopped  \u{00B7}  nothing else will be cleaned" } else { "Done  \u{00B7}  all ticked items cleaned" });
-            // Done closes the window; it's the one orange key once a clean has finished
-            stop.set_label(if stopped { "CLOSE" } else { "DONE" }); stop.set_sensitive(true);
-            if !stopped { stop.add_css_class("primary"); }
-            let animate = gtk::Settings::default().map(|st| st.is_gtk_enable_animations()).unwrap_or(true);
-            if !stopped && animate {   // a moment of "clearing up": the number counts up while the bar clears
-                headl.set_text("Clearing up\u{2026}");
-                let (b, t, f, s) = totals.get();
-                let bin_only = b == 0 && t > 0;
-                let start = std::time::Instant::now();
-                let (big, bigu, stat, headl, fin, pbar) = (big.clone(), bigu.clone(), stat.clone(), headl.clone(), fin.clone(), pbar.clone());
-                glib::timeout_add_local(Duration::from_millis(16), move || {
-                    let x = (start.elapsed().as_secs_f64() / 1.2).min(1.0);
-                    let ease = 1.0 - (1.0 - x).powi(3);
-                    let (num, unit) = split(((if bin_only { t } else { b }) as f64 * ease) as u64);
-                    big.set_text(&num);
-                    bigu.set_text(&format!("{} {}", unit, if bin_only { "TO TRASH" } else { "FREED" }));
-                    stat.set_text(&format!("{} files  \u{00B7}  {} skipped", (f as f64 * ease) as u64, s));
-                    fin.set(x); pbar.queue_draw();
-                    if x >= 1.0 {
-                        headl.set_text("Done  \u{00B7}  all ticked items cleaned");
-                        if bin_only { stat.set_text(&format!("{} files  \u{00B7}  empty the Trash to get this space back", f)); }
-                        return glib::ControlFlow::Break;
-                    }
-                    glib::ControlFlow::Continue
-                });
-            } else if !stopped { fin.set(1.0); pbar.queue_draw(); }
+            // the whole log as a file, for "Open log file"
+            if let Some(dir) = log_path.parent() { let _ = std::fs::create_dir_all(dir); }
+            let _ = std::fs::write(&log_path, buf.text(&buf.start_iter(), &buf.end_iter(), false).as_str());
+            {
+                let mut pb = p.borrow_mut();
+                let secs = pb.started.elapsed().as_secs_f64();
+                let fa = if pb.total > 0 { after } else { None };
+                pb.done = true;
+                pb.stopped = stopped;
+                pb.secs = Some(secs);
+                pb.free_after = fa;
+                pb.specks = make_specks();
+            }
             minimise.set_visible(false);
+            if stopped {   // no finish: the log stays, so you can see where it stopped
+                wt.set_title(Some("Space Hunter \u{00B7} stopped"));
+                stop.set_label("CLOSE"); stop.set_sensitive(true);
+                (*show_details)(true);
+            } else if animations_on() {
+                stop.set_label("FINISHING"); stop.set_sensitive(false);   // the finish plays in the display's frame callback
+                let fin = finish_now.clone();   // and is certain to end, even if frames stop coming
+                glib::timeout_add_local_once(Duration::from_millis((FINISH_MS as u64) + 1500), move || (*fin)());
+            } else {   // reduce motion: straight to the result
+                (*finish_now)();
+            }
+            disp.queue_draw();
             {
                 let mut st = uu.st.borrow_mut();
                 st.cleaning = false;
@@ -1577,4 +2393,338 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
         glib::ControlFlow::Continue
     });
     w.present();
+}
+
+// ---- The first-run guide: the window dims, a lit cut-out sits on each real part in turn, a small card explains it.
+// The cut-out glides from one part to the next. "?" plays it again.
+
+const GUIDE: [(&str, &str); 9] = [
+    ("This is what you can free", "The big number is what's ticked right now. The bar is your disk: orange is ticked, hatched is what you could still free. On the right, your disk's free space and what you've freed so far."),
+    ("Three sections, by how careful to be", "Quick clean is safe and ticked for you. Big caches come back when they're needed. Deep clean may include your work. The small box ticks or unticks a whole section."),
+    ("Each row is one thing to clean", "Tick a row to include it; the size is what it would free. Click the row itself to see what it is."),
+    ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
+    ("See what fills your disk", "Storage map shows every folder by size, on any disk. Nothing there deletes anything; you can add a folder to your cleanup list."),
+    ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
+    ("Back to recommended", "Puts the ticks and ages back to how they started. Scan again measures everything afresh."),
+    ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
+    ("Your look, and this guide", "Light, dark or your computer's setting. The ? key shows this guide again whenever you want."),
+];
+// what each step does before it points: 0 nothing, 1 close the item panel, 2 open the biggest item of the open section
+const GUIDE_DO: [u8; 9] = [0, 1, 1, 2, 1, 0, 0, 0, 0];
+pub struct Guide {
+    da: gtk::DrawingArea,
+    step: Cell<usize>,
+    from: Cell<R4>,
+    to: Cell<R4>,
+    spot: Cell<R4>,       // the cut-out, gliding from `from` to `to`
+    veil: Cell<f64>,      // 0..1, fades in and out
+    closing: Cell<bool>,
+    gen: Cell<u64>,       // the newest animation; older ones stop
+    next: Cell<R4>,
+    skip: Cell<R4>,
+    back: Cell<R4>,
+}
+
+fn guide_seen_file() -> PathBuf { engine::config_dir().join("guide-seen") }
+fn guide_seen() -> bool { guide_seen_file().exists() }
+
+fn bounds_of(u: &Ui, w: &gtk::Widget) -> Option<R4> {
+    w.compute_bounds(&u.overlay)
+        .map(|r| (r.x() as f64, r.y() as f64, r.width() as f64, r.height() as f64))
+        .filter(|r| r.2 > 0.0 && r.3 > 0.0)
+}
+
+// where step n's cut-out goes: the real part's place in the window now, padded 6 px
+fn guide_target(u: &Ui, n: usize) -> R4 {
+    let r = match n {
+        0 => bounds_of(u, u.display.upcast_ref()),
+        1 => bounds_of(u, u.rail.upcast_ref()).map(|r| (r.0 - 10.0, r.1, r.2 + 20.0, r.3)),
+        2 => {   // the first three rows, below the list's heading
+            let mut top: Option<f64> = None;
+            let mut bottom = 0.0;
+            let mut c = u.rows.first_child();
+            let mut k = 0;
+            while let Some(x) = c {
+                if let Some(b) = bounds_of(u, &x) { if top.is_none() { top = Some(b.1); } bottom = b.1 + b.3; }
+                k += 1;
+                if k >= 3 { break; }
+                c = x.next_sibling();
+            }
+            let list = bounds_of(u, u.list_sw.upcast_ref());
+            match (top, list) {
+                (Some(t), Some(l)) => {
+                    let (t, b) = (t.max(l.1), bottom.min(l.1 + l.3));
+                    Some((l.0 - 8.0, t, l.2 + 16.0, (b - t).max(20.0)))
+                }
+                (_, Some(l)) => Some((l.0 - 8.0, l.1, l.2 + 16.0, l.3.min(160.0))),
+                _ => None,
+            }
+        }
+        3 => bounds_of(u, u.psw.upcast_ref()),
+        4 => bounds_of(u, u.map_key.upcast_ref()),
+        5 => bounds_of(u, u.protect_key.upcast_ref()),
+        6 => bounds_of(u, u.reset_key.upcast_ref()),
+        7 => bounds_of(u, u.clean.upcast_ref()),
+        _ => bounds_of(u, u.top_keys.upcast_ref()).map(|b| {   // the guide key and the theme keys, not the room for their names
+            let kw = TK_C * 4.0 + TK_GAP;
+            (b.0 + b.2 - kw, b.1, kw, TK_H + 2.0)
+        }),
+    };
+    let (w, h) = (u.overlay.width() as f64, u.overlay.height() as f64);
+    let r = r.unwrap_or((w / 2.0 - 100.0, h / 2.0 - 40.0, 200.0, 80.0));
+    (r.0 - 6.0, r.1 - 6.0, r.2 + 12.0, r.3 + 12.0)
+}
+
+// Run step n's action first (close or open the item panel). True when the window changed under the guide.
+fn guide_enter(u: &Rc<Ui>, n: usize) -> bool {
+    match GUIDE_DO.get(n).copied().unwrap_or(0) {
+        1 => {
+            let open = u.st.borrow().open.is_some();
+            if open { close_panel(u); }
+            open
+        }
+        2 => {
+            let first = {
+                let st = u.st.borrow();
+                st.cats.iter().filter(|c| c.level == st.tier && (c.bytes > 0 || c.files > 0)).max_by_key(|c| c.bytes).map(|c| c.id.clone())
+            };
+            let open_now = u.st.borrow().open.clone();
+            match first {
+                Some(id) if open_now.as_deref() != Some(id.as_str()) => { open_panel(u, &id); true }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+// After an action the layout settles (the panel slides for 0.26 s): point again at where the part ended up.
+fn guide_retarget_later(u: &Rc<Ui>, g: &Rc<Guide>, n: usize) {
+    let (uu, gw) = (u.clone(), Rc::downgrade(g));
+    glib::timeout_add_local_once(Duration::from_millis(320), move || {
+        if let Some(g) = gw.upgrade() {
+            if g.closing.get() || g.step.get() != n { return; }
+            let t = guide_target(&uu, n);
+            if t != g.to.get() { g.from.set(g.spot.get()); g.to.set(t); guide_animate(&uu, &g); }
+        }
+    });
+}
+fn start_guide(u: &Rc<Ui>, at: usize) {
+    if u.guide.borrow().is_some() { return; }
+    u.guide_pending.set(false);
+    if u.st.borrow().open.is_some() { close_panel(u); }
+    let at = at.min(GUIDE.len() - 1);
+    guide_enter(u, at);
+    let da = gtk::DrawingArea::new();
+    da.set_hexpand(true); da.set_vexpand(true);
+    da.set_focusable(true);
+    let t = guide_target(u, at);
+    let none = (0.0, 0.0, 0.0, 0.0);
+    let g = Rc::new(Guide {
+        da: da.clone(), step: Cell::new(at), from: Cell::new(t), to: Cell::new(t), spot: Cell::new(t), veil: Cell::new(0.0),
+        closing: Cell::new(false), gen: Cell::new(0), next: Cell::new(none), skip: Cell::new(none), back: Cell::new(none),
+    });
+    {
+        let gw = Rc::downgrade(&g);
+        da.set_draw_func(move |da, cr, w, h| { if let Some(g) = gw.upgrade() { draw_guide(&g, da, cr, w as f64, h as f64); } });
+    }
+    {   // the card's Next, Skip and Back; a click anywhere else does nothing (the window under it is out of reach)
+        let click = gtk::GestureClick::new();
+        let (uu, gw) = (u.clone(), Rc::downgrade(&g));
+        click.connect_released(move |_, _, x, y| {
+            let g = match gw.upgrade() { Some(g) => g, None => return };
+            if inside(g.next.get(), x, y) { guide_go(&uu, &g, g.step.get() + 1); }
+            else if inside(g.skip.get(), x, y) { guide_finish(&uu, &g); }
+            else if inside(g.back.get(), x, y) && g.step.get() > 0 { guide_go(&uu, &g, g.step.get() - 1); }
+        });
+        da.add_controller(click);
+        let motion = gtk::EventControllerMotion::new();
+        let (gw, dw) = (Rc::downgrade(&g), da.downgrade());
+        motion.connect_motion(move |_, x, y| {
+            if let (Some(g), Some(d)) = (gw.upgrade(), dw.upgrade()) {
+                let hot = inside(g.next.get(), x, y) || inside(g.skip.get(), x, y) || inside(g.back.get(), x, y);
+                d.set_cursor_from_name(Some(if hot { "pointer" } else { "default" }));
+            }
+        });
+        da.add_controller(motion);
+    }
+    {   // the window changed size: the cut-out moves to where its part is now
+        let (uu, gw) = (u.clone(), Rc::downgrade(&g));
+        da.connect_resize(move |_, _, _| {
+            let (uu, gw) = (uu.clone(), gw.clone());
+            glib::idle_add_local_once(move || {
+                if let Some(g) = gw.upgrade() {
+                    if g.closing.get() { return; }
+                    let t = guide_target(&uu, g.step.get());
+                    g.from.set(t); g.to.set(t); g.spot.set(t);
+                    g.da.queue_draw();
+                }
+            });
+        });
+    }
+    u.overlay.add_overlay(&da);
+    *u.guide.borrow_mut() = Some(g.clone());
+    da.grab_focus();
+    guide_animate(u, &g);
+    guide_retarget_later(u, &g, at);   // the panel may have just closed or opened
+}
+
+fn guide_go(u: &Rc<Ui>, g: &Rc<Guide>, n: usize) {
+    if g.closing.get() { return; }
+    if n >= GUIDE.len() { guide_finish(u, g); return; }
+    let changed = guide_enter(u, n);
+    g.from.set(g.spot.get());
+    g.to.set(guide_target(u, n));
+    g.step.set(n);
+    guide_animate(u, g);
+    if changed { guide_retarget_later(u, g, n); }
+}
+
+// skipped or finished: remembered, so it never starts by itself again
+fn guide_finish(u: &Rc<Ui>, g: &Rc<Guide>) {
+    if g.closing.get() { return; }
+    let _ = std::fs::create_dir_all(engine::config_dir());
+    let _ = std::fs::write(guide_seen_file(), "seen\n");
+    g.closing.set(true);
+    g.from.set(g.spot.get());
+    g.to.set(g.spot.get());
+    guide_animate(u, g);
+}
+
+fn guide_remove(u: &Rc<Ui>) {
+    let g = u.guide.borrow_mut().take();
+    if let Some(g) = g { u.overlay.remove_overlay(&g.da); }
+}
+
+// the veil fades (0.18 s) and the cut-out glides (0.3 s), ease-out, by the frame clock
+fn guide_animate(u: &Rc<Ui>, g: &Rc<Guide>) {
+    let gen = g.gen.get() + 1;
+    g.gen.set(gen);
+    if !animations_on() {
+        g.veil.set(if g.closing.get() { 0.0 } else { 1.0 });
+        g.spot.set(g.to.get());
+        g.da.queue_draw();
+        if g.closing.get() { let uu = u.clone(); glib::idle_add_local_once(move || guide_remove(&uu)); }
+        return;
+    }
+    let v0 = g.veil.get();
+    let start = Cell::new(None::<i64>);
+    let (uu, gw) = (u.clone(), Rc::downgrade(g));
+    g.da.add_tick_callback(move |da, clock| {
+        let g = match gw.upgrade() { Some(g) => g, None => return glib::ControlFlow::Break };
+        if g.gen.get() != gen { return glib::ControlFlow::Break; }
+        let ft = clock.frame_time();
+        let s = start.get().unwrap_or(ft);
+        start.set(Some(s));
+        let ms = (ft - s) as f64 / 1000.0;
+        let fade = ease(ms / 180.0);
+        if g.closing.get() { g.veil.set(v0 * (1.0 - fade)); } else { g.veil.set(g.veil.get().max(fade)); }
+        let k = ease(ms / 300.0);
+        let (f, t) = (g.from.get(), g.to.get());
+        g.spot.set((f.0 + (t.0 - f.0) * k, f.1 + (t.1 - f.1) * k, f.2 + (t.2 - f.2) * k, f.3 + (t.3 - f.3) * k));
+        da.queue_draw();
+        if g.closing.get() && ms >= 180.0 {
+            let uu = uu.clone();
+            glib::idle_add_local_once(move || guide_remove(&uu));
+            glib::ControlFlow::Break
+        } else if !g.closing.get() && ms >= 300.0 { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+    });
+}
+
+fn draw_guide(g: &Guide, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64) {
+    use crate::theme::{DISPLAY_INK, DISPLAY_MUTED};
+    let a = g.veil.get();
+    let s = g.spot.get();
+    // the veil everywhere but the lit part, and an orange line round it
+    cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
+    cr.new_path();
+    cr.rectangle(0.0, 0.0, w, h);
+    round_rect(cr, s.0, s.1, s.2, s.3, 6.0);
+    rgba(cr, 0x121212, 0.58 * a);
+    let _ = cr.fill();
+    cr.set_fill_rule(gtk::cairo::FillRule::Winding);
+    round_rect(cr, s.0, s.1, s.2, s.3, 6.0);
+    rgba(cr, ORANGE, a);
+    cr.set_line_width(2.0);
+    let _ = cr.stroke();
+
+    // the card: under the lit part if there's room, else above it; always inside the window
+    let step = g.step.get().min(GUIDE.len() - 1);
+    let (title, body) = GUIDE[step];
+    const CW: f64 = 320.0;
+    let bl = layout(da, "Schibsted Grotesk 9.75");
+    bl.set_width(((CW - 28.0) * SC) as i32);
+    bl.set_wrap(gtk::pango::WrapMode::WordChar);
+    bl.set_text(body);
+    let body_h = bl.pixel_size().1 as f64;
+    let ch = 16.0 + 22.0 + body_h + 14.0 + 30.0 + 12.0;
+    let x = (s.0 + s.2 / 2.0 - CW / 2.0).min(w - CW - 16.0).max(16.0);
+    let mut y = if s.1 + s.3 + 14.0 + ch < h - 12.0 { s.1 + s.3 + 14.0 } else { s.1 - 14.0 - ch };
+    if y < 12.0 { y = (h - ch - 12.0).min(s.1 + 24.0); }
+    for i in (1..=6).rev() {
+        let i = i as f64;
+        rgba(cr, 0x000000, a * 0.06);
+        cr.rectangle(x - i + 3.0, y - i + 6.0, CW + 2.0 * i, ch + 2.0 * i);
+        let _ = cr.fill();
+    }
+    round_rect(cr, x, y, CW, ch, 5.0);
+    rgba(cr, crate::theme::pal().screen, a);
+    let _ = cr.fill();
+    round_rect(cr, x + 0.5, y + 0.5, CW - 1.0, ch - 1.0, 5.0);
+    rgba(cr, 0x5A564F, a);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+    let tl = layout(da, "Schibsted Grotesk Bold 12.5");
+    rgba(cr, DISPLAY_INK, a);
+    show_at(cr, &tl, title, x + 14.0, y + 14.0);
+    rgba(cr, DISPLAY_INK, a * 0.82);
+    cr.move_to(x + 14.0, y + 40.0);
+    pangocairo::functions::show_layout(cr, &bl);
+    let fy = y + ch - 12.0 - 28.0;
+    let fl = layout(da, "IBM Plex Mono 8.5");
+    rgba(cr, DISPLAY_MUTED, a);
+    show_at(cr, &fl, &format!("{} / {}", step + 1, GUIDE.len()), x + 14.0, fy + 7.0);
+    // the orange key, then Skip (not on the last step) and Back (from step 2), underlined
+    let last = step == GUIDE.len() - 1;
+    let kl = layout(da, "Schibsted Grotesk Semi-Bold 9");
+    kl.set_text(if last { "GOT IT" } else { "NEXT" });
+    let (kw, kh) = kl.pixel_size();
+    let nb = (x + CW - 14.0 - kw as f64 - 22.0, fy, kw as f64 + 22.0, 28.0);
+    round_rect(cr, nb.0, nb.1 + 2.0, nb.2, nb.3, 3.0);
+    rgba(cr, 0xB5400F, a);
+    let _ = cr.fill();
+    round_rect(cr, nb.0, nb.1, nb.2, nb.3, 3.0);
+    rgba(cr, ORANGE, a);
+    let _ = cr.fill();
+    rgba(cr, ON_ORANGE, a);
+    cr.move_to(nb.0 + (nb.2 - kw as f64) / 2.0, nb.1 + (nb.3 - kh as f64) / 2.0);
+    pangocairo::functions::show_layout(cr, &kl);
+    g.next.set(nb);
+    let none = (0.0, 0.0, 0.0, 0.0);
+    g.skip.set(none);
+    g.back.set(none);
+    let mut lx = nb.0 - 16.0;
+    let link = |text: &str, lx: f64| -> R4 {
+        kl.set_text(text);
+        let (tw, th) = kl.pixel_size();
+        let (tx, ty) = (lx - tw as f64, fy + (28.0 - th as f64) / 2.0);
+        rgba(cr, DISPLAY_INK, a);
+        cr.move_to(tx, ty);
+        pangocairo::functions::show_layout(cr, &kl);
+        cr.set_line_width(1.0);
+        cr.new_path();
+        cr.move_to(tx, ty + th as f64 + 1.5);
+        cr.line_to(tx + tw as f64, ty + th as f64 + 1.5);
+        let _ = cr.stroke();
+        (tx - 4.0, fy, tw as f64 + 8.0, 28.0)
+    };
+    if !last {
+        let r = link("Skip", lx);
+        g.skip.set(r);
+        lx = r.0 - 10.0;
+    }
+    if step > 0 {
+        let r = link("Back", lx);
+        g.back.set(r);
+    }
 }

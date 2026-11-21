@@ -202,6 +202,7 @@ jobs:
           shot panel --open temp
           shot confirm --confirm
           shot cleaning --test-progress "$HOME/sh-shot"
+          shot guide --guide 1
           shot storage --storage "$HOME"
           shot storage-deep --storage "$HOME" --drill 3
           shot protect --protect

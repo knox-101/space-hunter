@@ -54,7 +54,7 @@ namespace SpaceHunter
             keys.Controls.Add(driveKey);   // going up and "open in Explorer" live in the path bar, beside the folder they act on
             pathBar.Height = Theme.D(46);
             hint.Dock = DockStyle.Bottom; hint.Height = Theme.D(30); hint.Padding = Theme.Pad(20, 7, 0, 0); hint.Font = Theme.Sans(9f); hint.ForeColor = Theme.Muted; hint.UseMnemonic = false;
-            hint.Text = "“Add to list” puts a folder or file in Personal & work items, unticked. Nothing here deletes anything.";
+            hint.Text = "“Add to list” puts a folder or file in Deep clean, unticked. Nothing here deletes anything.";
             list.Dock = DockStyle.Fill;
             Controls.Add(list); Controls.Add(map); Controls.Add(pathBar); Controls.Add(keys); Controls.Add(headWrap); Controls.Add(hint);
 
@@ -68,14 +68,14 @@ namespace SpaceHunter
             {
                 if (cur == null) return;
                 if (pathBar.IsAdded) { Custom.Remove(cur.Path); hint.Text = "Taken off the cleanup list: " + Theme.MidPath(cur.Path, 70) + "."; }
-                else { Custom.Add(cur.Path); hint.Text = "Added: " + Theme.MidPath(cur.Path, 70) + ". It's on the cleanup list, in Personal & work items, unticked."; }
+                else { Custom.Add(cur.Path); hint.Text = "Added: " + Theme.MidPath(cur.Path, 70) + ". It's on the cleanup list, in Deep clean, unticked."; }
                 Added = true; pathBar.SetNode(cur);
             };
             KeyPreview = true;   // Backspace or Alt+Left: up one level, as in Explorer
             KeyDown += (s, e) => { if ((e.KeyCode == Keys.Back || (e.Alt && e.KeyCode == Keys.Left)) && cur != null && cur.Parent != null && picker == null) { Go(cur.Parent); e.Handled = true; } };
             list.Reveal += (s, e) => { var r = (FolderNode)s; try { Process.Start("explorer.exe", (r.IsFile ? "/select,\"" : "\"") + r.Path + "\""); } catch { } };
             list.Placeholder = "Measuring\u2026 the map and the list appear here.";
-            list.AddedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Added: " + Theme.MidPath(((FolderNode)s).Path, 70) + ". It's on the cleanup list, in Personal & work items, unticked. Click “Added” to undo."; };
+            list.AddedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Added: " + Theme.MidPath(((FolderNode)s).Path, 70) + ". It's on the cleanup list, in Deep clean, unticked. Click “Added” to undo."; };
             list.RemovedFolder += (s, e) => { Added = true; map.SetNode(cur, FreeHere()); hint.Text = "Taken off the cleanup list: " + Theme.MidPath(((FolderNode)s).Path, 70) + "."; };
             tick.Tick += (s, e) => { sweep++; head.Invalidate(); };
             Shown += (s, e) => StartScan(startPath ?? Path.GetPathRoot(Engine.W));

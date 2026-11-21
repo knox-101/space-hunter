@@ -625,8 +625,9 @@ pub fn clean_system(spec: &str) -> i32 {
 pub fn fmt(b: u64) -> String {
     let b = b as f64;
     let (k, m, g, t) = (1024.0, 1048576.0, 1073741824.0, 1099511627776.0);
-    if b >= t { format!("{:.1} TB", b / t) }
-    else if b >= g { format!("{:.1} GB", b / g) }
+    // 1000 MB and up shows as GB, 1000 GB and up as TB (never "1010 MB")
+    if b >= 1000.0 * g { format!("{:.2} TB", b / t) }
+    else if b >= 1000.0 * m { format!("{:.1} GB", b / g) }
     else if b >= m { format!("{:.0} MB", b / m) }
     else if b >= k { format!("{:.0} KB", b / k) }
     else { "0 MB".to_string() }
@@ -694,13 +695,22 @@ pub fn fmt_age(m: u32) -> String {
 }
 
 // The names a newcomer can act on without opening anything (the same as on Windows and Mac).
-pub fn tier_name(l: Level) -> &'static str { match l { Level::Safe => "Quick clean", Level::Review => "Big caches & history", Level::Caution => "Personal & work items" } }
-pub fn tier_desc(l: Level) -> &'static str { match l { Level::Safe => "Caches and leftovers that rebuild", Level::Review => "Big caches that download again, or old history", Level::Caution => "Can hold your work or history. Check before cleaning" } }
+pub fn tier_name(l: Level) -> &'static str { match l { Level::Safe => "Quick clean", Level::Review => "Big caches & history", Level::Caution => "Deep clean" } }
+pub fn tier_desc(l: Level) -> &'static str { match l { Level::Safe => "Caches and leftovers that rebuild", Level::Review => "Big caches that download again, or old history", Level::Caution => "Old AI chats, old downloads, folders you added" } }
 pub fn tier_explain(l: Level) -> &'static str {
     match l {
-        Level::Safe => "Caches, temp files and leftovers that apps and Linux rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once.",
-        Level::Review => "Things that come back by downloading them again, or history you might still want. Read each one before you tick it.",
-        Level::Caution => "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes.",
+        Level::Safe => "Caches, temp files and leftovers that apps and Linux rebuild or no longer need. Your files, logins and passwords aren't touched.",
+        Level::Review => "Things that download again when they're needed, or history you might still want.",
+        Level::Caution => "Old AI agent chats and workspaces, old installers in Downloads, and folders you added. Nothing here is ticked for you.",
+    }
+}
+
+// The one thing to do in each section, on its own highlighted line under the explain line.
+pub fn tier_cta(l: Level) -> &'static str {
+    match l {
+        Level::Safe => "Clean this every time you open Space Hunter: it's always safe.",
+        Level::Review => "Tick what you won't need soon. Each item says what comes back, and how.",
+        Level::Caution => "This may include your work. Open each item and check before cleaning.",
     }
 }
 

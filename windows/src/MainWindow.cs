@@ -129,101 +129,218 @@ namespace SpaceHunter
         public Level Current = Level.Safe;
         public List<Category> Cats = new List<Category>();
         public event EventHandler Changed;
-        int hover = -1;
-        Font fName = Theme.CBold(11.5f), fDesc = Theme.CSans(9f), fSize = Theme.CSemi(13f), fSub = Theme.CSans(8.75f), fSubB = Theme.CSemi(8.75f);
+        public event Action<Level, bool> TickAll;   // the small box beside "11 of 11 ticked"
+        readonly RectangleF[] boxes = new RectangleF[3];
+        int hover = -1, boxHover = -1;
+        Font fName = Theme.CBold(11.5f), fName2 = Theme.CSans(9.75f), fDesc = Theme.CSans(9f), fSize = Theme.CSemi(13f), fSub = Theme.CSans(8.75f), fSubB = Theme.CSemi(9.75f);
         static readonly Level[] Order = { Level.Safe, Level.Review, Level.Caution };
 
-        public TierBar() { Cursor = Cursors.Hand; TabStop = false; }
+        readonly System.Windows.Forms.Timer slide = new System.Windows.Forms.Timer { Interval = 15 };
+        readonly System.Diagnostics.Stopwatch slideClock = new System.Diagnostics.Stopwatch();
+        float markFrom = -1, markTo;   // the marker's x, in tile units (0, 1, 2)
+        Font fBig = Theme.CDisplay(24f);
 
-        RectangleF Tile(int i) { float w = (LW - 2 * 18 - 2 * 10) / 3f; return new RectangleF(18 + i * (w + 10), 6, w, LH - 14); }
+        public TierBar()
+        {
+            Cursor = Cursors.Hand; TabStop = false;
+            slide.Tick += (s, e) => { Invalidate(); if (slideClock.ElapsedMilliseconds > 320) { slide.Stop(); markFrom = markTo; } };
+        }
+
+        RectangleF Tile(int i) { float w = (LW - 2 * 18) / 3f; return new RectangleF(18 + i * w, 4, w, LH - 4); }
+        float MarkAt()
+        {
+            if (markFrom < 0) markFrom = markTo = Array.IndexOf(Order, Current);
+            double t = Math.Min(1, slideClock.ElapsedMilliseconds / 320.0); t = 1 - Math.Pow(1 - t, 3);
+            return slide.Enabled ? (float)(markFrom + (markTo - markFrom) * t) : markTo;
+        }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             var pt = new PointF(X(e), Y(e)); int h = -1;
             for (int i = 0; i < 3; i++) if (Tile(i).Contains(pt)) h = i;
-            if (h != hover) { hover = h; Invalidate(); }
+            int bh = -1; for (int i = 0; i < 3; i++) if (!boxes[i].IsEmpty && RectangleF.Inflate(boxes[i], 5, 5).Contains(pt)) bh = i;
+            if (h != hover || bh != boxHover) { hover = h; boxHover = bh; Invalidate(); }
         }
-        protected override void OnMouseLeave(EventArgs e) { hover = -1; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { hover = -1; boxHover = -1; Invalidate(); }
         protected override void OnMouseDown(MouseEventArgs e)
         {
             var pt = new PointF(X(e), Y(e));
             for (int i = 0; i < 3; i++)
-                if (Tile(i).Contains(pt) && Current != Order[i]) { Current = Order[i]; Invalidate(); if (Changed != null) Changed(this, EventArgs.Empty); }
+                if (!boxes[i].IsEmpty && RectangleF.Inflate(boxes[i], 5, 5).Contains(pt))
+                {
+                    var its = Cats.Where(c => c.Level == Order[i] && c.Refused == null && (c.Blocked || c.Bytes > 0 || c.Files > 0)).ToList();
+                    if (its.Count > 0 && TickAll != null) TickAll(Order[i], !its.All(c => c.Checked));
+                    return;
+                }
+            for (int i = 0; i < 3; i++)
+                if (Tile(i).Contains(pt) && Current != Order[i])
+                {
+                    markFrom = MarkAt(); markTo = i; slideClock.Restart(); slide.Start();   // the marker slides over
+                    Current = Order[i]; Invalidate(); if (Changed != null) Changed(this, EventArgs.Empty);
+                }
+        }
+
+        // "14 of 17 MB" when both share a unit, else "900 MB of 2.1 GB"
+        static string Of(long a, long b)
+        {
+            string x = Engine.Fmt(a), y = Engine.Fmt(b);
+            string ux = x.Substring(x.LastIndexOf(' ') + 1), uy = y.Substring(y.LastIndexOf(' ') + 1);
+            return (ux == uy ? x.Substring(0, x.LastIndexOf(' ')) : x) + " of " + y;
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = Begin(e); g.Clear(Theme.Chassis);
+            if (markTo != Array.IndexOf(Order, Current) && !slide.Enabled) markFrom = markTo = Array.IndexOf(Order, Current);   // set from outside
+            float railY = LH - 3;
+            using (var b = new SolidBrush(Theme.Line)) g.FillRectangle(b, 18, railY, LW - 36, 2);
             for (int i = 0; i < 3; i++)
             {
-                var lvl = Order[i]; var r = Tile(i); bool on = lvl == Current;
+                var lvl = Order[i]; var r = Tile(i); bool on = lvl == Current, hot = hover == i && !on;
                 var items = Cats.Where(c => c.Level == lvl).ToList();
                 long total = items.Sum(c => c.Bytes), ticked = items.Where(c => c.Included).Sum(c => c.CleanBytes);
                 int nTicked = items.Count(c => c.Included && (c.Blocked || c.Bytes > 0 || c.Files > 0));
-                Color fill = on ? Theme.Screen : (hover == i ? ControlPaint.Light(Theme.Key, 0.25f) : Theme.Key);
-                Color ink = on ? Theme.DisplayInk : Theme.Ink, soft = on ? Theme.DisplayMuted : Theme.Soft;
-                using (var p = Theme.Round(new RectangleF(r.X, r.Y + 3, r.Width, r.Height - 3), 6)) using (var b = new SolidBrush(on ? Color.Black : Theme.KeyShadow)) g.FillPath(b, p);
-                using (var p = Theme.Round(new RectangleF(r.X, r.Y, r.Width, r.Height - 3), 6)) using (var b = new SolidBrush(fill)) g.FillPath(b, p);
-                float x = r.X + 16;
-                if (lvl != Level.Safe) { Theme.LevelMark(g, new RectangleF(r.X + 10, r.Y + 12, 5, r.Height - 27), lvl, ink, fill); x = r.X + 24; }
-                string name = Theme.TierName(lvl);
-                using (var b = new SolidBrush(ink)) g.DrawString(name, fName, b, x, r.Y + 10);
-                bool roomy = r.Height >= 80;
-                using (var b = new SolidBrush(soft)) g.DrawString(Theme.TierDesc(lvl), fDesc, b, x, r.Y + (roomy ? 33 : 30));
-                string size = Engine.Fmt(total) + " found"; var ss = g.MeasureString(size, fSize);   // the ticked line says what gets cleaned
-                using (var b = new SolidBrush(ink)) g.DrawString(size, fSize, b, r.Right - 14 - ss.Width, r.Y + 9);
-                // how much of it is ticked, at a glance: a small box (filled when anything is ticked) and "3 of 10 ticked"
                 int nItems = items.Count(c => c.Blocked || c.Bytes > 0 || c.Files > 0);
-                float cy = roomy ? r.Bottom - 31 : r.Bottom - 24;
-                var box = new RectangleF(x, cy + 3, 11, 11);
-                if (nTicked > 0)
+                float x = r.X + 4;
+                // risk in greyscale too: the same small gutter mark as the rows (none for Quick clean)
+                var hf = on ? fSubB : fName2; Color hc = on || hot ? Theme.Ink : Theme.Muted;
+                string nameDot = Theme.TierName(lvl);
+                using (var b = new SolidBrush(hc)) g.DrawString(nameDot, hf, b, x, r.Y + 10);
+                float bx2 = x + g.MeasureString(nameDot, hf).Width + 10;
+                boxes[i] = RectangleF.Empty;
+                if (nItems > 0)   // the box: filled with a tick (all), a dash (some), or empty (none)
                 {
-                    using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, box);
-                    using (var pen = new Pen(on ? Theme.Ink : Theme.Ink, 1.6f)) g.DrawLines(pen, new[] { new PointF(box.X + 2.5f, box.Y + 5.5f), new PointF(box.X + 4.8f, box.Y + 8), new PointF(box.X + 8.8f, box.Y + 3) });
+                    float th2 = g.MeasureString("Ag", hf).Height;
+                    var bxr = new RectangleF(bx2, r.Y + 10 + th2 / 2 - 7.5f, 14, 14); boxes[i] = bxr;
+                    bool all = nTicked == nItems;
+                    if (nTicked == 0) using (var pen = new Pen(on || hot ? Theme.Ink : Theme.Soft, 1.4f)) g.DrawRectangle(pen, bxr.X, bxr.Y, bxr.Width, bxr.Height);
+                    else
+                    {
+                        using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, bxr);
+                        if (all) using (var pen = new Pen(Theme.OnOrange, 1.7f)) g.DrawLines(pen, new[] { new PointF(bxr.X + 3f, bxr.Y + 7.2f), new PointF(bxr.X + 6f, bxr.Y + 10.2f), new PointF(bxr.X + 11.2f, bxr.Y + 3.8f) });
+                        else using (var b = new SolidBrush(Theme.OnOrange)) g.FillRectangle(b, bxr.X + 3.5f, bxr.Y + 6.1f, 7, 2f);
+                    }
+                    bx2 = bxr.Right + 6;
                 }
-                else using (var pen = new Pen(soft, 1.3f)) g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
-                string sub = nItems == 0 ? "Nothing to clean here right now"
-                           : nTicked == 0 ? "None of " + nItems + " ticked"
-                           : nTicked + " of " + nItems + " ticked" + (ticked > 0 ? "  ·  " + Engine.Fmt(ticked) : "");
-                using (var b = new SolidBrush(nTicked > 0 ? ink : soft)) g.DrawString(sub, nTicked > 0 ? fSubB : fSub, b, x + 17, cy);
+                string count = nItems == 0 ? "nothing to clean" : nTicked == 0 ? "none ticked" : nTicked == nItems && ticked >= total ? "all " + Engine.Fmt(total) + " ticked" : Of(ticked, total) + " ticked";
+                using (var b = new SolidBrush(hc))
+                using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                    g.DrawString(count, hf, b, new RectangleF(bx2, r.Y + 10, Math.Max(10, r.Right - bx2 - 10), 22), sf);
+                if (nItems > 0)   // the box and its words are one target
+                {
+                    float cw = Math.Min(g.MeasureString(count, hf).Width, r.Right - bx2 - 10);
+                    boxes[i] = new RectangleF(boxes[i].X, boxes[i].Y, bx2 + cw - boxes[i].X, boxes[i].Height);
+                    if (boxHover == i) using (var pen = new Pen(hc)) g.DrawLine(pen, bx2 + 2, r.Y + 30, bx2 + cw - 2, r.Y + 30);
+                }
+                // the big size, and what's in it beside the number
+                string size = Engine.Fmt(total); var ns = g.MeasureString(size, fBig);
+                float ny = r.Y + 32;
+                using (var b = new SolidBrush(on || hot ? Theme.Ink : Theme.Muted)) g.DrawString(size, fBig, b, r.X, ny);
+                float dx = r.X + ns.Width + 6, dw = r.Right - dx - 12;
+                if (dw > 60)
+                    using (var b = new SolidBrush(on ? Theme.Muted : Theme.Soft))
+                    using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisWord })
+                    {
+                        string d = Theme.TierDesc(lvl);
+                        var dm = g.MeasureString(d, fDesc, (int)dw);
+                        float dh = Math.Min(dm.Height, 36);
+                        g.DrawString(d, fDesc, b, new RectangleF(dx, ny + ns.Height / 2 - dh / 2 + 1, dw, dh + 2), sf);
+                    }
             }
+            // the orange marker under the open section, sliding when you switch
+            float tw = (LW - 36) / 3f, mx = 18 + MarkAt() * tw;
+            using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, mx, railY - 2, tw, 5);
         }
     }
 
     // The items of one section. One strong checkbox per row, a "what happens" line, the size, and a chevron:
     // the whole row opens the item's panel; only the box ticks it.
     // Light / Dark / System: three small segments at the top right. The lit one is dark (a pressed key).
+    // Top right: the guide key, then Light / Dark / System as three icon keys. Hovering one names it beside them.
     class ThemeSwitch : Canvas
     {
-        static readonly string[] Names = { "LIGHT", "DARK", "SYSTEM" };
+        static readonly string[] Names = { "Light", "Dark", "System default" };
         static readonly Theme.Mode[] Modes = { Theme.Mode.Light, Theme.Mode.Dark, Theme.Mode.System };
-        readonly Font f = Theme.CSemi(8.5f);
-        int hover = -1;
-        const float SegW = 62, H = 24;
+        public event EventHandler GuideClicked;
+        readonly Font fTip = Theme.CSans(8.75f), fQ = Theme.CBold(10f);
+        int hover = -1;   // 0..2 theme, 3 guide
+        const float C = 26, Gap = 10, H = 26;
+        public static int DesignWidth { get { return (int)(C * 4 + Gap + 140); } }
+        float X0 { get { return LW - C * 3; } }               // the theme group
+        RectangleF GuideR { get { return new RectangleF(X0 - Gap - C, 1, C, H - 2); } }
+        RectangleF Cell(int i) { return new RectangleF(X0 + i * C, 1, C, H - 2); }
+        public RectangleF Bounds_ { get { var g = GuideR; return new RectangleF(g.X, 0, LW - g.X, H); } }   // for the guide's last step
+        int Hit(float x, float y) { for (int i = 0; i < 3; i++) if (Cell(i).Contains(x, y)) return i; return GuideR.Contains(x, y) ? 3 : -1; }
         public ThemeSwitch() { Cursor = Cursors.Hand; }
-        public int DesignWidth { get { return (int)(SegW * 3 + 58); } }
-        float X0 { get { return LW - SegW * 3; } }
-        int Seg(float x, float y) { int i = (int)((x - X0) / SegW); return x >= X0 && y >= 0 && y < H && i >= 0 && i < 3 ? i : -1; }
-        protected override void OnMouseMove(MouseEventArgs e) { int h = Seg(X(e), Y(e)); if (h != hover) { hover = h; Invalidate(); } }
+        protected override void OnMouseMove(MouseEventArgs e) { int h = Hit(X(e), Y(e)); Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; if (h != hover) { hover = h; Invalidate(); } }
         protected override void OnMouseLeave(EventArgs e) { hover = -1; Invalidate(); }
-        protected override void OnMouseClick(MouseEventArgs e) { int i = Seg(X(e), Y(e)); if (i >= 0) { Theme.SetMode(Modes[i]); Invalidate(); } }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            int i = Hit(X(e), Y(e));
+            if (i == 3) { if (GuideClicked != null) GuideClicked(this, EventArgs.Empty); }
+            else if (i >= 0) { Theme.SetMode(Modes[i]); Invalidate(); }
+        }
+
+        static void Icon(Graphics g, int i, RectangleF r, Color ink, Color bg)
+        {
+            float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+            using (var pen = new Pen(ink, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var b = new SolidBrush(ink))
+            {
+                if (i == 0)   // sun
+                {
+                    g.FillEllipse(b, cx - 3.6f, cy - 3.6f, 7.2f, 7.2f);
+                    for (int k = 0; k < 8; k++) { double a = k * Math.PI / 4; g.DrawLine(pen, cx + (float)Math.Cos(a) * 6f, cy + (float)Math.Sin(a) * 6f, cx + (float)Math.Cos(a) * 8.2f, cy + (float)Math.Sin(a) * 8.2f); }
+                }
+                else if (i == 1)   // moon
+                {
+                    using (var disc = new GraphicsPath())
+                    using (var cut = new GraphicsPath())
+                    {
+                        disc.AddEllipse(cx - 6.5f, cy - 6.5f, 13, 13); cut.AddEllipse(cx - 2.2f, cy - 9.2f, 12, 12);
+                        using (var rg = new Region(disc)) { rg.Exclude(cut); g.FillRegion(b, rg); }
+                    }
+                }
+                else if (i == 2)   // system: half light, half dark
+                {
+                    g.DrawEllipse(pen, cx - 6.5f, cy - 6.5f, 13, 13);
+                    g.FillPie(b, cx - 6.5f, cy - 6.5f, 13, 13, 90, 180);
+                }
+                else   // guide
+                {
+                    g.DrawEllipse(pen, cx - 7.5f, cy - 7.5f, 15, 15);
+                    using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }) g.DrawString("?", Theme.CBold(8.5f), b, new RectangleF(cx - 8, cy - 7.5f, 16, 16), sf);
+                }
+            }
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = Begin(e); g.Clear(Theme.Chassis);
-            using (var b = new SolidBrush(Theme.Muted)) { var ts = g.MeasureString("Theme", Theme.CSans(8.5f)); g.DrawString("Theme", Theme.CSans(8.5f), b, X0 - ts.Width - 8, 4); }
-            var all = new RectangleF(X0, 0, SegW * 3, H - 1);
-            using (var p = Theme.Round(all, 3)) using (var b = new SolidBrush(Theme.Key)) g.FillPath(b, p);
+            // the guide key: a small key of its own
+            var gr = GuideR;
+            using (var p = Theme.Round(new RectangleF(gr.X, gr.Y + 2, gr.Width, gr.Height), 4)) using (var b = new SolidBrush(Theme.KeyShadow)) g.FillPath(b, p);
+            using (var p = Theme.Round(gr, 4)) using (var b = new SolidBrush(hover == 3 ? ControlPaint.Light(Theme.Key, 0.3f) : Theme.Key)) g.FillPath(b, p);
+            Icon(g, 3, gr, Theme.Ink, Theme.Key);
+            // the theme group: one strip, the chosen one lit
+            var all = new RectangleF(X0, 1, C * 3, H - 2);
+            using (var p = Theme.Round(new RectangleF(all.X, all.Y + 2, all.Width, all.Height), 4)) using (var b = new SolidBrush(Theme.KeyShadow)) g.FillPath(b, p);
+            using (var p = Theme.Round(all, 4)) using (var b = new SolidBrush(Theme.Key)) g.FillPath(b, p);
             for (int i = 0; i < 3; i++)
             {
-                var r = new RectangleF(X0 + i * SegW, 0, SegW, H - 1);
-                bool on = Theme.Chosen == Modes[i];
-                if (on) using (var p = Theme.Round(RectangleF.Inflate(r, -2, -2), 2)) using (var b = new SolidBrush(Theme.Ink)) g.FillPath(b, p);
-                else if (i == hover) using (var p = Theme.Round(RectangleF.Inflate(r, -2, -2), 2)) using (var b = new SolidBrush(Theme.Hover)) g.FillPath(b, p);
-                using (var b = new SolidBrush(on ? Theme.Pane : Theme.Muted))
-                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                    g.DrawString(Names[i], f, b, r, sf);
+                var r = Cell(i); bool on = Theme.Chosen == Modes[i];
+                var inner = RectangleF.Inflate(r, -2.5f, -2.5f);
+                if (on) using (var p = Theme.Round(inner, 3)) using (var b = new SolidBrush(Theme.Ink)) g.FillPath(b, p);
+                else if (i == hover) using (var p = Theme.Round(inner, 3)) using (var b = new SolidBrush(Theme.Hover)) g.FillPath(b, p);
+                Icon(g, i, r, on ? Theme.Pane : Theme.Muted, on ? Theme.Ink : Theme.Key);
             }
-            using (var p = Theme.Round(all, 3)) using (var pen = new Pen(Theme.Line)) g.DrawPath(pen, p);
+            // the name of what's under the pointer, beside the keys
+            if (hover >= 0)
+            {
+                string t = hover == 3 ? "Guide: how Space Hunter works" : Names[hover] + (Theme.Chosen == Modes[hover] ? "  (on)" : "");
+                var m = g.MeasureString(t, fTip);
+                using (var b = new SolidBrush(Theme.Ink)) g.DrawString(t, fTip, b, gr.X - 10 - m.Width, (H - m.Height) / 2 + 1);
+            }
         }
     }
 
@@ -238,7 +355,7 @@ namespace SpaceHunter
         public Category Selected, OpenItem;   // OpenItem: the row whose panel is showing
         public event EventHandler SelectionChanged, CheckedChanged, PanelRequested;
         Font fName = Theme.CSemi(10.5f), fNameSel = Theme.CBold(10.5f), fLine = Theme.CSans(9f), fSize = Theme.CSemi(11f),
-             fFiles = Theme.CSans(8.5f), fTool = Theme.CSemi(9f), fTitle = Theme.CBold(10f), fNote = Theme.CMonoSemi(7.5f);
+             fFiles = Theme.CSans(8.5f), fTool = Theme.CSemi(9f), fTitle = Theme.CBold(10f), fNote = Theme.CMonoSemi(7.5f), fNoticeB = Theme.CSemi(9.75f);
         RectangleF tickAll, tickNone;
 
         public CategoryList() { TabStop = true; }
@@ -248,7 +365,8 @@ namespace SpaceHunter
         public void Relayout()
         {
             rows.Clear(); float y = 0;
-            rows.Add(new Row { Y = y, H = ToolsH, Tools = true }); y += ToolsH;
+            float th = ToolsH + 30;   // room for the section's call to action
+            rows.Add(new Row { Y = y, H = th, Tools = true }); y += th;
             var items = cats.Where(x => x.Level == Tier).ToList();
             var full = items.Where(x => !IsEmpty(x)).OrderByDescending(x => x.Bytes).ToList();
             var empty = items.Where(IsEmpty).ToList();
@@ -372,7 +490,15 @@ namespace SpaceHunter
                     using (var b = new SolidBrush(Theme.Ink)) { g.DrawString(n, fTool, b, tickAll.X + 2, top + 14); g.DrawString(a, fTool, b, tickNone.X + 2, top + 14); }
                     using (var p = new Pen(Theme.Ink)) { g.DrawLine(p, tickAll.X + 2, top + 33, tickAll.Right - 2, top + 33); g.DrawLine(p, tickNone.X + 2, top + 33, tickNone.Right - 2, top + 33); }
                     // what this section is, in one plain line
-                    using (var b = new SolidBrush(Theme.Muted)) g.DrawString(Theme.TierExplain(Tier), fLine, b, new RectangleF(22, top + 40, Math.Min(w - 40, 760), 36));
+                    float ew = Math.Min(w - 40, 820);
+                    var em = g.MeasureString(Theme.TierExplain(Tier), fLine, (int)ew);
+                    using (var b = new SolidBrush(Theme.Muted)) g.DrawString(Theme.TierExplain(Tier), fLine, b, new RectangleF(22, top + 40, ew, 38));
+                    // the call to action: its own line, an orange bar and orange-deep words
+                    float cy2 = top + 40 + Math.Min(em.Height, 38) + 8;
+                    using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, 22, cy2 + 1, 3, 17);
+                    using (var b = new SolidBrush(Theme.OrangeDeep))
+                    using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisWord, FormatFlags = StringFormatFlags.NoWrap })
+                        g.DrawString(Theme.TierCta(Tier), fNoticeB, b, new RectangleF(32, cy2, w - 50, 20), sf);
                     using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
                     continue;
                 }
@@ -799,6 +925,8 @@ namespace SpaceHunter
         bool workerRunning;
         readonly System.Windows.Forms.Timer ageDebounce = new System.Windows.Forms.Timer { Interval = 600 };
         Category pendingAge;
+        public int GuideAt = -1;   // test hook: open the guide at this step, then snapshot
+        ThemeSwitch topKeys; GuideOverlay guide; bool testRun;   // test runs never open the guide by themselves
         public string SnapshotPath, OpenPanelFor, FramesDir, KeepPlaceOut; public List<string> PickPaths;   // test hook: picks in the opened item
 
         // Composited painting: the whole window is drawn off-screen first, so the sliding panel never tears.
@@ -815,10 +943,11 @@ namespace SpaceHunter
             disp.Dock = DockStyle.Top; disp.Height = Theme.D(disp.DesignHeight);
             var top = new Panel { Dock = DockStyle.Top, Height = Theme.D(disp.DesignHeight + 8 + 32 + 64), Padding = Theme.Pad(18, 8, 18, 0), BackColor = Theme.Chassis };
             var strip = new Panel { Dock = DockStyle.Top, Height = Theme.D(32), BackColor = Theme.Chassis };
-            var sw = new ThemeSwitch { Dock = DockStyle.Right, Width = Theme.D(new ThemeSwitch().DesignWidth) };
-            strip.Controls.Add(sw);
+            topKeys = new ThemeSwitch { Dock = DockStyle.Right, Width = Theme.D(ThemeSwitch.DesignWidth) };
+            strip.Controls.Add(topKeys);
+            topKeys.GuideClicked += (s, e) => StartGuide(0);
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            scanKey = new Key("scan again"); finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("reset to default");
+            scanKey = new Key("scan again"); finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("back to recommended");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
             keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
@@ -850,6 +979,12 @@ namespace SpaceHunter
             list.SelectionChanged += (s, e) => { if (drawer.IsOpen && list.Selected != null) { drawer.Open(list.Selected); list.OpenItem = list.Selected; } };
             list.PanelRequested += (s, e) => { var c = (Category)s; if (drawer.IsOpen && drawer.Panel.Current == c) drawer.Close(); else drawer.Open(c); list.OpenItem = drawer.IsOpen ? drawer.Panel.Current : null; list.Invalidate(); };
             list.CheckedChanged += (s, e) => { Settings.Save(cats); Refresh_(); };
+            tiers.TickAll += (lvl, on) =>
+            {
+                foreach (var c in cats.Where(x => x.Level == lvl && x.Refused == null && (x.Blocked || x.Bytes > 0 || x.Files > 0))) { c.Checked = on; c.Picks.Clear(); }
+                Settings.Save(cats); list.Invalidate(); Refresh_();
+                if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current, true);
+            };
             drawer.Panel.CloseRequested += (s, e) => { drawer.Close(); list.OpenItem = null; list.Invalidate(); };
             drawer.Panel.AgeChanged += (s, e) => { pendingAge = (Category)s; Settings.Save(cats); list.Invalidate(); ageDebounce.Stop(); ageDebounce.Start(); };
             drawer.Panel.KeepChanged += (s, e) => Enqueue(new[] { (Category)s });
@@ -886,15 +1021,62 @@ namespace SpaceHunter
                 status.Text = "Cleaning is still running. Press Stop in its window first, or wait for it to finish.";
                 foreach (Form f in OwnedForms) if (f is ProgressForm) f.Activate();
             };
-            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); e.Handled = true; } };
+            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && guide == null && drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); e.Handled = true; } };
             Shown += (s, e) =>
             {
                 if (PickPaths != null && OpenPanelFor != null) { var pc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (pc != null) { pc.Checked = false; foreach (var pp in PickPaths) pc.Picks.Add(pp); } }
+                testRun = SnapshotPath != null || FramesDir != null || KeepPlaceOut != null || GuideAt >= 0;
                 list.Focus(); Enqueue(cats);
                 if (SnapshotPath == null && FramesDir == null)   // one quiet check for a newer version; offline = nothing happens
                     new Thread(() => { var r = Updater.Check(); if (r != null) try { BeginInvoke((Action)(() => ShowUpdate(r))); } catch { } }) { IsBackground = true }.Start();
             };
             ReadDisk();
+        }
+
+        // The first-run guide: the window dims, a lit cut-out sits on each real part in turn. "?" replays it.
+        RectangleF Part(Control c, int extraH = 0)
+        {
+            var p = PointToClient(c.Parent.PointToScreen(c.Location));
+            return new RectangleF(p.X / Theme.S, p.Y / Theme.S, c.Width / Theme.S, (c.Height + extraH) / Theme.S);
+        }
+        void StartGuide(int at)
+        {
+            if (guide != null) return;
+            if (drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); }
+            Refresh();   // paint everything first: the dimmed backdrop is a picture of this window
+            Func<RectangleF> rail = () => { var r = Part(tiers); return new RectangleF(r.X + 8, r.Y, r.Width - 16, r.Height); };
+            Func<RectangleF> rows = () => { var lp = Part(list); return new RectangleF(lp.X + 8, lp.Y + 110, lp.Width - 16, Math.Min(lp.Height - 110, 3 * 54)); };
+            Action openFirst = () =>
+            {
+                var first = cats.Where(c => c.Level == tiers.Current && (c.Bytes > 0 || c.Files > 0)).OrderByDescending(c => c.Bytes).FirstOrDefault();
+                if (first != null && (!drawer.IsOpen || drawer.Panel.Current != first)) { list.Selected = first; list.OpenItem = first; drawer.Open(first, true); list.Invalidate(); Refresh(); }
+            };
+            Action closePanel = () => { if (drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); Refresh(); } };
+            var steps = new List<GuideStep>
+            {
+                new GuideStep { Get = () => Part(disp), Title = "This is what you can free",
+                    Body = "The big number is what's ticked right now. The bar is your disk: orange is ticked, hatched is what you could still free. On the right, your free space over time." },
+                new GuideStep { Get = rail, Enter = closePanel, Title = "Three sections, by how careful to be",
+                    Body = "Quick clean is safe and ticked for you. Big caches come back when they're needed. Deep clean may include your work. The small box ticks or unticks a whole section." },
+                new GuideStep { Get = rows, Enter = closePanel, Title = "Each row is one thing to clean",
+                    Body = "Tick a row to include it; the size is what it would free. Click the row itself to see what it is." },
+                new GuideStep { Get = () => Part(drawer.Panel), Enter = openFirst, Title = "What it is, what goes, what happens after",
+                    Body = "Every item explains itself. Some let you choose \u201conly older than\u201d or \u201ceverything\u201d. Under What's inside, untick files to keep them, or tick just a few to clean only those." },
+                new GuideStep { Get = () => Part(finderKey), Enter = closePanel, Title = "See what fills your disk",
+                    Body = "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list." },
+                new GuideStep { Get = () => Part(protectKey), Title = "Keep what must never go",
+                    Body = "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already." },
+                new GuideStep { Get = () => Part(resetKey), Title = "Back to recommended",
+                    Body = "Puts the ticks and ages back to how they started. Scan again measures everything afresh." },
+                new GuideStep { Get = () => Part(cleanKey), Title = "Clean always asks first",
+                    Body = "You see the list of what goes and choose Permanently delete or Recycle Bin. When it's done, a ring shows the space you got back." },
+                new GuideStep { Get = () => { var r = Part(topKeys); var b = topKeys.Bounds_; return new RectangleF(r.X + b.X, r.Y + b.Y, b.Width, b.Height); },
+                    Title = "Your look, and this guide",
+                    Body = "Light, dark or your computer's setting. The ? key shows this guide again whenever you want." },
+            };
+            guide = new GuideOverlay(this, steps, at);
+            guide.Closed += () => { var g = guide; guide = null; Controls.Remove(g); g.Dispose(); list.Focus(); };
+            Controls.Add(guide); guide.BringToFront(); guide.Focus();
         }
 
         // (Re)build the item list, e.g. after a folder is added to or removed from the cleanup list.
@@ -913,7 +1095,7 @@ namespace SpaceHunter
             Settings.Save(cats);
             if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current);
             Enqueue(cats);
-            status.Text = "Back to default: Quick clean items ticked, default ages. Protected folders stay protected.";
+            status.Text = "Back to recommended: Quick clean ticked, the usual ages. Protected folders stay protected.";
         }
 
         void PlaceKeys(Control keys)
@@ -1065,7 +1247,19 @@ namespace SpaceHunter
                                 File.WriteAllText(KeepPlaceOut, before + " " + after); Environment.Exit(0); };
                             kt.Start();
                         } } OpenPanelFor = null; }
+                    if (GuideAt >= 0 && SnapshotPath != null)   // test hook
+                    {
+                        var sp = SnapshotPath; SnapshotPath = null; StartGuide(GuideAt);
+                        var gt = new System.Windows.Forms.Timer { Interval = 700 };
+                        gt.Tick += (s8, e8) => { gt.Stop(); Program.Snap(this, sp); Close(); };
+                        gt.Start();
+                    }
                     if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
+                    else if (!GuideOverlay.Seen && !testRun && guide == null && !cleaning)
+                    {
+                        if (ActiveForm == this) StartGuide(0);
+                        else { EventHandler once = null; once = (s7, e7) => { Activated -= once; if (guide == null && !cleaning && !GuideOverlay.Seen) StartGuide(0); }; Activated += once; }   // wait until you're looking at it
+                    }
                 }));
             });
             t.IsBackground = true; t.Start();

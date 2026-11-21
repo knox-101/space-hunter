@@ -3,6 +3,26 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.6.0 (2026-11-21)
+
+- **A finish you can't miss.** When cleaning ends, the display fills the window and your drive appears as a ring:
+  the space you freed lifts out of it as an orange wedge, crumbles away, and the ring closes up while the free space
+  counts up in the middle. One pulse says it's done, then a short list shows what went, with the total at the bottom.
+  "What was cleaned" still opens the full log. Windows' "reduce animations" setting skips straight to the result.
+- **"Deep clean"** is the new name for the third section (old AI chats and workspaces, old installers in Downloads,
+  folders you added). Opening it shows a clear note that it may include your work, so check each item first.
+- **The sections sit on a rail.** Each shows its size in big type with what's in it beside, and a small box that
+  shows whether everything, some or nothing in it is ticked; click the box to tick or untick the whole section. An
+  orange marker slides under the one you're looking at. Each section opens with one line on what to do with it
+  (Quick clean: clean it every time; Deep clean: check each item first).
+- **A first-run guide** walks through the display, the sections, the rows, an item's panel, the Storage map,
+  Protected folders, Back to recommended, Clean and the theme keys, one at a time. Skip it any time; the **?** key at
+  the top right shows it again.
+- **Light, Dark and System are now three small icon keys** at the top right; hover one to see its name.
+- **"Reset to default" is now "Back to recommended".**
+- Sizes from 1000 MB up now read in GB.
+- Quick clean now says what it is: safe to clean as often as you like.
+
 ## 1.5.2 (2026-11-20)
 
 - **Permanently delete is chosen to start with**, every time you press Clean, and **Recycle Bin / Trash** is still

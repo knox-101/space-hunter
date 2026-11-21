@@ -192,14 +192,22 @@ namespace SpaceHunter
         public static Font CMonoSemi(float s) { return Make(monoSemi, s / A, FontStyle.Regular); }
 
         // Names a newcomer can act on without opening anything: the first is the no-worry clean.
-        public static string TierName(Level l) { return l == Level.Safe ? "Quick clean" : l == Level.Review ? "Big caches & history" : "Personal & work items"; }
-        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Big caches that download again, or old history" : "Can hold your work or history. Check before cleaning"; }
+        public static string TierName(Level l) { return l == Level.Safe ? "Quick clean" : l == Level.Review ? "Big caches & history" : "Deep clean"; }
+        public static string TierDesc(Level l) { return l == Level.Safe ? "Caches and leftovers that rebuild" : l == Level.Review ? "Big caches that download again, or old history" : "Old AI chats, old downloads, folders you added"; }
         // one plain line under each section's heading, so nobody has to guess what's in it
         public static string TierExplain(Level l)
         {
-            return l == Level.Safe ? "Caches, temp files and leftovers that apps and Windows rebuild or no longer need. Your files, logins and passwords aren't touched. Clean these without worry; some things load a little slower once."
-                 : l == Level.Review ? "Things that come back by downloading them again, or history you might still want. Read each one before you tick it."
-                 : "These can hold your own work or history. Nothing here is ticked for you; open an item to see exactly what goes.";
+            return l == Level.Safe ? "Caches, temp files and leftovers that apps and Windows rebuild or no longer need. Your files, logins and passwords aren't touched."
+                 : l == Level.Review ? "Things that download again when they're needed, or history you might still want."
+                 : "Old AI agent chats and workspaces, old installers in Downloads, and folders you added. Nothing here is ticked for you.";
+        }
+
+        // the one thing to do in each section, on its own highlighted line
+        public static string TierCta(Level l)
+        {
+            return l == Level.Safe ? "Clean this every time you open Space Hunter: it's always safe."
+                 : l == Level.Review ? "Tick what you won't need soon. Each item says what comes back, and how."
+                 : "This may include your work. Open each item and check before cleaning.";
         }
 
         public static GraphicsPath Round(RectangleF r, float rad)
@@ -252,8 +260,8 @@ namespace SpaceHunter
         // "34.8" + "GB"
         public static void SizeParts(long b, out string num, out string unit)
         {
-            if (b >= 1L << 40) { num = (b / 1099511627776.0).ToString("0.00"); unit = "TB"; }
-            else if (b >= 1L << 30) { num = (b / 1073741824.0).ToString("0.0"); unit = "GB"; }
+            if (b >= 1000L << 30) { num = (b / 1099511627776.0).ToString("0.00"); unit = "TB"; }
+            else if (b >= 1000L << 20) { num = (b / 1073741824.0).ToString("0.0"); unit = "GB"; }
             else if (b >= 1L << 20) { num = (b / 1048576.0).ToString("0"); unit = "MB"; }
             else if (b > 0) { num = (b / 1024.0).ToString("0"); unit = "KB"; }
             else { num = "0"; unit = "GB"; }
