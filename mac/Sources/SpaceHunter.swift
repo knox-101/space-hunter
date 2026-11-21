@@ -581,6 +581,11 @@ enum Theme {
         : l == .review ? "Things that download again when they're needed, or history you might still want."
         : "Old AI agent chats and workspaces, old installers in Downloads, and folders you added. Nothing here is ticked for you."
     }
+    // the last two words held together, so a wrapped line never ends with one word on its own
+    static func keepLastTwo(_ s: String) -> String {
+        guard let r = s.range(of: " ", options: .backwards) else { return s }
+        return s.replacingCharacters(in: r, with: "\u{00A0}")
+    }
     // the one thing to do in each section, on its own highlighted line
     static func tierCta(_ l: Level) -> String {
         l == .safe ? "Clean this every time you open Space Hunter: it's always safe."
@@ -1269,7 +1274,7 @@ struct DisplayView: View {
                         .font(Theme.semi(13)).foregroundColor(Color(hex: 0xB4B1AA))
                     HStack(alignment: .center, spacing: 16) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(p.0).font(Theme.display(76))
+                            Text(p.0).font(Theme.display(76)).padding(.leading, -7)   // the glyph side bearing: the digit lines up with the label and bar
                             Text(p.1).font(Theme.display(28))
                         }.foregroundColor(Theme.orange)
                         // beside the number: what kind of space it is, and what else is there if you look
@@ -1394,7 +1399,10 @@ struct TierColumn: View {
         let boxState: Int = nTicked == 0 ? 0 : nTicked == nItems ? 2 : 1
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .center, spacing: 0) {
-                Text(Theme.tierName(lvl)).font(headFont).foregroundColor(headInk).lineLimit(1).fixedSize()
+                ZStack(alignment: .leading) {   // sized by the semibold name, so the box never shifts when the open section changes
+                    Text(Theme.tierName(lvl)).font(Theme.semi(13)).lineLimit(1).fixedSize().hidden()
+                    Text(Theme.tierName(lvl)).font(headFont).foregroundColor(headInk).lineLimit(1).fixedSize()
+                }
                 if nItems > 0 {
                     // the box and its words are one target (reaching 5 pt round them): ticks the whole section, or
                     // unticks it when all of it is ticked; the open section stays as it is
@@ -1413,13 +1421,13 @@ struct TierColumn: View {
             }
             HStack(alignment: .center, spacing: 8) {
                 // the open section's size is ink: orange means "ticked" in the display
-                Text(Engine.fmt(total)).font(Theme.display(34)).foregroundColor(on || hot ? Theme.ink : Theme.muted)
+                Text(Engine.fmt(total)).font(Theme.display(34)).foregroundColor(on || hot ? Theme.ink : Theme.muted).padding(.leading, -3)
                     .lineLimit(1).fixedSize().layoutPriority(1)
-                Text(Theme.tierDesc(lvl)).font(Theme.sans(12)).foregroundColor(on ? Theme.muted : Theme.soft)
+                Text(Theme.keepLastTwo(Theme.tierDesc(lvl))).font(Theme.sans(12)).foregroundColor(on ? Theme.muted : Theme.soft)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.leading, 4).padding(.trailing, 14).padding(.top, 6).padding(.bottom, 12)
+        .padding(.trailing, 14).padding(.top, 6).padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onHover { h in if h { hover = lvl } else if hover == lvl { hover = nil } }
@@ -1443,9 +1451,9 @@ struct SectionBox: View {
     var body: some View {
         ZStack {
             if state == 0 {
-                Rectangle().strokeBorder(ink, lineWidth: 1.4)
+                RoundedRectangle(cornerRadius: 2).strokeBorder(ink, lineWidth: 1.4)
             } else {
-                Rectangle().fill(Theme.orange)
+                RoundedRectangle(cornerRadius: 2).fill(Theme.orange)
                 if state == 2 {
                     Path { p in p.move(to: CGPoint(x: 3, y: 7.2)); p.addLine(to: CGPoint(x: 6, y: 10.2)); p.addLine(to: CGPoint(x: 11.2, y: 3.8)) }
                         .stroke(Theme.onOrange, style: StrokeStyle(lineWidth: 1.7, lineCap: .square))
@@ -1473,24 +1481,24 @@ struct CategoryList: View {
                         Button("Tick all") { setAll(true, idx) }.buttonStyle(.plain).font(Theme.semi(12))
                         Button("Untick all") { setAll(false, idx) }.buttonStyle(.plain).font(Theme.semi(12)).padding(.leading, 14)
                     }
-                    .padding(.horizontal, 22).padding(.top, 12)
+                    .padding(.horizontal, 18).padding(.top, 12)
                     // what this section is, in one plain line
-                    Text(Theme.tierExplain(state.tier)).font(Theme.sans(12)).foregroundColor(Theme.muted)
+                    Text(Theme.keepLastTwo(Theme.tierExplain(state.tier))).font(Theme.sans(12)).foregroundColor(Theme.muted)
                         .frame(maxWidth: 820, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 22).padding(.top, 4)
+                        .padding(.horizontal, 18).padding(.top, 8)
                     // the call to action: its own line, an orange bar and orange-deep words
                     HStack(alignment: .center, spacing: 7) {
                         Rectangle().fill(Theme.orange).frame(width: 3, height: 17)
                         Text(Theme.tierCta(state.tier)).font(Theme.semi(13)).foregroundColor(Theme.orangeDeep).lineLimit(1)
                     }
-                    .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 12)
-                    Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 22)
+                    .padding(.horizontal, 18).padding(.vertical, 8)
+                    Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 18)
                 }
                 .guidePart(12)
                 ForEach(full, id: \.self) { i in Row(index: i, compact: false) }
                 if !empty.isEmpty {
                     Text("Nothing to clean right now (\(empty.count))").font(Theme.sans(12)).foregroundColor(Theme.soft)
-                        .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 6)
+                        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 6)
                     ForEach(empty, id: \.self) { i in Row(index: i, compact: true) }
                 }
             }
@@ -1560,9 +1568,9 @@ struct Row: View {
             }
             Chevron(color: isOpen ? Theme.orange : (hovering ? Theme.ink : Theme.soft))
         }
-        .padding(.leading, 22).padding(.trailing, 18).frame(height: compact ? 40 : 56)
+        .padding(.horizontal, 18).frame(height: compact ? 40 : 56)
         .background(isOpen ? Theme.selected : (hovering ? Theme.hover : Color.clear))
-        .overlay(Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, 22), alignment: .bottom)
+        .overlay(Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 18), alignment: .bottom)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { state.openID = isOpen ? nil : c.id }
@@ -1592,7 +1600,7 @@ struct DetailPanel: View {
                     Spacer()
                     Button("Close") { state.openID = nil }.buttonStyle(KeyStyle())
                 }
-                Text(c.name).font(Theme.bold(19)).foregroundColor(Theme.ink).lineLimit(2)
+                Text(c.name).font(Theme.bold(19)).foregroundColor(Theme.ink).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Text(stats).font(Theme.sans(13)).foregroundColor(Theme.ink).padding(.bottom, 6)
                 // three short lines always in view; the full notes open with "More about this item"
                 VStack(alignment: .leading, spacing: 4) {
@@ -1897,7 +1905,7 @@ enum FinishBeat {
                      before: Int64, after: Int64, total: Int64, disk: String) {
         let W = size.width, pad: CGFloat = 20
         let fin = ms >= 0
-        let by: CGFloat = 118, bh: CGFloat = 12
+        let by: CGFloat = 126, bh: CGFloat = 12
         if !fin || details || ms < ringAt + 200 {
             let a: Double = fin && !details ? 1 - ease(ms / (ringAt + 200)) : 1
             let bw = W - 2 * pad
@@ -2005,7 +2013,7 @@ struct ProgressSheet: View {
     @State private var details = false        // the log back under a small display
     @State private var gen = 0
     @State private var glide = BarGlide()
-    private let baseH: CGFloat = 150
+    private let baseH: CGFloat = 158
 
     var finished: Bool { state.cleanDone && !state.cleanStopped }
     var canClose: Bool { state.cleanDone && (state.cleanStopped || doneBeat) }
@@ -2127,12 +2135,13 @@ struct ProgressSheet: View {
                         Text("DONE").font(Theme.display(24)).foregroundColor(Theme.screenInk)
                         Text(label.replacingOccurrences(of: "Done  ·  ", with: "·  ")).font(Theme.semi(12)).foregroundColor(Theme.screenMuted).lineLimit(1)
                     }
-                    .frame(height: 16, alignment: .bottomLeading)
+                    .frame(height: 20, alignment: .bottomLeading)
                 } else {
                     Text(label).font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA)).lineLimit(1)
+                        .frame(height: 20, alignment: .bottomLeading)
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(p.0).font(Theme.display(60))
+                    Text(p.0).font(Theme.display(60)).padding(.leading, -5)   // side bearing
                     Text(p.1 + (binOnly ? " TO TRASH" : " FREED")).font(Theme.display(24))
                     Spacer()
                     if !fin || showDetails {   // while cleaning: files and skipped
@@ -2144,7 +2153,7 @@ struct ProgressSheet: View {
                     }
                 }.foregroundColor(Theme.orange)
             }
-            .padding(.horizontal, 20).padding(.top, 18)
+            .padding(.horizontal, 20).padding(.top, 22)
             if fin && ms >= FinishBeat.listAt && !showDetails {
                 resultList(width: W, binOnly: binOnly, total: total)
                     .opacity(FinishBeat.ease((ms - FinishBeat.listAt) / FinishBeat.listMs))
@@ -2179,7 +2188,7 @@ struct ProgressSheet: View {
             slipLine(files, time, Theme.screenMuted, mono)
         }
         .frame(width: colW, alignment: .leading)
-        .padding(.leading, 20).padding(.top, 124).padding(.bottom, 18)
+        .padding(.leading, 20).padding(.top, 132).padding(.bottom, 18)
         .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -2255,6 +2264,12 @@ final class GuideModel: ObservableObject {
     var enter: ((Int) -> Void)?
     static let seenKey = "guideSeen"
     static var seen: Bool { UserDefaults.standard.bool(forKey: seenKey) }
+    // a test or screenshot run (CI): the guide never starts by itself. "--test-run" as an argument
+    // (open … --args --test-run), or SH_TEST_RUN / CI / GITHUB_ACTIONS in the environment.
+    static var testRun: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return CommandLine.arguments.contains("--test-run") || env["SH_TEST_RUN"] != nil || env["CI"] != nil || env["GITHUB_ACTIONS"] != nil
+    }
 
     @Published var step: Int? = nil
     @Published var shown = false   // the veil, faded in
@@ -2308,7 +2323,7 @@ final class GuideModel: ObservableObject {
 
     // Once, the first time a scan finishes: now if this window is the one in front, else when it next is.
     func autoStart(when ok: @escaping () -> Bool, before: @escaping () -> Void) {
-        guard !GuideModel.seen, step == nil, waitObserver == nil else { return }
+        guard !GuideModel.testRun, !GuideModel.seen, step == nil, waitObserver == nil else { return }
         if NSApp.isActive, let w = window, w.isKeyWindow {
             if ok() { before(); start() }
             return
@@ -2363,9 +2378,10 @@ struct GuideOverlay: View {
             GuideShape(hole: spot, veil: false).stroke(Theme.orange, lineWidth: 2)
             VStack(alignment: .leading, spacing: 0) {
                 Text(GuideModel.steps[step].title).font(Theme.bold(16.5)).foregroundColor(Theme.screenInk)
+                    .fixedSize(horizontal: false, vertical: true)   // a long title wraps and pushes the body down
                 Text(GuideModel.steps[step].body).font(Theme.sans(13)).foregroundColor(Theme.screenInk.opacity(0.82))
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
-                HStack(spacing: 14) {
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
                     Text("\(step + 1) / \(GuideModel.steps.count)").font(Theme.mono(11.5)).foregroundColor(Theme.screenMuted)
                     Spacer(minLength: 8)
                     if step > 0 {
@@ -2721,7 +2737,7 @@ struct FinderHeader: View {
             } else if let c = current {
                 let p = Engine.parts(c.size)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(p.0).font(Theme.display(52))
+                    Text(p.0).font(Theme.display(52)).padding(.leading, -5)   // side bearing
                     Text(p.1).font(Theme.display(22))
                 }.foregroundColor(Theme.orange)
                 Text(c.path.replacingOccurrences(of: Engine.home.path, with: "~")).font(Theme.sans(15)).foregroundColor(Theme.screenInk).lineLimit(1).truncationMode(.middle)

@@ -216,7 +216,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
     v.append(&sw);
     let hint = label("\u{201C}Add to list\u{201D} puts a folder or file in Deep clean, unticked. Nothing here deletes anything.", "status");
     v.append(&hint);
-    win.set_child(Some(&v));
+    win.set_child(Some(&crate::sheet(v.upcast_ref::<gtk::Widget>())));
 
     let ps = places();
     let place = match &start { Some(p) => ps.iter().find(|x| &x.path == p).cloned().unwrap_or(Place { path: p.clone(), name: home_short(p), free: 0, total: 0, mount: false }), None => ps[0].clone() };
@@ -358,6 +358,7 @@ fn scan(s: &Rc<Storage>) {
         let bytes = ctx.bytes.load(Ordering::Relaxed);
         st.head.set_text(&format!("Storage map  \u{00B7}  measuring {}  \u{00B7}  counting files", home_short(&st.sm.borrow().place.path)));
         st.hero.set_text(&format!("{} FILES", files)); st.unit.set_text("");
+        crate::ui::align_to_glyph(&st.hero, &[st.head.upcast_ref::<gtk::Widget>(), st.pbar.upcast_ref::<gtk::Widget>(), st.path_lbl.upcast_ref::<gtk::Widget>(), st.sub.upcast_ref::<gtk::Widget>()]);
         st.pfrac.set(if target > 0 { (bytes as f64 / target as f64).min(1.0) } else { -1.0 });
         st.sub.set_text(&if target > 0 { format!("Measured {} of {} used  \u{00B7}  {}%", fmt(bytes), fmt(target), (bytes as f64 * 100.0 / target as f64).min(100.0) as u32) } else { format!("Measured {} so far", fmt(bytes)) });
         if let Ok(root) = rx.try_recv() {
@@ -414,6 +415,7 @@ fn show(s: &Rc<Storage>) {
     s.head.set_text("Storage map  \u{00B7}  just looking, nothing is deleted here");
     let (n, u) = split(cur.size);
     s.hero.set_text(&n); s.unit.set_text(&u);
+    crate::ui::align_to_glyph(&s.hero, &[s.head.upcast_ref::<gtk::Widget>(), s.pbar.upcast_ref::<gtk::Widget>(), s.path_lbl.upcast_ref::<gtk::Widget>(), s.sub.upcast_ref::<gtk::Widget>()]);
     s.path_lbl.set_text(&home_short(&cur.path));
     s.sub.set_text(&format!("{} files{}", cur.files, if cur.denied { "  \u{00B7}  some folders couldn't be read" } else { "" }));
     // the path bar
@@ -650,7 +652,7 @@ pub fn open_protect(parent: &gtk::ApplicationWindow, on_change: Rc<dyn Fn()>) ->
     let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let sw = gtk::ScrolledWindow::builder().child(&list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
     v.append(&sw);
-    win.set_child(Some(&v));
+    win.set_child(Some(&crate::sheet(v.upcast_ref::<gtk::Widget>())));
     let changed = Rc::new(Cell::new(false));
     let fill: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let f = {

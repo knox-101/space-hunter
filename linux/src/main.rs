@@ -61,6 +61,17 @@ fn disk(path: &str) -> (u64, u64) {
 #[allow(unused_imports)]
 use engine::fmt;
 
+// Every window's content sits in a "sheet": a 1 px hairline in the theme's line colour just inside the window's edge,
+// so overlapping Space Hunter windows read as separate sheets even without shadows.
+pub fn sheet(child: &gtk::Widget) -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    b.add_css_class("sheet");
+    child.set_hexpand(true);
+    child.set_vexpand(true);
+    b.append(child);
+    b
+}
+
 const CSS: &str = r#"
 window, .chassis { background: $CHASSIS; }
 * { font-family: "Schibsted Grotesk"; }
@@ -140,6 +151,8 @@ button.key.primary-small { background: #FF5B1F; color: #1B1B1A; box-shadow: 0 2p
 .update-dot { color: #FF5B1F; font-size: 14pt; }
 textview.log, textview.log text { background: $PANE; color: $INK; font-family: "IBM Plex Mono"; font-size: 8.5pt; }
 popover contents { background: $PANE; color: $INK; }
+.sheet { background: $CHASSIS; border: 1px solid $LINE; }
+button.link-btn.flush { padding-left: 0; padding-right: 0; }
 .cta-bar { background: #FF5B1F; }
 .cta { color: $ODEEP; font-weight: 600; font-size: 9.75pt; }
 "#;

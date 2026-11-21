@@ -66,7 +66,8 @@ pub struct Ui {
     sliding: Cell<bool>,
     slide_gen: Cell<u64>,
     title: gtk::Label,
-    explain: gtk::Label,
+    explain: gtk::DrawingArea,                // the section's explain line, balanced
+    glyph_peers: Vec<gtk::Widget>,            // lined up with the big number's first glyph
     cta: gtk::Label,                          // the section's call to action, under the explain line
     list_sw: gtk::ScrolledWindow,
     guide: RefCell<Option<Rc<Guide>>>,
@@ -126,6 +127,46 @@ fn show_at(cr: &gtk::cairo::Context, l: &gtk::pango::Layout, text: &str, x: f64,
     l.set_text(text);
     cr.move_to(x, y);
     pangocairo::functions::show_layout(cr, l);
+}
+
+// Narrow a wrapped layout as far as it goes without adding a line, so its lines come out even (no orphaned word).
+fn balance(l: &gtk::pango::Layout, max_w: f64) {
+    let max_w = max_w.max(20.0);
+    l.set_width((max_w * SC) as i32);
+    let n = l.line_count();
+    if n < 2 { return; }
+    let (mut lo, mut hi) = (max_w * 0.45, max_w);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        l.set_width((mid * SC) as i32);
+        if l.line_count() > n { lo = mid; } else { hi = mid; }
+    }
+    l.set_width((hi * SC).ceil() as i32);
+}
+
+// The section's explain line: muted, wrapped at 820 px at most, balanced.
+fn explain_layout(da: &gtk::DrawingArea, tier: Level, w: f64) -> gtk::pango::Layout {
+    let l = layout(da, "Schibsted Grotesk 9");
+    l.set_wrap(gtk::pango::WrapMode::WordChar);
+    l.set_text(engine::tier_explain(tier));
+    balance(&l, w.min(820.0));
+    l
+}
+
+// its height follows the text at the width it has now
+fn fit_explain(u: &Ui) {
+    let w = u.explain.width();
+    if w <= 0 { return; }
+    let tier = u.st.borrow().tier;
+    let h = explain_layout(&u.explain, tier, w as f64).pixel_size().1.max(1);
+    if u.explain.content_height() != h { u.explain.set_content_height(h); }
+    u.explain.queue_draw();
+}
+
+// Start the label above a big number (and the bar, the legend) where the number's first glyph really starts.
+pub fn align_to_glyph(hero: &gtk::Label, peers: &[&gtk::Widget]) {
+    let ix = hero.layout().pixel_extents().0.x().max(0);
+    for w in peers { if w.margin_start() != ix { w.set_margin_start(ix); } }
 }
 
 fn inside(r: R4, x: f64, y: f64) -> bool { r.2 > 0.0 && x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3 }
@@ -390,7 +431,8 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     display.set_margin_top(6); display.set_margin_start(18); display.set_margin_end(18);
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    left.append(&label("Space to free up", "display-label"));
+    let space_lbl = label("Space to free up", "display-label");
+    left.append(&space_lbl);
     let num = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     let heroes = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let hero = label("0", "hero");
@@ -454,9 +496,10 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     // the list of the chosen section, and the item panel that slides in at the right
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.set_vexpand(true);
-    let listside = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    // the list shares the display's, the keys' and the rail's left and right edges (18 px in)
+    let listside = gtk::Box::new(gtk::Orientation::Vertical, 0);
     listside.set_hexpand(true);
-    listside.set_margin_start(22); listside.set_margin_end(14); listside.set_margin_top(18);
+    listside.set_margin_start(18); listside.set_margin_end(18); listside.set_margin_top(18);
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 14);
     let title = label("", "section-title");
     head.append(&title);
@@ -465,12 +508,15 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let untick_all = gtk::Button::with_label("Untick all"); untick_all.add_css_class("link-btn");
     head.append(&tick_all); head.append(&untick_all);
     listside.append(&head);
-    let explain = label("", "explain");
-    explain.set_wrap(true); explain.set_max_width_chars(110);
+    // what this section is: drawn by hand so its lines can be balanced (no word left alone on the last line);
+    // its height follows the text, so the gaps title / explain / call to action / first row stay even
+    let explain = gtk::DrawingArea::new();
+    explain.set_margin_top(8);
+    explain.set_content_height(18);
     listside.append(&explain);
     // the one thing to do in this section: its own line, a 3 px orange bar and orange-deep words
     let cta_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
-    cta_row.set_margin_top(4);
+    cta_row.set_margin_top(8);
     let cbar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     cbar.add_css_class("cta-bar");
     cbar.set_size_request(3, 17); cbar.set_valign(gtk::Align::Center);
@@ -481,7 +527,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     cta_row.append(&cta);
     listside.append(&cta_row);
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    rows.set_margin_top(10);
+    rows.set_margin_top(8);
     let sw = gtk::ScrolledWindow::builder().child(&rows).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
     listside.append(&sw);
     body.append(&listside);
@@ -506,8 +552,10 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     root.append(&bottom);
     let overlay = gtk::Overlay::new();   // the guide lies over all of it
     overlay.set_child(Some(&root));
-    win.set_child(Some(&overlay));
+    win.set_child(Some(&crate::sheet(overlay.upcast_ref::<gtk::Widget>())));
 
+    // the label above the big number, the bar and the legend start where its first glyph's ink starts
+    let glyph_peers: Vec<gtk::Widget> = vec![space_lbl.clone().upcast(), bar.clone().upcast(), legend.clone().upcast()];
     let ui = Rc::new(Ui {
         st: RefCell::new(St { cats: Vec::new(), tier: Level::Safe, open: None, pending: 0, cleaning: false, first_scan_done: false }),
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
@@ -518,6 +566,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         prog_win: RefCell::new(None), opts,
         bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
         more: Cell::new(false),
+        glyph_peers,
     });
 
     {
@@ -546,6 +595,18 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
                 let _ = cr.fill();
             }
         });
+    }
+    {   // the explain line
+        let u = ui.clone();
+        ui.explain.set_draw_func(move |da, cr, w, _| {
+            let tier = u.st.borrow().tier;
+            let l = explain_layout(da, tier, w as f64);
+            crate::theme::rgb(cr, crate::theme::pal().muted);
+            cr.move_to(0.0, 0.0);
+            pangocairo::functions::show_layout(cr, &l);
+        });
+        let u = ui.clone();
+        ui.explain.connect_resize(move |_, _, _| { let u2 = u.clone(); glib::idle_add_local_once(move || fit_explain(&u2)); });
     }
     {   // the rail: drawn by hand; a column switches the section, its small box ticks or unticks all of it
         let u = ui.clone();
@@ -776,6 +837,8 @@ fn refresh_top(u: &Rc<Ui>) {
     let only_safe = !st.cats.iter().any(|c| c.included() && !c.is_safe() && (c.bytes > 0 || c.files > 0));
     let (num, unit) = split(selected);
     u.hero.set_text(&num);
+    let peers: Vec<&gtk::Widget> = u.glyph_peers.iter().collect();
+    align_to_glyph(&u.hero, &peers);
     u.unit.set_text(&unit);
     let freed = engine::history::total();
     if st.pending > 0 { u.beside1.set_text("measuring\u{2026}"); }
@@ -806,7 +869,7 @@ fn refresh_top(u: &Rc<Ui>) {
     if !u.sliding.get() { u.mark.set(ORDER.iter().position(|l| *l == st.tier).unwrap_or(0) as f64); }
     u.rail.queue_draw();
     u.title.set_text(&engine::tier_name(st.tier).to_uppercase());
-    u.explain.set_text(engine::tier_explain(st.tier));
+    fit_explain(u);
     u.cta.set_text(engine::tier_cta(st.tier));
 }
 
@@ -841,13 +904,15 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
         let n_items = items.iter().filter(|c| c.bytes > 0 || c.files > 0).count();
         let n_ticked = items.iter().filter(|c| c.included() && (c.bytes > 0 || c.files > 0)).count();
         let x0 = i as f64 * tw;
-        let x = x0 + 4.0;
+        let x = x0;
         let ty = 8.0;
         let text_ink = if on || hot { pal.ink } else { pal.muted };
-        let hl = layout(da, if on { "Schibsted Grotesk Semi-Bold 9.75" } else { "Schibsted Grotesk 9.75" });
-        hl.set_text(engine::tier_name(lvl));
-        let (nw, nh) = hl.pixel_size();
+        // the box sits after the name as set in semibold, so it never shifts when the open section changes
+        let semi = layout(da, "Schibsted Grotesk Semi-Bold 9.75");
+        semi.set_text(engine::tier_name(lvl));
+        let (nw, nh) = semi.pixel_size();
         let nh = nh as f64;
+        let hl = if on { semi } else { let l = layout(da, "Schibsted Grotesk 9.75"); l.set_text(engine::tier_name(lvl)); l };
         crate::theme::rgb(cr, text_ink);
         cr.move_to(x, ty);
         pangocairo::functions::show_layout(cr, &hl);
@@ -858,11 +923,11 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
             if n_ticked == 0 {
                 crate::theme::rgb(cr, if on || hot { pal.ink } else { pal.soft });
                 cr.set_line_width(1.4);
-                cr.rectangle(bx + 0.7, by + 0.7, 12.6, 12.6);
+                round_rect(cr, bx + 0.7, by + 0.7, 12.6, 12.6, 2.0);   // the rows' tick boxes' corners
                 let _ = cr.stroke();
             } else {
                 rgba(cr, ORANGE, 1.0);
-                cr.rectangle(bx, by, 14.0, 14.0);
+                round_rect(cr, bx, by, 14.0, 14.0, 2.0);
                 let _ = cr.fill();
                 rgba(cr, ON_ORANGE, 1.0);
                 if n_ticked == n_items {
@@ -903,17 +968,20 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
         let (sw, sh) = bl.pixel_size();
         let ny = 30.0;
         crate::theme::rgb(cr, if on || hot { pal.ink } else { pal.muted });
-        cr.move_to(x0, ny);
+        cr.move_to(x0 - bl.pixel_extents().0.x() as f64, ny);   // the first glyph's ink on the column's edge
         pangocairo::functions::show_layout(cr, &bl);
         let dx = x0 + sw as f64 + 10.0;
         let dw = x0 + tw - dx - 12.0;
         if dw > 60.0 {
             let dl = layout(da, "Schibsted Grotesk 9");
-            dl.set_width((dw * SC) as i32);
             dl.set_wrap(gtk::pango::WrapMode::WordChar);
-            dl.set_height(-2);
-            dl.set_ellipsize(gtk::pango::EllipsizeMode::End);
             dl.set_text(engine::tier_desc(lvl));
+            balance(&dl, dw);   // two even lines, never one word alone
+            if dl.line_count() > 2 {
+                dl.set_width((dw * SC) as i32);
+                dl.set_height(-2);
+                dl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            }
             let (_, dh) = dl.pixel_size();
             crate::theme::rgb(cr, if on { pal.muted } else { pal.soft });
             cr.move_to(dx, ny + sh as f64 / 2.0 - dh as f64 / 2.0 + 1.0);
@@ -1017,7 +1085,6 @@ fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     chk.set_active((c.checked || c.partial()) && !empty);
     chk.set_sensitive(!empty && c.refused().is_none());
     chk.set_valign(gtk::Align::Center);
-    chk.set_margin_start(4);
     let id = c.id.clone();
     let uu = u.clone();
     // picked -> none (the picks go), none -> all, all -> none
@@ -1215,7 +1282,8 @@ fn fill_panel_now(u: &Rc<Ui>) {
     close.connect_clicked(move |_| close_panel(&uu));
     top.append(&close);
     u.panel.append(&top);
-    let t = label(&c.name, "panel-title"); t.set_wrap(true);
+    let t = label(&c.name, "panel-title");   // two lines at most, never cut off after one
+    t.set_wrap(true); t.set_wrap_mode(gtk::pango::WrapMode::WordChar); t.set_lines(2); t.set_ellipsize(gtk::pango::EllipsizeMode::End);
     u.panel.append(&t);
     let stats = match c.refused() {
         Some(why) => format!("Space Hunter won't clean this: {}. Use \u{201C}Remove from cleanup list\u{201D} below.", why),
@@ -1702,7 +1770,7 @@ fn confirm(u: &Rc<Ui>) {
     let ok = key("clean", &["primary"]);
     bottom.append(&cancel); bottom.append(&ok);
     v.append(&bottom);
-    w.set_child(Some(&v));
+    w.set_child(Some(&crate::sheet(v.upcast_ref::<gtk::Widget>())));
     let show: Rc<dyn Fn()> = {
         let (del, bin, hint, ok, t) = (del.clone(), bin.clone(), hint.clone(), ok.clone(), to_trash.clone());
         Rc::new(move || {
@@ -1846,38 +1914,44 @@ fn draw_prog(da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64, p:
                else if !beat { "Finishing".to_string() }
                else if bin_only { "Done  \u{00B7}  moved to the Trash".to_string() }
                else { "Done  \u{00B7}  everything you ticked is cleaned".to_string() };
+    // the top line sits 16 px from the display's top edge, on one baseline whether it says "DONE" or not; every left
+    // edge (the line, the number, the bar, the list) is the ink of the first glyph, on pad
+    let top_y = 16.0;
     let ll = layout(da, "Schibsted Grotesk Semi-Bold 10");
+    let dl = layout(da, "Big Shoulders Display Black 17");
+    dl.set_text("DONE");
+    let (dw, dh) = dl.pixel_size();
+    let line_y = top_y + (dl.baseline() - ll.baseline()) as f64 / SC;
     if beat {   // done: "DONE" in the display type, then the plain result, small and muted
-        let dl = layout(da, "Big Shoulders Display Black 17");
-        dl.set_text("DONE");
-        let (dw, _) = dl.pixel_size();
         rgba(cr, DISPLAY_INK, 1.0);
-        cr.move_to(pad - 3.0, 6.0);
+        cr.move_to(pad - dl.pixel_extents().0.x() as f64, top_y);
         pangocairo::functions::show_layout(cr, &dl);
         ll.set_text(&text.replace("Done  \u{00B7}  ", "\u{00B7}  "));
         ll.set_width(((w - 2.0 * pad - dw as f64 - 8.0).max(10.0) * SC) as i32);
         ll.set_ellipsize(gtk::pango::EllipsizeMode::End);
         rgba(cr, DISPLAY_MUTED, 1.0);
-        cr.move_to(pad - 3.0 + dw as f64 + 8.0, 6.0 + (dl.baseline() - ll.baseline()) as f64 / SC);
+        cr.move_to(pad + dw as f64 + 6.0, line_y);
         pangocairo::functions::show_layout(cr, &ll);
     } else {
         ll.set_width(((w - 2.0 * pad).max(10.0) * SC) as i32);
         ll.set_ellipsize(gtk::pango::EllipsizeMode::End);
         rgba(cr, 0xB4B1AA, 1.0);
-        show_at(cr, &ll, &text, pad, 12.0);
+        show_at(cr, &ll, &text, pad, line_y);
     }
 
     // the big number: what this clean freed (it stays put)
+    let num_y = top_y + dh as f64 + 2.0;
     let (num, unit) = split(total);
     let bl = layout(da, "Big Shoulders Display Black 40");
     bl.set_text(&num);
     let (nw, _) = bl.pixel_size();
+    let ink_x = bl.pixel_extents().0.x() as f64;
     let ul = layout(da, "Big Shoulders Display Black 17");
     ul.set_text(&format!("{} {}", unit, if bin_only { "TO TRASH" } else { "FREED" }));
     rgba(cr, ORANGE, 1.0);
-    cr.move_to(pad - 2.0, 30.0);
+    cr.move_to(pad - ink_x, num_y);
     pangocairo::functions::show_layout(cr, &bl);
-    cr.move_to(pad - 2.0 + nw as f64 + 8.0, 30.0 + (bl.baseline() - ul.baseline()) as f64 / SC);
+    cr.move_to(pad - ink_x + nw as f64 + 8.0, num_y + (bl.baseline() - ul.baseline()) as f64 / SC);
     pangocairo::functions::show_layout(cr, &ul);
 
     let ring = fin && !p.details;
@@ -1887,7 +1961,7 @@ fn draw_prog(da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64, p:
         sl.set_text(&format!("{} files  \u{00B7}  {} skipped  \u{00B7}  {}", files, skipped, mmss(secs)));
         let (sw, _) = sl.pixel_size();
         rgba(cr, DISPLAY_INK, 1.0);
-        cr.move_to(w - pad - sw as f64, 44.0);
+        cr.move_to(w - pad - sw as f64, num_y + 12.0);
         pangocairo::functions::show_layout(cr, &sl);
         let second = if trashed > 0 && !bin_only { format!("+ {} moved to the Trash", fmt(trashed)) }
                      else if bin_only && p.done { "Empty the Trash to get this space back".to_string() }
@@ -1897,7 +1971,7 @@ fn draw_prog(da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64, p:
             ml.set_text(&second);
             let (mw, _) = ml.pixel_size();
             rgba(cr, DISPLAY_MUTED, 1.0);
-            cr.move_to(w - pad - mw as f64, 68.0);
+            cr.move_to(w - pad - mw as f64, num_y + 36.0);
             pangocairo::functions::show_layout(cr, &ml);
         }
     }
@@ -2122,7 +2196,8 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     v.append(&stage);
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let what = gtk::Button::with_label("What was cleaned");
-    what.add_css_class("link-btn"); what.set_valign(gtk::Align::Center); what.set_visible(false);
+    // its left edge on the display's, centred on the Done key
+    what.add_css_class("link-btn"); what.add_css_class("flush"); what.set_valign(gtk::Align::Center); what.set_visible(false);
     let log_key = key("open log file", &[]);
     log_key.set_visible(false); log_key.set_margin_start(8);
     keys.append(&what); keys.append(&log_key);
@@ -2131,7 +2206,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
     let stop = key("stop", &[]);
     keys.append(&minimise); keys.append(&stop);
     v.append(&keys);
-    w.set_child(Some(&v));
+    w.set_child(Some(&crate::sheet(v.upcast_ref::<gtk::Widget>())));
     *u.prog_win.borrow_mut() = Some(w.clone());
     let log_path = glib::user_data_dir().join("space-hunter").join("last-clean.txt");
 
@@ -2657,7 +2732,15 @@ fn draw_guide(g: &Guide, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64
     bl.set_wrap(gtk::pango::WrapMode::WordChar);
     bl.set_text(body);
     let body_h = bl.pixel_size().1 as f64;
-    let ch = 16.0 + 22.0 + body_h + 14.0 + 30.0 + 12.0;
+    // the title wraps inside the card too, and pushes the body down
+    let tl = layout(da, "Schibsted Grotesk Bold 12.5");
+    tl.set_width(((CW - 28.0) * SC) as i32);
+    tl.set_wrap(gtk::pango::WrapMode::WordChar);
+    tl.set_text(title);
+    balance(&tl, CW - 28.0);
+    let title_h = tl.pixel_size().1 as f64;
+    let body_y = 14.0 + title_h + 6.0;
+    let ch = body_y + body_h + 14.0 + 28.0 + 12.0;
     let x = (s.0 + s.2 / 2.0 - CW / 2.0).min(w - CW - 16.0).max(16.0);
     let mut y = if s.1 + s.3 + 14.0 + ch < h - 12.0 { s.1 + s.3 + 14.0 } else { s.1 - 14.0 - ch };
     if y < 12.0 { y = (h - ch - 12.0).min(s.1 + 24.0); }
@@ -2674,21 +2757,25 @@ fn draw_guide(g: &Guide, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64
     rgba(cr, 0x5A564F, a);
     cr.set_line_width(1.0);
     let _ = cr.stroke();
-    let tl = layout(da, "Schibsted Grotesk Bold 12.5");
     rgba(cr, DISPLAY_INK, a);
-    show_at(cr, &tl, title, x + 14.0, y + 14.0);
+    cr.move_to(x + 14.0, y + 14.0);
+    pangocairo::functions::show_layout(cr, &tl);
     rgba(cr, DISPLAY_INK, a * 0.82);
-    cr.move_to(x + 14.0, y + 40.0);
+    cr.move_to(x + 14.0, y + body_y);
     pangocairo::functions::show_layout(cr, &bl);
     let fy = y + ch - 12.0 - 28.0;
-    let fl = layout(da, "IBM Plex Mono 8.5");
-    rgba(cr, DISPLAY_MUTED, a);
-    show_at(cr, &fl, &format!("{} / {}", step + 1, GUIDE.len()), x + 14.0, fy + 7.0);
-    // the orange key, then Skip (not on the last step) and Back (from step 2), underlined
+    // the orange key, then Skip (not on the last step) and Back (from step 2), underlined; the counter at the left.
+    // All four sit on one baseline: the key's.
     let last = step == GUIDE.len() - 1;
     let kl = layout(da, "Schibsted Grotesk Semi-Bold 9");
     kl.set_text(if last { "GOT IT" } else { "NEXT" });
     let (kw, kh) = kl.pixel_size();
+    let base = fy + (28.0 - kh as f64) / 2.0 + kl.baseline() as f64 / SC;
+    let fl = layout(da, "IBM Plex Mono 8.5");
+    fl.set_text(&format!("{} / {}", step + 1, GUIDE.len()));
+    rgba(cr, DISPLAY_MUTED, a);
+    cr.move_to(x + 14.0, base - fl.baseline() as f64 / SC);
+    pangocairo::functions::show_layout(cr, &fl);
     let nb = (x + CW - 14.0 - kw as f64 - 22.0, fy, kw as f64 + 22.0, 28.0);
     round_rect(cr, nb.0, nb.1 + 2.0, nb.2, nb.3, 3.0);
     rgba(cr, 0xB5400F, a);

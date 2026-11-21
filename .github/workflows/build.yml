@@ -36,7 +36,7 @@ jobs:
       - name: Launch it and take a screenshot
         working-directory: mac
         run: |
-          open "build/Space Hunter.app"
+          open "build/Space Hunter.app" --args --test-run
           sleep 12
           screencapture -x build/screenshot-main.png || true
           pgrep -lf SpaceHunter || (echo "App did not stay running" && exit 1)
