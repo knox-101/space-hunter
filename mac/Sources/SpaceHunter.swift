@@ -684,6 +684,7 @@ final class AppState: ObservableObject {
     @Published var tier: Level = .safe
     @Published var openID: String?
     @Published var scanning = 0
+    var lastScanTick = Date()   // the scan started or an item finished; a long pause means macOS is asking for access
     @Published var disk = Engine.disk()
     @Published var status = ""
     @Published var freedAll = Engine.freedAllTime()
@@ -779,6 +780,7 @@ final class AppState: ObservableObject {
         if cleanRunning { return }   // measured again once the clean is done
         // Safe-to-delete items first, so the ticked total and the CLEAN key are ready first
         let targets = cats.indices.filter { ids == nil || ids!.contains(cats[$0].id) }.sorted { cats[$0].level.rawValue < cats[$1].level.rawValue }
+        lastScanTick = Date()
         for i in targets {
             cats[i].scanned = false
             scanGen[cats[i].id, default: 0] += 1
@@ -803,6 +805,7 @@ final class AppState: ObservableObject {
                         self.cats[j].pickFiles = pickedNow.files; self.cats[j].pickBytes = pickedNow.bytes
                     }
                     self.scanning -= 1
+                    self.lastScanTick = Date()
                     self.status = self.scanning > 0 ? "Scanning \(snapshot.name)…" : (self.freedAll.0 == 0 ? "Quick clean is ticked for you: press Clean, check the list, and it's done." : "Scan done. Click a row to see what it is. Tick the box to include it.")
                     if self.scanning == 0 { self.disk = Engine.disk(); self.freedAll = Engine.freedAllTime() }
                 }
@@ -1332,7 +1335,16 @@ struct DisplayView: View {
                         if state.scanning > 0 {
                             HStack(spacing: 10) {
                                 SpinRing(width: 3.5).frame(width: 22, height: 22)
-                                Text("measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                                // macOS holds the scan while it asks for access to Desktop, Documents or Downloads: say so
+                                TimelineView(.periodic(from: Date(), by: 1)) { tl in
+                                    let stalled = tl.date.timeIntervalSince(state.lastScanTick) > 4
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(stalled ? "waiting for macOS" : "measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                                        if stalled {
+                                            Text("If it asks to access your folders, click Allow.").font(Theme.semi(13)).foregroundColor(Theme.screenMuted)
+                                        }
+                                    }
+                                }
                             }
                         }
                         // beside the number: what kind of space it is, and what else is there if you look
@@ -2568,13 +2580,15 @@ final class Scanner: ObservableObject {
     @Published var running = false
     @Published var root: FolderNode?
     var cancel = false
+    var lastTick = Date()   // the file count last moved; a long pause means macOS is asking for access
     private var count: Int64 = 0, bytes: Int64 = 0
     private let lock = NSLock()
 
     func start(_ path: String) {
-        running = true; root = nil; scanned = 0; scannedBytes = 0; count = 0; bytes = 0; cancel = false
+        running = true; root = nil; scanned = 0; scannedBytes = 0; count = 0; bytes = 0; cancel = false; lastTick = Date()
         let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             self.lock.lock(); let c = self.count, b = self.bytes; self.lock.unlock()
+            if c != self.scanned { self.lastTick = Date() }
             self.scanned = c; self.scannedBytes = b
         }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -2803,8 +2817,12 @@ struct FinderHeader: View {
     let target: Int64
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
-                .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA))
+            TimelineView(.periodic(from: Date(), by: 1)) { tl in
+                let stalled = scanner.running && tl.date.timeIntervalSince(scanner.lastTick) > 3
+                Text(stalled ? "Storage map  ·  waiting for macOS: if it asks to access a folder, click Allow"
+                     : scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
+                    .font(Theme.semi(12)).foregroundColor(stalled ? Theme.screenInk : Color(hex: 0xB4B1AA))
+            }
             if scanner.running {
                 Text("\(scanner.scanned) FILES").font(Theme.display(52)).foregroundColor(Theme.orange)
                 ScanBar(done: scanner.scannedBytes, target: target).frame(height: 14)

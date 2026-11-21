@@ -8,6 +8,9 @@ for fixes, the middle number is for new features, and the first number is for bi
 - **One loading mark each.** The Storage map shows just its bar while it measures (the turning ring is gone, so
   nothing overlaps the bar any more, and the bar runs the full width). The main window shows a small turning ring
   beside the number, "measuring every item", while it scans.
+- **Mac: says when macOS is holding the scan.** The first time, macOS asks before Space Hunter may look in Desktop,
+  Documents or Downloads, and the scan waits until you answer. If nothing moves for a few seconds, the main window and
+  the Storage map now say "waiting for macOS" and to click Allow, instead of just spinning.
 
 ## 1.6.3 (2026-11-21)
 
