@@ -6,3 +6,4 @@ mac/build/
 design/
 PRODUCT.md
 linux/target/
+*.exe.old

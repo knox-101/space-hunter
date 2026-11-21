@@ -3,6 +3,14 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.6.2 (2026-11-21)
+
+- **What's inside follows the age you choose, as you change it.** Files too new for "only older than" show
+  unticked with "too new, stays"; a folder with some newer files shows a dash; choose "everything" and it's all ticked.
+- **One key fewer:** "Scan again" is gone. Default cleanup measures everything afresh, and sizes are measured every
+  time you open Space Hunter and after every clean.
+- The guide key's hover label ("Guide: how Space Hunter works") is no longer cut off.
+
 ## 1.6.1 (2026-11-21)
 
 - **"Back to recommended" is now "Default cleanup":** it puts the ticks and ages back to the first-time setup.

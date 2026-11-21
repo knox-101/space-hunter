@@ -1091,7 +1091,7 @@ struct MainView: View {
                 Button { openWindow(id: "finder") } label: { HStack(spacing: 8) { MapIcon(); Text("Storage map") } }.buttonStyle(KeyStyle(accent: true))
                     .guidePart(2)
                 Spacer()
-                Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0 || state.cleanRunning)
+                // no Scan again key: Default cleanup measures everything afresh
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
                     .guidePart(5)
                 Button("Default cleanup") { state.resetAll() }.buttonStyle(KeyStyle())
@@ -1193,7 +1193,11 @@ struct TopKeys: View {
     var body: some View {
         let tip: String = hover == nil ? "" : hover == 3 ? "Guide: how Space Hunter works" : names[hover!] + (state.theme == modes[hover!] ? "  (on)" : "")
         HStack(spacing: 10) {
+            // the label is always shown in full: it keeps its own width, in a reserved 220 pt so the longest fits
             Text(tip).font(Theme.sans(11.5)).foregroundColor(Theme.ink).lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 220, alignment: .trailing)
+                .layoutPriority(1)
             HStack(spacing: 10) {
                 // the guide key: a small key of its own
                 TopIcon(kind: 3, ink: Theme.ink)
@@ -2274,7 +2278,7 @@ final class GuideModel: ObservableObject {
         ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
         ("See what fills your disk", "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list."),
         ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
-        ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages. Scan again measures everything afresh."),
+        ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages, and every size measured afresh."),
         ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
         ("Your look, and this guide", "Light, dark or your Mac's setting. The ? key shows this guide again whenever you want."),
     ]
@@ -2845,9 +2849,37 @@ struct InsideList: View {
     @State private var here = ""   // "" = the top, all of the item's folders at once
     @State private var tick = 0
     @State private var sizes: [String: Int64] = [:]   // each folder's size, filled in as it's measured
+    @State private var times: [String: FolderTimes] = [:]   // each folder's newest and oldest file, measured with its size
     struct Entry: Identifiable { let id: String; let name: String; let dir: Bool; let size: Int64; var modified = Date.distantPast; var sub: String? = nil }
+    // newest: the folder's own changed date or its newest file (as the clean counts a subfolder); oldest: its oldest
+    // file, nil when it has none; own: the folder's own age, which decides for a folder with no files
+    struct FolderTimes { let newest: Date; let newestFile: Date; let oldest: Date?; let own: Date }   // newestFile: files only
 
     func rootOf(_ p: String) -> String? { roots.first { p == $0 || p.hasPrefix($0 + "/") } }
+
+    // What the age choice does to a row in a ticked item: 2 it goes, 1 some of it goes (newer files stay), 0 it stays.
+    // Follows the age as you change it. Picks in an unticked item go whatever their age (age is 0 there).
+    func ageState(_ e: Entry, age: Int, kind: Kind) -> Int {
+        if age <= 0 { return 2 }
+        let cut = Date().addingTimeInterval(-Double(age) * 60)
+        if kind == .subfolders {   // a whole subfolder goes only when nothing in it is newer
+            guard let root = rootOf(e.id) else { return 2 }
+            let rel = String(e.id.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let first: String = rel.components(separatedBy: "/").first ?? ""
+            let top: String = rel.isEmpty || !rel.contains("/") ? e.id : root + "/" + first
+            if top == e.id {
+                if !e.dir { return e.modified < cut ? 2 : 0 }
+                guard let t = times[e.id] else { return 2 }   // not measured yet
+                return t.newest < cut ? 2 : 0
+            }
+            guard let t = times[top] else { return 2 }   // deeper inside: its subfolder decides, once measured
+            return t.newest < cut ? 2 : 0
+        }
+        if !e.dir { return e.modified < cut ? 2 : 0 }
+        guard let t = times[e.id] else { return 2 }   // not measured yet
+        guard let oldest = t.oldest else { return t.own < cut ? 2 : 0 }   // no files in it: its own date decides
+        return t.newestFile < cut ? 2 : oldest >= cut ? 0 : 1   // files only: a folder's own date doesn't hold its old files back
+    }
 
     var body: some View {
         let skip = Custom.skip
@@ -2860,7 +2892,9 @@ struct InsideList: View {
         let ageLimit: Int = whole && (c?.ageChoice ?? false) ? (c?.ageMinutes ?? 0) : 0
         let entries = here.isEmpty ? roots.flatMap { r in list(r, sub: "in " + r.replacingOccurrences(of: Engine.home.path, with: "~")) } : list(here, sub: nil)
         let pickedText: String = "\(picks.count) picked" + (pickBytes >= 0 ? "  ·  " + Engine.fmt(pickBytes) : "")
-        let barText: String = c == nil ? "" : whole ? "All of it, except anything unticked" : partial ? pickedText : "Nothing picked yet"
+        let kind: Kind = c?.kind ?? .contents
+        let wholeText: String = ageLimit > 0 ? "Only files older than " + Engine.fmtAge(ageLimit) : "All of it, except anything unticked"
+        let barText: String = c == nil ? "" : whole ? wholeText : partial ? pickedText : "Nothing picked yet"
         let hint: String = whole ? "Everything ticked is cleaned. Untick anything that should always stay. Click a folder to look inside it."
             : partial ? "Just the ticked files and folders are cleaned, this once. Select all cleans the whole item."
             : "Tick files or folders to clean just those, this once, or Select all for the whole item. Click a folder to look inside it."
@@ -2901,13 +2935,19 @@ struct InsideList: View {
                 let inheritedSkip = !roots.contains(parent) && Custom.isSkipped(parent, skip)
                 let ownSkip = Custom.isSkipped(e.id, skip)
                 let inheritedPick = picks.contains(where: { e.id.hasPrefix($0 + "/") })   // a folder around it is picked
-                let locked = inheritedSkip || (!whole && (inheritedPick || ownSkip))      // something around it decides
-                let on = whole ? !(inheritedSkip || ownSkip) : (picks.contains(e.id) || inheritedPick)
-                let tooNew = ageLimit > 0 && !e.dir && e.modified > Date().addingTimeInterval(-Double(ageLimit) * 60)
+                let keptByYou = whole && (inheritedSkip || ownSkip)   // unticked by you: the age doesn't matter
+                // the age choice, in a ticked item only: 2 goes, 1 some of it goes, 0 too new (stays, and the age decides)
+                let ast: Int = whole && !keptByYou ? ageState(e, age: ageLimit, kind: kind) : 2
+                let tooNew = ast == 0
+                let locked = inheritedSkip || (!whole && (inheritedPick || ownSkip)) || tooNew   // something around it, or the age, decides
+                let on = !tooNew && (whole ? !(inheritedSkip || ownSkip) : (picks.contains(e.id) || inheritedPick))
                 let fileSize: String = tooNew ? "too new, stays" : e.size < 1024 ? "under 1 KB" : Engine.fmt(e.size)
-                let sizeText: String = e.dir ? (sizes[e.id].map { Engine.fmt($0) + "  ·  folder" } ?? "folder") : fileSize
+                let measured: String = sizes[e.id].map { Engine.fmt($0) + "  ·  " } ?? ""
+                let dirWord: String = ast == 1 ? "newer files stay" : "folder"
+                let dirSize: String = tooNew ? "too new, stays" : measured + dirWord
+                let sizeText: String = e.dir ? dirSize : fileSize
                 HStack(spacing: 10) {
-                    Button { tap(e.id, whole: whole, locked: locked, ownSkip: ownSkip) } label: { Check(on: on, locked: locked) }
+                    Button { tap(e.id, whole: whole, locked: locked, ownSkip: ownSkip) } label: { Check(on: on && ast != 1, partial: on && ast == 1, locked: locked) }
                         .buttonStyle(.plain)
                     Button { if e.dir { here = e.id } } label: {
                         VStack(alignment: .leading, spacing: 1) {
@@ -2970,15 +3010,30 @@ struct InsideList: View {
 
     func measure(_ dir: String) {
         let dirs = (dir.isEmpty ? roots.flatMap { list($0, sub: nil) } : list(dir, sub: nil)).filter { $0.dir }.map { $0.id }
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .isRegularFileKey, .contentModificationDateKey, .creationDateKey, .addedToDirectoryDateKey]
+        let keySet = Set(keys)
         DispatchQueue.global(qos: .utility).async {
             for d in dirs {
+                // its size, and its newest and oldest file, so the age choice can tick it (all old), dash it (some) or leave it
                 var sum: Int64 = 0
-                if let e = FileManager.default.enumerator(at: URL(fileURLWithPath: d), includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey], options: [], errorHandler: { _, _ in true }) {
+                let url = URL(fileURLWithPath: d)
+                let dv = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .addedToDirectoryDateKey])
+                let own: Date = dv.map { Engine.ageDate($0) } ?? Date.distantPast
+                var newest: Date = dv?.contentModificationDate ?? Date.distantPast   // the folder's own date first, as Engine.newest
+                var oldest: Date? = nil
+                var newestFile: Date = Date.distantPast
+                if let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) {
                     for case let u as URL in e {
-                        if let v = try? u.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]), v.isRegularFile == true { sum += Int64(v.totalFileAllocatedSize ?? 0) }
+                        guard let v = try? u.resourceValues(forKeys: keySet), v.isRegularFile == true else { continue }
+                        sum += Int64(v.totalFileAllocatedSize ?? 0)
+                        let t = Engine.ageDate(v)
+                        if t > newest { newest = t }
+                        if t > newestFile { newestFile = t }
+                        if let o = oldest { if t < o { oldest = t } } else { oldest = t }
                     }
                 }
-                DispatchQueue.main.async { sizes[d] = sum }
+                let ft = FolderTimes(newest: newest, newestFile: newestFile, oldest: oldest, own: own)
+                DispatchQueue.main.async { sizes[d] = sum; times[d] = ft }
             }
         }
     }

@@ -51,7 +51,6 @@ pub struct Ui {
     legend_ticked: gtk::Label,
     legend_not: gtk::Label,
     clean: gtk::Button,
-    scan_key: gtk::Button,
     map_key: gtk::Button,
     protect_key: gtk::Button,
     reset_key: gtk::Button,
@@ -84,6 +83,7 @@ pub struct Ui {
     bottom: gtk::Box,
     scan_gen: RefCell<std::collections::HashMap<String, u64>>,     // per item: which measurement is the newest
     dir_sizes: RefCell<std::collections::HashMap<PathBuf, u64>>,   // folder sizes for "What's inside", measured once
+    dir_times: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, std::time::SystemTime, Option<std::time::SystemTime>)>>,   // newest (with the folder's own date), newest file, oldest file (none: no files)
     inside_here: RefCell<Option<(String, PathBuf)>>,                       // a folder you added: where its panel list is looking
     described: RefCell<std::collections::HashMap<String, String>>,       // what's inside folders you added, worked out once
     more: Cell<bool>,                                                    // the item panel shows its full notes
@@ -379,7 +379,11 @@ fn theme_switch() -> (gtk::Box, gtk::DrawingArea) {
     strip.set_margin_top(8); strip.set_margin_start(18); strip.set_margin_end(18);
     strip.append(&hspacer());
     let da = gtk::DrawingArea::new();
-    da.set_content_width(340);
+    // room for the keys and, at their left, the longest hover name in full (never cut off)
+    let tl = layout(&da, "Schibsted Grotesk 8.75");
+    tl.set_text("Guide: how Space Hunter works");
+    let need = TK_C * 4.0 + TK_GAP + 10.0 + tl.pixel_size().0 as f64 + 12.0;
+    da.set_content_width(need.max(340.0).ceil() as i32);
     da.set_content_height(TK_H as i32 + 3);
     let hover = Rc::new(Cell::new(-1i32));
     {
@@ -478,12 +482,11 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     map.set_child(Some(&mc));
     keys.append(&map);
     keys.append(&hspacer());
-    let scan_key = key("scan again", &[]);
     let protect = key("protected folders", &[]);
     let reset = key("default cleanup", &[]);
     reset.set_margin_end(4);
     let clean = key("clean", &["primary"]);
-    keys.append(&scan_key); keys.append(&protect); keys.append(&reset); keys.append(&clean);
+    keys.append(&protect); keys.append(&reset); keys.append(&clean);
     root.append(&keys);
 
     // the three sections: three columns on one rail, an orange marker under the open one
@@ -559,12 +562,12 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let ui = Rc::new(Ui {
         st: RefCell::new(St { cats: Vec::new(), tier: Level::Safe, open: None, pending: 0, cleaning: false, first_scan_done: false }),
         win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
-        legend_ticked, legend_not, clean, scan_key, map_key: map.clone(), protect_key: protect.clone(), reset_key: reset.clone(), top_keys, display, overlay, rail, rail_box_hover: Cell::new(-1),
+        legend_ticked, legend_not, clean, map_key: map.clone(), protect_key: protect.clone(), reset_key: reset.clone(), top_keys, display, overlay, rail, rail_box_hover: Cell::new(-1),
         rail_hover: Cell::new(-1), rail_boxes: Cell::new([(0.0, 0.0, 0.0, 0.0); 3]), mark: Cell::new(0.0), sliding: Cell::new(false), slide_gen: Cell::new(0),
         title, explain, cta, list_sw: sw.clone(), guide: RefCell::new(None), guide_pending: Cell::new(false), rows, panel_rev, panel,
         psw: psw.clone(), panel_for: RefCell::new(None), scroll_gen: Cell::new(0), status,
         prog_win: RefCell::new(None), opts,
-        bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
+        bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), dir_times: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
         more: Cell::new(false),
         glyph_peers,
     });
@@ -660,8 +663,6 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         tick_all.connect_clicked(move |_| set_all(&u, true));
         let u = ui.clone();
         untick_all.connect_clicked(move |_| set_all(&u, false));
-        let u = ui.clone();
-        ui.scan_key.connect_clicked(move |_| scan(&u, None));
         let u = ui.clone();
         reset.connect_clicked(move |_| {
             {
@@ -864,7 +865,6 @@ fn refresh_top(u: &Rc<Ui>) {
     let can_clean = st.pending == 0 && st.cats.iter().any(|c| c.checked && (c.bytes > 0 || c.files > 0) || c.partial() && c.pick_bytes.unwrap_or(0) > 0);
     u.clean.set_label(&if st.cleaning { "SHOW CLEANING".to_string() } else { format!("CLEAN {}", fmt(selected)) });
     u.clean.set_sensitive(st.cleaning || can_clean);
-    u.scan_key.set_sensitive(st.pending == 0 && !st.cleaning);
     // the rail redraws from the state; the marker sits under the open section unless it's sliding there
     if !u.sliding.get() { u.mark.set(ORDER.iter().position(|l| *l == st.tier).unwrap_or(0) as f64); }
     u.rail.queue_draw();
@@ -1452,6 +1452,26 @@ fn fill_panel_now(u: &Rc<Ui>) {
     }
 }
 
+// What the age choice does to a row of What's inside in a ticked item: 2 it goes, 1 some of it goes (newer files stay),
+// 0 it stays (too new). Follows the age as you change it. A folder not measured yet counts as going.
+fn age_state(c: &Cat, roots: &[PathBuf], p: &std::path::Path, dir: bool, modified: std::time::SystemTime, cutoff: std::time::SystemTime,
+             times: &std::collections::HashMap<PathBuf, (std::time::SystemTime, std::time::SystemTime, Option<std::time::SystemTime>)>) -> u8 {
+    if c.kind == Kind::Subfolders {   // a whole subfolder goes only when nothing in it is newer (as the engine decides)
+        let root = match roots.iter().find(|r| p.starts_with(r) && p != r.as_path()) { Some(r) => r, None => return 2 };
+        let first = match p.strip_prefix(root).ok().and_then(|rel| rel.components().next()) { Some(f) => f, None => return 2 };
+        let top = root.join(first.as_os_str());
+        if top.as_path() == p && !dir { return if modified < cutoff { 2 } else { 0 }; }
+        return match times.get(&top) { Some((newest, _, _)) => if *newest < cutoff { 2 } else { 0 }, None => 2 };
+    }
+    if !dir { return if modified < cutoff { 2 } else { 0 }; }
+    match times.get(p) {
+        None => 2,                                                              // not measured yet
+        Some((own, _, None)) => if *own < cutoff { 2 } else { 0 },              // no files in it: its own date decides
+        // files only: a folder's own date doesn't hold its old files back
+        Some((_, newest_file, Some(oldest))) => if *newest_file < cutoff { 2 } else if *oldest >= cutoff { 0 } else { 1 },
+    }
+}
+
 // What's inside an item: its files and sub-folders, each with a tick box. In a ticked item everything ticked is
 // cleaned and unticking keeps a file or folder for good; in an unticked item, ticking picks just that, for the next
 // clean. A folder's name opens it, and Back goes up (never above the item's own folders).
@@ -1475,7 +1495,8 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         bar.add_css_class("rowline");
         bar.set_margin_top(4);
-        let state = if c.checked { "All of it, except anything unticked".to_string() }
+        let age_now = if c.age_choice() { c.age_minutes } else { 0 };
+        let state = if c.checked { if age_now > 0 { format!("Only files older than {}", engine::fmt_age(age_now)) } else { "All of it, except anything unticked".to_string() } }
                     else if partial { format!("{} picked{}", c.picks.len(), c.pick_bytes.map(|b| format!("  \u{00B7}  {}", fmt(b))).unwrap_or_default()) }
                     else { "Nothing picked yet".to_string() };
         let sl = label(&state, "inside-state");
@@ -1557,12 +1578,18 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         let inherited = !roots.contains(&parent) && engine::custom::is_skipped(&parent, &skip);   // a folder around it is kept
         let skipped = inherited || engine::custom::is_skipped(p, &skip);
         let inherited_pick = c.picks.iter().any(|q| q != p && p.starts_with(q));   // a folder around it is picked
-        let (active, locked) = if whole { (!skipped, inherited) }
-                               else { (c.picks.contains(p) || inherited_pick, inherited_pick || skipped) };
+        let (mut active, mut locked) = if whole { (!skipped, inherited) }
+                                       else { (c.picks.contains(p) || inherited_pick, inherited_pick || skipped) };
+        // the age choice, in a ticked item: 2 it goes, 1 some of it goes (newer files stay), 0 too new, it stays.
+        // Unticked by you, it stays whatever its age; picked by hand in an unticked item, it goes whatever its age.
+        let ast = if c.checked && age > 0 && !skipped { age_state(c, &roots, p, *dir, *modified, cutoff, &u.dir_times.borrow()) } else { 2 };
+        let too_new = active && ast == 0;
+        if too_new { active = false; locked = true; }   // the age decides: change the age above to include it
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("rowline");
         let chk = gtk::CheckButton::new();
         chk.set_active(active); chk.set_sensitive(!locked && !c.admin);
+        if active && !locked && ast == 1 { chk.set_inconsistent(true); }   // some of it: an orange box with a dash
         chk.set_valign(gtk::Align::Center);
         let (uu, pp, id) = (u.clone(), p.clone(), c.id.clone());
         if whole {   // unticking in a ticked item: always keep it
@@ -1594,9 +1621,11 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let nl = label(n, "row-name"); nl.set_hexpand(true); nl.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         line.append(&nl);
-        let too_new = c.checked && !*dir && age > 0 && *modified > cutoff;   // picked by hand, a file goes whatever its age
         let dsize = if *dir { u.dir_sizes.borrow().get(p).cloned() } else { None };
-        line.append(&label(&if *dir { match dsize { Some(sz) if sz < u64::MAX => format!("{}  \u{00B7}  folder  \u{203A}", fmt(sz)), _ => "folder  \u{203A}".to_string() } } else if too_new { "too new, stays".to_string() } else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) }, "row-sub"));
+        let size = if too_new { "too new, stays".to_string() }
+                   else if *dir { format!("{}{}", match dsize { Some(sz) if sz < u64::MAX => format!("{}  \u{00B7}  ", fmt(sz)), _ => String::new() }, if ast == 1 { "newer files stay" } else { "folder" }) }
+                   else if *len < 1024 { "under 1 KB".to_string() } else { fmt(*len) };
+        line.append(&label(&if *dir { format!("{}  \u{203A}", size) } else { size }, "row-sub"));
         col.append(&line);
         if let Some(sb) = sub { let sl = label(sb, "row-sub"); sl.set_ellipsize(gtk::pango::EllipsizeMode::Middle); col.append(&sl); }   // which folder it comes from
         nb.set_child(Some(&col));
@@ -1612,17 +1641,29 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
     let unknown: Vec<PathBuf> = entries.iter().take(60).filter(|e| e.2 && !u.dir_sizes.borrow().contains_key(&e.1)).map(|e| e.1.clone()).collect();
     if !unknown.is_empty() {
         for d in &unknown { u.dir_sizes.borrow_mut().insert(d.clone(), u64::MAX); }   // "being measured"
-        let (tx, rx) = mpsc::channel::<(PathBuf, u64)>();
+        // its size, and its newest and oldest file (the folder's own date starts as the newest), so the age choice can
+        // tick it (all older), dash it (some) or leave it (all newer)
+        let (tx, rx) = mpsc::channel::<(PathBuf, u64, std::time::SystemTime, std::time::SystemTime, Option<std::time::SystemTime>)>();
         std::thread::spawn(move || for d in unknown {
             use std::os::unix::fs::MetadataExt;
-            let dev = std::fs::symlink_metadata(&d).map(|m| m.dev()).unwrap_or(0);
+            let dm = std::fs::symlink_metadata(&d);
+            let dev = dm.as_ref().map(|m| m.dev()).unwrap_or(0);
+            let mut newest = dm.as_ref().map(|m| engine::age_time(m)).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let mut oldest: Option<std::time::SystemTime> = None;
+            let mut newest_file = std::time::SystemTime::UNIX_EPOCH;
             let mut sum = 0u64; let mut st = vec![d.clone()];
             while let Some(x) = st.pop() {
                 if let Ok(rd) = std::fs::read_dir(&x) { for e in rd.flatten() { if let Ok(m) = std::fs::symlink_metadata(e.path()) {
                     if m.dev() != dev { continue; }   // never into another disk mounted inside
-                    if m.is_dir() { st.push(e.path()); } else if m.is_file() { sum += m.blocks() * 512; } } } }
+                    if m.is_dir() { st.push(e.path()); } else if m.is_file() {
+                        sum += m.blocks() * 512;
+                        let t = engine::age_time(&m);
+                        if t > newest { newest = t; }
+                        if t > newest_file { newest_file = t; }
+                        if oldest.map_or(true, |o| t < o) { oldest = Some(t); }
+                    } } } }
             }
-            if tx.send((d, sum)).is_err() { break; }
+            if tx.send((d, sum, newest, newest_file, oldest)).is_err() { break; }
         });
         let uu = u.clone();
         let asked = u.inside_here.borrow().clone();   // the list that asked; another one open by then isn't redrawn
@@ -1630,7 +1671,7 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
             let mut any = false;
             let refresh = |uu: &Rc<Ui>| if *uu.inside_here.borrow() == asked { fill_panel(uu); };
             loop { match rx.try_recv() {
-                Ok((d, sz)) => { uu.dir_sizes.borrow_mut().insert(d, sz); any = true; }
+                Ok((d, sz, newest, newest_file, oldest)) => { uu.dir_times.borrow_mut().insert(d.clone(), (newest, newest_file, oldest)); uu.dir_sizes.borrow_mut().insert(d, sz); any = true; }
                 Err(mpsc::TryRecvError::Empty) => { if any { refresh(&uu); } return glib::ControlFlow::Continue; }
                 Err(_) => { if any { refresh(&uu); } return glib::ControlFlow::Break; }
             } }
@@ -1640,7 +1681,7 @@ fn inside_list(u: &Rc<Ui>, c: &Cat) {
 
 // Measure items in the background, a few at once, and fill the numbers in as they arrive.
 fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
-    if ids.is_none() && !u.st.borrow().cleaning { u.dir_sizes.borrow_mut().clear(); }   // folder sizes are measured again
+    if ids.is_none() && !u.st.borrow().cleaning { u.dir_sizes.borrow_mut().clear(); u.dir_times.borrow_mut().clear(); }   // folder sizes are measured again
     let targets: Vec<Cat> = {
         let mut st = u.st.borrow_mut();
         if st.cleaning { return; }
@@ -2494,7 +2535,7 @@ const GUIDE: [(&str, &str); 9] = [
     ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
     ("See what fills your disk", "Storage map shows every folder by size, on any disk. Nothing there deletes anything; you can add a folder to your cleanup list."),
     ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
-    ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages. Scan again measures everything afresh."),
+    ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages, and every size measured afresh."),
     ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
     ("Your look, and this guide", "Light, dark or your computer's setting. The ? key shows this guide again whenever you want."),
 ];

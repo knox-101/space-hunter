@@ -23,7 +23,8 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
 - **Explains each one**: click a row to see, in three short lines, what it is, what goes and what happens after
   (more if you want it). Things that fill up over time (Temp, logs, Downloads) let you choose "only older than N"
   or "everything"; caches are simply cleaned whole.
-- **What's inside**: every item lists the folders and files it would clean, with their sizes. Untick anything that
+- **What's inside**: every item lists the folders and files it would clean, with their sizes. Its ticks follow the age you choose:
+  files too new for it show unticked, and a folder with some newer files shows a dash. Untick anything that
   should always stay, or leave an item unticked and tick just the files you want gone: the item then shows ticked,
   with a small note like "25 of 312 files · 40 MB of 1.2 GB", and only those go, in that one clean. Select all / Clear, folders to open, Back.
 - **Asks before cleaning**. **Permanently delete** is chosen to start with, and **Recycle Bin / Trash** is one click
@@ -42,7 +43,7 @@ The same app on Linux (and on Mac), with the same names, look and features:
 
 Light, dark, or follow the system: the three small keys at the top right. The first time you open it, a short
 guide walks through everything that matters, one part of the window at a time; the **?** key beside them shows it
-again. **Default cleanup** puts the ticks and ages back to the first-time setup.
+again. **Default cleanup** puts the ticks and ages back to the first-time setup and measures everything afresh.
 
 ## Safe by design
 

@@ -283,7 +283,7 @@ namespace SpaceHunter
         readonly Font fTip = Theme.CSans(8.75f), fQ = Theme.CBold(10f);
         int hover = -1;   // 0..2 theme, 3 guide
         const float C = 26, Gap = 10, H = 26;
-        public static int DesignWidth { get { return (int)(C * 4 + Gap + 140); } }
+        public static int DesignWidth { get { return (int)(C * 4 + Gap + 220); } }
         float X0 { get { return LW - C * 3; } }               // the theme group
         RectangleF GuideR { get { return new RectangleF(X0 - Gap - C, 1, C, H - 2); } }
         RectangleF Cell(int i) { return new RectangleF(X0 + i * C, 1, C, H - 2); }
@@ -887,6 +887,7 @@ namespace SpaceHunter
         {
             cat.AgeMinutes = minutes; if (minutes > 0) cat.LastAge = minutes;
             ShowAge(); ShowMode();
+            if (inside != null) inside.Invalidate();   // What's inside ticks and unticks by the new age at once
             if (!loading && AgeChanged != null) AgeChanged(cat, EventArgs.Empty);
         }
 
@@ -963,7 +964,7 @@ namespace SpaceHunter
     {
         List<Category> cats;
         CategoryList list; TierBar tiers; DisplayPanel disp; Drawer drawer; Panel body;
-        Key scanKey, cleanKey, finderKey, protectKey, resetKey; Label status;
+        Key cleanKey, finderKey, protectKey, resetKey; Label status;
         bool cleaning;   // a clean is running in its window
         ProgressForm running;
         readonly object qLock = new object();
@@ -973,6 +974,7 @@ namespace SpaceHunter
         Category pendingAge;
         public int GuideAt = -1;   // test hook: open the guide at this step, then snapshot
         ThemeSwitch topKeys; GuideOverlay guide; bool testRun;   // test runs never open the guide by themselves
+        public int TestAge = -1;   // test hook: the opened item's age, in minutes (not saved)
         public string SnapshotPath, OpenPanelFor, FramesDir, KeepPlaceOut; public List<string> PickPaths;   // test hook: picks in the opened item
 
         // Composited painting: the whole window is drawn off-screen first, so the sliding panel never tears.
@@ -993,10 +995,10 @@ namespace SpaceHunter
             strip.Controls.Add(topKeys);
             topKeys.GuideClicked += (s, e) => StartGuide(0);
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            scanKey = new Key("scan again"); finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("default cleanup");
+            finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("default cleanup");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
-            keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
+            keys.Controls.AddRange(new Control[] { finderKey, protectKey, resetKey, cleanKey });
             keys.Resize += (s, e) => PlaceKeys(keys);
             top.Controls.Add(keys); top.Controls.Add(disp); top.Controls.Add(strip);
             // System follows Windows: when Windows switches between light and dark, so does Space Hunter
@@ -1037,7 +1039,6 @@ namespace SpaceHunter
             drawer.Panel.TickChanged += (s, e) => { var c = (Category)s; Settings.Save(cats); c.PickBytes = -1; list.Invalidate(); Refresh_(); Enqueue(new[] { c }); };
             drawer.Panel.RemoveFromHome += (s, e) => { var c = (Category)s; foreach (var r in c.Roots) Custom.Remove(r); drawer.Close(); list.OpenItem = null; Load_(); Enqueue(cats); status.Text = "Removed from the cleanup list: " + c.Name; };
             ageDebounce.Tick += (s, e) => { ageDebounce.Stop(); if (pendingAge != null) Enqueue(new[] { pendingAge }); };
-            scanKey.Click += (s, e) => Enqueue(cats);
             cleanKey.Click += (s, e) =>
             {
                 if (running != null) { if (running.WindowState == FormWindowState.Minimized) running.WindowState = FormWindowState.Normal; running.Activate(); return; }
@@ -1113,7 +1114,7 @@ namespace SpaceHunter
                 new GuideStep { Get = () => Part(protectKey), Title = "Keep what must never go",
                     Body = "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already." },
                 new GuideStep { Get = () => Part(resetKey), Title = "Default cleanup",
-                    Body = "Back to the first-time setup: Quick clean ticked, the usual ages. Scan again measures everything afresh." },
+                    Body = "Back to the first-time setup: Quick clean ticked, the usual ages, and every size measured afresh." },
                 new GuideStep { Get = () => Part(cleanKey), Title = "Clean always asks first",
                     Body = "You see the list of what goes and choose Permanently delete or Recycle Bin. When it's done, a ring shows the space you got back." },
                 new GuideStep { Get = () => { var r = Part(topKeys); var b = topKeys.Bounds_; return new RectangleF(r.X + b.X, r.Y + b.Y, b.Width, b.Height); },
@@ -1147,14 +1148,14 @@ namespace SpaceHunter
         void PlaceKeys(Control keys)
         {
             // The Storage map is a tool of its own, alone at the left. The cleaning keys sit together at the right:
-            // scan again, protected folders and reset to default lead into the one big Clean key.
+            // protected folders and default cleanup lead into the one big Clean key.
             // the row spans the display above it exactly: Storage map on its left edge, Clean ending on its right edge,
             // and Clean centred on the other keys' centre
             int y = Theme.D(14);
-            cleanKey.Location = new Point(keys.Width - cleanKey.Width, y + (scanKey.Height - cleanKey.Height) / 2);
+            cleanKey.Location = new Point(keys.Width - cleanKey.Width, y + (resetKey.Height - cleanKey.Height) / 2);
             finderKey.Location = new Point(0, y);
             int x = cleanKey.Left - Theme.D(12);
-            foreach (var k in new[] { resetKey, protectKey, scanKey }) { x -= k.Width; k.Location = new Point(x, y); x -= Theme.D(8); }
+            foreach (var k in new[] { resetKey, protectKey }) { x -= k.Width; k.Location = new Point(x, y); x -= Theme.D(8); }
         }
 
         void ReadDisk()
@@ -1174,7 +1175,6 @@ namespace SpaceHunter
             disp.Invalidate(); tiers.Invalidate(); list.Invalidate();
             cleanKey.Text = cleaning ? "show cleaning" : "clean " + Engine.Fmt(disp.Selected);
             cleanKey.Enabled = cleaning || !busy && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)) || c.Partial && c.PickBytes > 0);
-            scanKey.Enabled = !busy && !cleaning;
             resetKey.Enabled = !cleaning;   // ticks and ages stay as they were until the clean is done
             PlaceKeys(cleanKey.Parent);
         }
@@ -1287,7 +1287,7 @@ namespace SpaceHunter
                     status.Text = History.FreedAllTime(out _cl) == 0
                         ? "Quick clean is ticked for you: press Clean, check the list, and it's done."
                         : "Scan done.  Click a row to see what it is.  Tick the box to include it.";
-                    if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; if (PickPaths != null || KeepPlaceOut != null) drawer.Panel.ShowFiles();
+                    if (OpenPanelFor != null) { var oc = cats.FirstOrDefault(x => x.Id == OpenPanelFor); if (oc != null) { if (TestAge >= 0) oc.AgeMinutes = TestAge; tiers.Current = oc.Level; list.Tier = oc.Level; list.Relayout(); list.Selected = oc; drawer.Open(oc, true); list.OpenItem = oc; if (PickPaths != null || KeepPlaceOut != null || TestAge >= 0) drawer.Panel.ShowFiles();
                         if (KeepPlaceOut != null)   // test hook: a re-measure must leave the panel where it was
                         {
                             var kc = oc; var kt = new System.Windows.Forms.Timer { Interval = 1500 };
@@ -1363,7 +1363,7 @@ namespace SpaceHunter
     // the item's own folders). It follows the item's rules: only installer files in Downloads, no "memory" folders.
     class InsideList : Canvas
     {
-        class Entry { public string Path, Name, Sub; public bool Dir; public long Size = -1; public DateTime Modified; }   // a folder's size is -1 until measured
+        class Entry { public string Path, Name, Sub; public bool Dir, Timed; public long Size = -1; public DateTime Modified, Own, Newest = DateTime.MinValue, Oldest = DateTime.MaxValue; }   // a folder's size is -1 until measured
         int token;
         readonly List<Entry> rows = new List<Entry>();
         List<string> roots = new List<string>();
@@ -1405,7 +1405,7 @@ namespace SpaceHunter
                     foreach (var i in items.OfType<DirectoryInfo>().Where(d => !exclude.Contains(d.Name)).OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase))
                         rows.Add(new Entry { Path = i.FullName, Name = i.Name, Dir = true, Size = -1, Sub = sub });
                 foreach (var f in items.OfType<FileInfo>().Where(f => exts == null || exts.Contains(f.Extension)).OrderByDescending(x => { try { return x.Length; } catch { return 0L; } }))
-                    rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = Engine.AgeTime(f), Sub = sub });
+                    { var t = Engine.AgeTime(f); rows.Add(new Entry { Path = f.FullName, Name = f.Name, Size = f.Length, Modified = t, Newest = t, Oldest = t, Timed = true, Sub = sub }); }
             }
             catch { }
         }
@@ -1425,7 +1425,10 @@ namespace SpaceHunter
                 foreach (var r in dirs)
                 {
                     if (my != token) return;
+                    // its size, and its newest and oldest file, so the age choice can tick it (all old), dash it (some) or leave it
                     long sum = 0; var st = new Stack<DirectoryInfo>(); st.Push(new DirectoryInfo(r.Path));
+                    DateTime newest = DateTime.MinValue, oldest = DateTime.MaxValue;
+                    DateTime own = DateTime.MinValue; try { own = Engine.AgeTime(new DirectoryInfo(r.Path)); } catch { }   // its own date: counts for a whole subfolder, or when it has no files
                     while (st.Count > 0 && my == token)
                     {
                         FileSystemInfo[] items; try { items = st.Pop().GetFileSystemInfos(); } catch { continue; }
@@ -1433,10 +1436,11 @@ namespace SpaceHunter
                         {
                             if ((i.Attributes & FileAttributes.ReparsePoint) != 0) continue;
                             var d = i as DirectoryInfo; if (d != null) { st.Push(d); continue; }
-                            try { sum += ((FileInfo)i).Length; } catch { }
+                            try { sum += ((FileInfo)i).Length; var t = Engine.AgeTime(i); if (t > newest) newest = t; if (t < oldest) oldest = t; } catch { }
                         }
                     }
-                    r.Size = sum;
+                    r.Size = sum; r.Newest = newest; r.Oldest = oldest; r.Own = own; r.Timed = my == token;
+                    if (r.Timed) lock (tops) tops[r.Path] = newest > own ? newest : own;
                     try { BeginInvoke((Action)Invalidate); } catch { return; }
                 }
             }) { IsBackground = true }.Start();
@@ -1444,6 +1448,30 @@ namespace SpaceHunter
         }
 
         float Top0 { get { return BarH + (Here != null ? 30 : 0); } }
+        readonly Dictionary<string, DateTime> tops = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);   // a folder's newest file, once measured
+
+        // What the age choice does to a row in a ticked item: 2 it goes, 1 some of it goes (newer files stay), 0 it stays.
+        // Follows the age as you change it. Picks in an unticked item go whatever their age.
+        int AgeState(Entry r)
+        {
+            int age = cat != null && cat.AgeChoice ? cat.AgeMinutes : 0;
+            if (!Whole || age <= 0) return 2;
+            var cut = DateTime.Now.AddMinutes(-age);
+            if (cat.Kind == Kind.Subfolders)   // a whole subfolder goes only when nothing in it is newer
+            {
+                string root = RootOf(r.Path); if (root == null) return 2;
+                string rel = r.Path.Substring(root.Length).TrimStart('\\'); int cut1 = rel.IndexOf('\\');
+                string top = cut1 < 0 ? r.Path : root + "\\" + rel.Substring(0, cut1);
+                if (top.Equals(r.Path, StringComparison.OrdinalIgnoreCase))
+                    return !r.Dir ? (r.Modified < cut ? 2 : 0) : !r.Timed ? 2 : (r.Newest > r.Own ? r.Newest : r.Own) < cut ? 2 : 0;
+                DateTime t; lock (tops) if (!tops.TryGetValue(top, out t)) return 2;
+                return t < cut ? 2 : 0;
+            }
+            if (!r.Dir) return r.Modified < cut ? 2 : 0;
+            if (!r.Timed) return 2;   // not measured yet
+            if (r.Oldest == DateTime.MaxValue) return r.Own < cut ? 2 : 0;   // no files in it: its own date decides
+            return r.Newest < cut ? 2 : r.Oldest >= cut ? 0 : 1;
+        }
         bool Whole { get { return cat == null || cat.Checked; } }
         // a folder around it is picked (so it's picked too, and can't be unpicked on its own)
         bool InheritedPick(string p) { return cat != null && cat.Picks.Any(q => p.StartsWith(q + "\\", StringComparison.OrdinalIgnoreCase)); }
@@ -1486,6 +1514,7 @@ namespace SpaceHunter
             if (x < 30)
             {
                 if (Locked(row.Path)) return;   // the folder around it decides
+                if (AgeState(row) == 0 && On(row.Path)) return;   // the age decides: change the age above to include it
                 if (Whole)   // unticking in a ticked item: always keep it
                 {
                     Custom.SetSkipped(row.Path, !Custom.IsSkipped(row.Path, Custom.Skip));
@@ -1511,7 +1540,8 @@ namespace SpaceHunter
             var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
             // the bar: what is picked, and Select all / Clear at the right
             {
-                string state = cat == null ? "" : Whole ? "All of it, except anything unticked" : cat.Partial ? cat.Picks.Count + " picked" + (cat.PickBytes >= 0 ? "  \u00b7  " + cat.PickFiles.ToString("N0") + (cat.PickFiles == 1 ? " file" : " files") + "  \u00b7  " + Engine.Fmt(cat.PickBytes) : "") : "Nothing picked yet";
+                int ageNow = cat != null && cat.AgeChoice ? cat.AgeMinutes : 0;
+                string state = cat == null ? "" : Whole ? (ageNow > 0 ? "Only files older than " + Engine.FmtAge(ageNow) : "All of it, except anything unticked") : cat.Partial ? cat.Picks.Count + " picked" + (cat.PickBytes >= 0 ? "  \u00b7  " + cat.PickFiles.ToString("N0") + (cat.PickFiles == 1 ? " file" : " files") + "  \u00b7  " + Engine.Fmt(cat.PickBytes) : "") : "Nothing picked yet";
                 using (var b = new SolidBrush(cat != null && cat.Partial ? Theme.OrangeDeep : Theme.Muted)) g.DrawString(state, fUp, b, new RectangleF(0, 6, w - 150, 20), nowrap);
                 var cs = g.MeasureString("Clear", fUp); var al = g.MeasureString("Select all", fUp);
                 clearBox = new RectangleF(w - cs.Width - 2, 4, cs.Width + 2, 22); allBox = new RectangleF(clearBox.X - al.Width - 16, 4, al.Width + 2, 22);
@@ -1541,18 +1571,23 @@ namespace SpaceHunter
             for (int i = 0; i < rows.Count; i++, y += rh)
             {
                 var r = rows[i];
-                bool locked = Locked(r.Path), on = On(r.Path);
+                int ast = AgeState(r);
+                bool on = On(r.Path), locked = Locked(r.Path) || on && ast == 0;
+                if (on && ast == 0) on = false;   // too new for the age: stays, shown unticked
                 if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 0, y, w, rh - 1);
                 var box = new RectangleF(6, y + 7, 15, 15);
                 if (on)
                 {
                     using (var p = Theme.Round(box, 2)) using (var b = new SolidBrush(locked ? Theme.Line : Theme.Orange)) g.FillPath(b, p);
-                    using (var pen = new Pen(Theme.OnOrange, 2f)) g.DrawLines(pen, new[] { new PointF(box.X + 3.5f, box.Y + 7.5f), new PointF(box.X + 6.5f, box.Y + 10.5f), new PointF(box.X + 11.5f, box.Y + 4.5f) });
+                    if (ast == 1 && !locked) using (var b = new SolidBrush(Theme.OnOrange)) g.FillRectangle(b, box.X + 3.5f, box.Y + 6.5f, 8, 2f);   // some of it
+                    else using (var pen = new Pen(Theme.OnOrange, 2f)) g.DrawLines(pen, new[] { new PointF(box.X + 3.5f, box.Y + 7.5f), new PointF(box.X + 6.5f, box.Y + 10.5f), new PointF(box.X + 11.5f, box.Y + 4.5f) });
                 }
                 else using (var p = Theme.Round(box, 2)) using (var pen = new Pen(locked ? Theme.Line : Theme.Ink, 1.5f)) g.DrawPath(pen, p);
-                int age = cat != null && cat.AgeChoice ? cat.AgeMinutes : 0;
-                bool tooNew = Whole && !r.Dir && age > 0 && r.Modified > DateTime.Now.AddMinutes(-age);   // picked by hand: goes whatever its age
-                string size = r.Dir ? (r.Size >= 0 ? Engine.Fmt(r.Size) + "  \u00b7  folder" : "folder") : tooNew ? "too new, stays" : r.Size < 1024 ? "under 1 KB" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
+                bool kept = Custom.IsSkipped(r.Path, Custom.Skip) || InheritedSkip(r.Path);   // unticked by you: the age doesn't matter
+                if (kept) ast = 2;
+                bool tooNew = ast == 0;
+                string size = r.Dir ? (tooNew ? "too new, stays" : (r.Size >= 0 ? Engine.Fmt(r.Size) + "  \u00b7  " : "") + (ast == 1 ? "newer files stay" : "folder"))
+                                    : tooNew ? "too new, stays" : r.Size < 1024 ? "under 1 KB" : Engine.Fmt(r.Size); var sm = g.MeasureString(size, fSize);
                 using (var b = new SolidBrush(Theme.Ink))
                     g.DrawString(r.Name, fName, b, new RectangleF(30, y + 6, w - 30 - sm.Width - (r.Dir ? 26 : 10), 20), nowrap);
                 if (r.Sub != null)   // which folder it comes from
