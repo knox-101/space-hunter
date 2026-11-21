@@ -3,7 +3,7 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
-## Unreleased
+## 1.6.3 (2026-11-21)
 
 - **Mac: updating works wherever the app is.** An app opened straight from Downloads is run by macOS from a hidden,
   read-only copy, so the update couldn't replace it ("no permission to save"). Space Hunter now finds the real copy and
