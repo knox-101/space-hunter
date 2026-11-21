@@ -113,8 +113,9 @@ namespace SpaceHunter
 
             // the card: under the lit part if there's room, else above it; kept inside the window
             var st = steps[step];
+            float titleH = g.MeasureString(st.Title, fTitle, (int)(CardW - 28)).Height;   // the title wraps inside the card
             float bodyH = g.MeasureString(st.Body, fBody, (int)(CardW - 28)).Height;
-            float h = 16 + 22 + bodyH + 14 + 30 + 12;
+            float h = 14 + titleH + 4 + bodyH + 14 + 30 + 12;
             float x = Math.Max(16, Math.Min(LW - CardW - 16, spot.X + spot.Width / 2 - CardW / 2));
             float y = spot.Bottom + 14 + h < LH - 12 ? spot.Bottom + 14 : spot.Y - 14 - h;
             if (y < 12) y = Math.Min(LH - h - 12, spot.Y + 24);
@@ -125,11 +126,11 @@ namespace SpaceHunter
             using (var p = Theme.Round(card, 5)) using (var pen = new Pen(Color.FromArgb(a, 0x5A, 0x56, 0x4F), 1f)) g.DrawPath(pen, p);
             using (var b = new SolidBrush(Color.FromArgb(a, Theme.DisplayInk)))
             {
-                g.DrawString(st.Title, fTitle, b, card.X + 14, card.Y + 14);
-                using (var bb = new SolidBrush(Color.FromArgb((int)(a * 0.82f), Theme.DisplayInk))) g.DrawString(st.Body, fBody, bb, new RectangleF(card.X + 14, card.Y + 40, CardW - 28, bodyH + 4));
+                g.DrawString(st.Title, fTitle, b, new RectangleF(card.X + 14, card.Y + 14, CardW - 28, titleH + 2));
+                using (var bb = new SolidBrush(Color.FromArgb((int)(a * 0.82f), Theme.DisplayInk))) g.DrawString(st.Body, fBody, bb, new RectangleF(card.X + 14, card.Y + 14 + titleH + 4, CardW - 28, bodyH + 4));
             }
             float fy = card.Bottom - 12 - 28;
-            using (var b = new SolidBrush(Color.FromArgb(a, Theme.DisplayMuted))) g.DrawString((step + 1) + " / " + steps.Count, fFoot, b, card.X + 14, fy + 7);
+            using (var b = new SolidBrush(Color.FromArgb(a, Theme.DisplayMuted))) g.DrawString((step + 1) + " / " + steps.Count, fFoot, b, card.X + 14, fy + 5);
             bool last = step == steps.Count - 1;
             string nk = last ? "GOT IT" : "NEXT";
             var nm = g.MeasureString(nk, fKey);

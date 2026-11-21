@@ -52,7 +52,9 @@ namespace SpaceHunter
             // permanently delete is chosen to start with; the Recycle Bin is one click away, for any clean
             Recycle = false;
 
-            var h = new Label { Text = "Clean " + Engine.Fmt(total) + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = Theme.P(26, 22), UseMnemonic = false };
+            // one left line: the title, "How to clean" and the hint start their letters on the keys' and risk marks' edge
+            // (each x takes off the label's own space before its first letter, measured at this font size)
+            var h = new Label { Text = "Clean " + Engine.Fmt(total) + "?", Font = Theme.Bold(17f), ForeColor = Theme.Ink, AutoSize = true, Location = new Point(Theme.D(26 - 6.8f), Theme.D(22)), UseMnemonic = false };
             var lst = new CanvasPanel { Location = Theme.P(26, 70), Size = Theme.D(508, listH) };
             Font fn = Theme.CSemi(10.5f), fh = Theme.CBold(9.5f);
             lst.Draw += (s, e) =>
@@ -61,18 +63,18 @@ namespace SpaceHunter
                 g.Clear(Theme.Chassis);
                 foreach (var l in lines)
                 {
-                    if (l.Head)
+                    if (l.Head)   // typographic: the letters start on the risk marks' edge
                     {
-                        using (var br = new SolidBrush(Theme.Muted)) g.DrawString(l.Text.ToUpperInvariant(), fh, br, 0, y + 7);
+                        using (var br = new SolidBrush(Theme.Muted)) g.DrawString(l.Text.ToUpperInvariant(), fh, br, 0, y + 7, StringFormat.GenericTypographic);
                         y += HeadH; continue;
                     }
                     Row(g, W, y, l.Text, l.Size, l.Level, fn);
                     y += RowH;
                 }
             };
-            how = new Label { Text = "How to clean", Font = Theme.Semi(10f), ForeColor = Theme.Muted, AutoSize = true, Location = Theme.P(28, 82 + listH), UseMnemonic = false };
+            how = new Label { Text = "How to clean", Font = Theme.Semi(10f), ForeColor = Theme.Muted, AutoSize = true, Location = new Point(Theme.D(28 - 6.8f), Theme.D(82 + listH)), UseMnemonic = false };
             delKey.Location = Theme.P(26, 106 + listH); binKey.Location = new Point(delKey.Right + Theme.D(4), delKey.Top);
-            hint = new Label { Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, Location = Theme.P(28, 150 + listH), AutoSize = true, MaximumSize = Theme.D(508, 0), UseMnemonic = false };
+            hint = new Label { Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, Location = new Point(Theme.D(28 - 5.2f), Theme.D(150 + listH)), AutoSize = true, MaximumSize = Theme.D(508, 0), UseMnemonic = false };
             delKey.Click += (s, e) => { Recycle = false; ShowHow(); };
             binKey.Click += (s, e) => { Recycle = true; ShowHow(); };
             cancel = new Key("cancel"); ok = new Key("clean", true);
@@ -91,7 +93,10 @@ namespace SpaceHunter
             using (var br = new SolidBrush(Theme.Ink))
             using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
                 g.DrawString(name, f, br, new RectangleF(14, y + 5, W - m.Width - 26, 22), sf);
-            using (var br = new SolidBrush(Theme.Ink)) g.DrawString(size, f, br, W - m.Width, y + 5);
+            // the size ends on the separator's end (right-aligned, no side padding)
+            using (var br = new SolidBrush(Theme.Ink))
+            using (var far = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Far })
+            { far.FormatFlags |= StringFormatFlags.NoWrap; g.DrawString(size, f, br, new RectangleF(0, y + 5, W, 22), far); }
             using (var p = new Pen(Theme.Line)) g.DrawLine(p, 14, y + 31, W, y + 31);
         }
 
@@ -177,6 +182,10 @@ namespace SpaceHunter
             whatLink = new LinkLabel { Text = "What was cleaned", AutoSize = true, Font = Theme.Semi(10f), LinkColor = Theme.Ink, ActiveLinkColor = Theme.OrangeDeep, VisitedLinkColor = Theme.Ink,
                                        LinkBehavior = LinkBehavior.AlwaysUnderline, BackColor = Theme.Chassis, Location = Theme.P(20, 507), Visible = false, UseMnemonic = false };
             whatLink.LinkClicked += (s, e) => ShowDetails(!details);
+            // centred on the Done key, its letters starting on the display's left edge
+            // (the label's letters sit low in its box, so it is lifted until its capitals centre on DONE's)
+            whatLink.SizeChanged += (s, e) => whatLink.Location = new Point(Theme.D(18) - LinkInset, stopKey.Top + stopKey.Height / 2 - whatLink.Height / 2 - Theme.D(2.4f));
+            whatLink.Location = new Point(Theme.D(18) - LinkInset, stopKey.Top + stopKey.Height / 2 - whatLink.Height / 2 - Theme.D(2.4f));
             baseH = display.Height; fullH = Theme.D(462);
             try { var di = new DriveInfo(diskRoot); diskTotal = di.TotalSize; freeBefore = di.AvailableFreeSpace; } catch { }
             KeyPreview = true;
@@ -198,6 +207,7 @@ namespace SpaceHunter
         }
 
         static double Ease(double t) { t = Math.Max(0, Math.Min(1, t)); return 1 - Math.Pow(1 - t, 3); }
+        static int LinkInset { get { return Theme.D(3.6f); } }   // the label's own space before its first letter
         double Ms { get { return !done || cnt.Cancel ? -1 : finishClock.IsRunning || finishClock.ElapsedMilliseconds > 0 ? finishClock.ElapsedMilliseconds : FinishMs; } }
 
         void PaintDisplay(object s, PaintEventArgs e)
@@ -217,13 +227,15 @@ namespace SpaceHunter
                          : !beat ? "Finishing"
                          : binOnly ? "Done  ·  moved to the Recycle Bin"
                          : "Done  ·  everything you ticked is cleaned";
+            // the header sits a little lower, so it doesn't crowd the display's top edge
+            const float hy = 8;
             if (beat && !cnt.Cancel)
             {
-                using (var b = new SolidBrush(Theme.DisplayInk)) g.DrawString("DONE", fUnit, b, pad - 3, 4);
+                using (var b = new SolidBrush(Theme.DisplayInk)) g.DrawString("DONE", fUnit, b, pad - 3, 4 + hy);
                 float dw = g.MeasureString("DONE", fUnit).Width;
-                using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString(label.Replace("Done  ·  ", "·  "), fLabel, b, pad - 3 + dw - 2, 12);
+                using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString(label.Replace("Done  ·  ", "·  "), fLabel, b, pad - 3 + dw - 2, 12 + hy);
             }
-            else using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
+            else using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12 + hy, StringFormat.GenericTypographic);   // starts on the bar's edge
             // the big number counts to the real total as the last files go
             double count = fin ? Ease(ms / 300.0) : 1;
             long shown = (long)(total * (fin ? 0.97 + 0.03 * count : 1));
@@ -231,15 +243,15 @@ namespace SpaceHunter
             using (var b = new SolidBrush(Theme.Orange))
             {
                 var ns = g.MeasureString(num, fBig);
-                g.DrawString(num, fBig, b, pad - 5, 28);
-                g.DrawString(unit + (binOnly ? " TO RECYCLE BIN" : " FREED"), fUnit, b, pad - 5 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
+                g.DrawString(num, fBig, b, pad - 9, 28 + hy);   // the digits' left edge on the label's
+                g.DrawString(unit + (binOnly ? " TO RECYCLE BIN" : " FREED"), fUnit, b, pad - 9 + ns.Width - 6, 28 + hy + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
             }
             if (!fin)   // while cleaning: files, skipped, time
             {
                 string stat = cnt.Files.ToString("N0") + " files  ·  " + cnt.Skipped.ToString("N0") + " skipped  ·  " + clock.Elapsed.ToString(@"m\:ss");
-                using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44); }
+                using (var b = new SolidBrush(Theme.DisplayInk)) { var ss = g.MeasureString(stat, fStat); g.DrawString(stat, fStat, b, W - pad - ss.Width, 44 + hy); }
                 if (cnt.RecycledBytes > 0 && !binOnly)
-                    using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68); }
+                    using (var b = new SolidBrush(Theme.DisplayMuted)) { var rs = "+ " + Engine.Fmt(cnt.RecycledBytes) + " moved to the Recycle Bin"; var m = g.MeasureString(rs, fStat2); g.DrawString(rs, fStat2, b, W - pad - m.Width, 68 + hy); }
             }
 
             // the bar while cleaning; at the end it gives way to your drive, drawn as a ring
@@ -327,8 +339,11 @@ namespace SpaceHunter
                     using (var b = new SolidBrush(Color.FromArgb(ca, Theme.DisplayInk))) g.DrawString(fn + " " + fu, fRing, b, cx, cy - 34, sf);
                     using (var m = new SolidBrush(Color.FromArgb(ca, Theme.DisplayMuted))) g.DrawString("free of " + Engine.Fmt(diskTotal) + " on " + diskRoot.TrimEnd('\\'), fStat2, m, cx, cy + 2, sf);
                     long gain = freeAfter - freeBefore;
+                    // in the same unit as the big number, so one amount never reads "1.0 GB" up there and "996 MB" here
+                    string gs = Engine.Fmt(gain);
+                    if (unit == "GB" && gain >= (100L << 20) && gs.EndsWith(" MB")) gs = (gain / 1073741824.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " GB";
                     if (gain > 0 && close > 0)
-                        using (var o = new SolidBrush(Color.FromArgb((int)(255 * close), Theme.Orange))) g.DrawString("+ " + Engine.Fmt(gain), fGain, o, cx, cy + 22, sf);
+                        using (var o = new SolidBrush(Color.FromArgb((int)(255 * close), Theme.Orange))) g.DrawString("+ " + gs, fGain, o, cx, cy + 22, sf);
                 }
             }
             if (ms < ListAt || details) return;

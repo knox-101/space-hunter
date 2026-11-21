@@ -167,7 +167,8 @@ namespace SpaceHunter
             string label = !scanning ? "Storage map  ·  just looking, nothing is deleted here"
                          : "Storage map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
                                                                      : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
-            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12);
+            var typo = StringFormat.GenericTypographic;   // the left column starts its letters on `pad`, like the big number and the bar
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12, typo);
             if (scanning)   // a large turning ring at the right for the whole scan: impossible to miss
             {
                 float rr = 26, cx = W - pad - rr - 6, cy = H / 2 - 4;
@@ -181,17 +182,17 @@ namespace SpaceHunter
                 using (var b = new SolidBrush(Theme.Orange))
                 {
                     var ns = g.MeasureString(num, fBig);
-                    g.DrawString(num, fBig, b, pad - 5, 28);
-                    g.DrawString(unit, fUnit, b, pad - 5 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
+                    g.DrawString(num, fBig, b, pad - 9, 28);   // the digits' left edge on the label's
+                    g.DrawString(unit, fUnit, b, pad - 9 + ns.Width - 6, 28 + ns.Height - g.MeasureString(unit, fUnit).Height - 11);
                 }
-                using (var b = new SolidBrush(Theme.DisplayInk)) g.DrawString(Theme.MidPath(cur.Path, 90), fPath, b, pad, 104);
+                using (var b = new SolidBrush(Theme.DisplayInk)) g.DrawString(Theme.MidPath(cur.Path, 90), fPath, b, pad, 104, typo);
                 using (var b = new SolidBrush(Theme.DisplayMuted))
-                    g.DrawString(cur.Files.ToString("N0") + " files" + (cur.Denied ? "  ·  some folders couldn't be read" : ""), fSub, b, pad, 128);
+                    g.DrawString(cur.Files.ToString("N0") + " files" + (cur.Denied ? "  ·  some folders couldn't be read" : ""), fSub, b, pad, 128, typo);
             }
             else if (scanning)
             {
                 // a big running count and a bar, so the scan is impossible to miss
-                using (var b = new SolidBrush(Theme.Orange)) g.DrawString(BigFolders.Scanned.ToString("N0") + " FILES", fBig, b, pad - 5, 28);
+                using (var b = new SolidBrush(Theme.Orange)) g.DrawString(BigFolders.Scanned.ToString("N0") + " FILES", fBig, b, pad - 9, 28);
                 float bx = pad, by = 98, bw = W - 2 * pad - 80, bh = 14;   // leaves room for the ring
                 using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, bx, by, bw, bh);
                 if (target > 0)
@@ -301,7 +302,7 @@ namespace SpaceHunter
         int At(float y) { int i = (int)((y + scroll) / RowH); return i >= 0 && i < rows.Count ? i : -1; }
 
         // the "add to cleanup list" key sits between the name and the bar
-        RectangleF Chip(int i) { float w = LW - 14; return new RectangleF(w * 0.38f, i * RowH - scroll + 12, 162, 26); }
+        RectangleF Chip(int i) { float w = LW - 18; return new RectangleF(w * 0.38f, i * RowH - scroll + 12, 162, 26); }
         bool CanAddRow(FolderNode r) { return (r.Parent != null || r.IsFile) && !added.Contains(r) && !refusal.ContainsKey(r) && !(inside.ContainsKey(r) && inside[r]); }
         bool HasChip(FolderNode r) { return CanAddRow(r) || added.Contains(r); }   // "added" chips can be clicked to undo
 
@@ -348,14 +349,14 @@ namespace SpaceHunter
                     g.DrawString(Placeholder, Theme.CSemi(11f), b, new RectangleF(0, LH / 2 - 40, LW, 30), sf);
                 return;
             }
-            float w = LW - 14;
+            float w = LW - 18;   // rows end on the same edge as the block chart and the display above
             int first = (int)(scroll / RowH), last = Math.Min(rows.Count - 1, (int)((scroll + LH) / RowH));
             long max = Math.Max(1, node.Size);
             var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
             for (int i = first; i <= last; i++)
             {
                 var r = rows[i]; float top = i * RowH - scroll;
-                if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 10, top, w - 6, RowH - 1);
+                if (i == hover) using (var b = new SolidBrush(Theme.Hover)) g.FillRectangle(b, 18, top, w - 18, RowH - 1);   // the separator's span
                 bool own = r.Parent == null && !r.IsFile;   // the folder's own summary rows
                 float nameW = w * 0.38f - 30;
                 using (var b = new SolidBrush(own ? Theme.Soft : Theme.Ink)) g.DrawString(r.Name, fName, b, new RectangleF(22, top + 7, nameW, 20), nowrap);
@@ -396,7 +397,7 @@ namespace SpaceHunter
                 if (!own && r.Kids.Count > 0)   // drill-in chevron
                     using (var pen = new Pen(i == hover ? Theme.Ink : Theme.Soft, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     { float cx = w - 2, cy = top + RowH / 2; g.DrawLines(pen, new[] { new PointF(cx - 4, cy - 6), new PointF(cx + 2, cy), new PointF(cx - 4, cy + 6) }); }
-                using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 22, top + RowH - 1, w, top + RowH - 1);
+                using (var pen = new Pen(Theme.Line)) g.DrawLine(pen, 18, top + RowH - 1, w, top + RowH - 1);   // on the block chart's edges
             }
             var th = Thumb();
             if (!th.IsEmpty) using (var p = Theme.Round(th, 2)) using (var b = new SolidBrush(Color.FromArgb(120, Theme.Ink))) g.FillPath(b, p);
@@ -521,12 +522,21 @@ namespace SpaceHunter
                     float c = Math.Min(14, Math.Min(r.Width, r.Height) / 2);
                     using (var br = new SolidBrush(Theme.Orange)) g.FillPolygon(br, new[] { new PointF(r.Right - c, r.Y), new PointF(r.Right, r.Y), new PointF(r.Right, r.Y + c) });
                 }
-                if (r.Width >= 46 && r.Height >= 34)
+                if (r.Width >= 30 && r.Height >= 20)
                 {
-                    var tr = new RectangleF(r.X + 8, r.Y + 6, r.Width - 16 - (b.Marked ? 8 : 0), 18);
+                    // never a stub: the size is drawn whole or not at all; a name that doesn't fit gives way to the size alone
                     Color ink = hot ? Theme.DisplayInk : Theme.Ink, soft = hot ? Theme.DisplayMuted : Theme.Soft;
-                    using (var br = new SolidBrush(b.Free ? Theme.Muted : ink)) g.DrawString(b.Name, fName, br, tr, nowrap);
-                    using (var br = new SolidBrush(soft)) g.DrawString(Engine.Fmt(b.Size), fSize, br, new RectangleF(r.X + 8, r.Y + 23, r.Width - 16, 16), nowrap);
+                    string sz = Engine.Fmt(b.Size);
+                    float tw = r.Width - 16 - (b.Marked ? 8 : 0);
+                    bool sizeFits = g.MeasureString(sz, fSize).Width <= r.Width - 16 + 2;
+                    bool nameFits = g.MeasureString(b.Name, fName).Width <= tw + 2 && r.Height >= 34;
+                    if (sizeFits && nameFits)
+                    {
+                        using (var br = new SolidBrush(b.Free ? Theme.Muted : ink)) g.DrawString(b.Name, fName, br, new RectangleF(r.X + 8, r.Y + 6, tw + 4, 18), nowrap);
+                        using (var br = new SolidBrush(soft)) g.DrawString(sz, fSize, br, new RectangleF(r.X + 8, r.Y + 23, r.Width - 12, 16), nowrap);
+                    }
+                    else if (sizeFits)
+                        using (var br = new SolidBrush(soft)) g.DrawString(sz, fSize, br, new RectangleF(r.X + 8, r.Y + 6, r.Width - 12, 16), nowrap);
                 }
             }
             if (blocks.Count == 0) return;   // nothing to explain until the chart is there

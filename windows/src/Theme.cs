@@ -220,6 +220,20 @@ namespace SpaceHunter
             p.CloseFigure(); return p;
         }
 
+        // The narrowest width (up to maxW) that keeps text on as few lines as at maxW: wrapped lines come out even,
+        // so a second line is never one word on its own.
+        public static float Balanced(Graphics g, string t, Font f, float maxW)
+        {
+            if (string.IsNullOrEmpty(t) || maxW <= 20) return maxW;
+            float one = g.MeasureString(t, f).Width;
+            if (one <= maxW) return maxW;
+            float h = g.MeasureString(t, f, (int)maxW).Height;
+            int lines = Math.Max(2, (int)Math.Round(h / g.MeasureString("Ag", f).Height));
+            for (float w = Math.Max(20, one / lines); w < maxW; w += 2)
+                if (g.MeasureString(t, f, (int)w).Height <= h + 0.5f) return Math.Min(maxW, w + 4);
+            return maxW;
+        }
+
         public static void Hq(Graphics g)
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -260,8 +274,9 @@ namespace SpaceHunter
         // "34.8" + "GB"
         public static void SizeParts(long b, out string num, out string unit)
         {
-            if (b >= 1000L << 30) { num = (b / 1099511627776.0).ToString("0.00"); unit = "TB"; }
-            else if (b >= 1000L << 20) { num = (b / 1073741824.0).ToString("0.0"); unit = "GB"; }
+            // the same switch points as Engine.Fmt: a unit changes where the rounded number would reach 1000
+            if (b >= 1073688136909L) { num = (b / 1099511627776.0).ToString("0.00"); unit = "TB"; }
+            else if (b >= 1048051712L) { num = (b / 1073741824.0).ToString("0.0"); unit = "GB"; }
             else if (b >= 1L << 20) { num = (b / 1048576.0).ToString("0"); unit = "MB"; }
             else if (b > 0) { num = (b / 1024.0).ToString("0"); unit = "KB"; }
             else { num = "0"; unit = "GB"; }

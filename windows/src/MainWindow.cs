@@ -33,36 +33,39 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             using (var pen = new Pen(Color.Black, 2)) g.DrawLine(pen, 7, 2, W - 7, 2);   // inset lip
             float pad = 22, right = W - pad;
+            // the right column is right-aligned into boxes that end on `right`, so every line ends on the same edge
+            // (typographic: no GDI+ side padding, which differs by font size and made the ends ragged)
+            var far = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Far }; far.FormatFlags |= StringFormatFlags.NoWrap;
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA)))
             {
-                g.DrawString(Scanning ? "Scanning ..." : "Space to free up", fLabel, b, pad, 13);
-                var dl = "Disk " + Path.GetPathRoot(Engine.W).TrimEnd('\\'); var sz = g.MeasureString(dl, fLabel);
-                g.DrawString(dl, fLabel, b, right - sz.Width, 13);
+                g.DrawString(Scanning ? "Scanning ..." : "Space to free up", fLabel, b, pad, 13, StringFormat.GenericTypographic);   // starts on the bar's edge
+                var dl = "Disk " + Path.GetPathRoot(Engine.W).TrimEnd('\\');
+                g.DrawString(dl, fLabel, b, new RectangleF(pad, 13, right - pad, 24), far);
             }
             string num, unit; Theme.SizeParts(Selected, out num, out unit);
             using (var b = new SolidBrush(Theme.Orange))
             {
                 var ns = g.MeasureString(num, fBig);
-                g.DrawString(num, fBig, b, pad - 6, 30);
-                g.DrawString(unit, fUnit, b, pad - 6 + ns.Width - 8, 30 + ns.Height - g.MeasureString(unit, fUnit).Height - 13);
+                g.DrawString(num, fBig, b, pad - 12.5f, 30);   // the digits start on the label's and the bar's edge
+                g.DrawString(unit, fUnit, b, pad - 12.5f + ns.Width - 8, 30 + ns.Height - g.MeasureString(unit, fUnit).Height - 13);
                 // beside the number: what kind of space it is, and what else is there if you look
                 if (!Scanning && Selected > 0)
                 {
-                    float tx = pad - 6 + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14;
+                    float tx = pad - 12.5f + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14;
                     using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString(OnlySafe ? (FreedAll == 0 ? "all safe to clean  ·  press Clean to start" : "all safe to clean") : "includes items to check first", fLegend, ib, tx, 44);
                     if (ReviewUnticked > 0)
                         using (var mb = new SolidBrush(Theme.DisplayMuted)) g.DrawString("+ " + Engine.Fmt(ReviewUnticked) + " more you can check yourself", fLegend, mb, tx, 64);
                 }
             }
             string disk = Total > 0 ? Engine.Fmt(Free) + " free of " + Engine.Fmt(Total) : "";
-            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) { var ds = g.MeasureString(disk, fDisk); g.DrawString(disk, fDisk, b, right - ds.Width, 35); }
+            using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(disk, fDisk, b, new RectangleF(pad, 35, right - pad, 24), far);
 
             // history: free space over time + everything freed so far
             if (History.Count >= 2)
             {
                 var pts = History.Skip(Math.Max(0, History.Count - 60)).ToList();
                 // short windows (125% and 150% scaling) get a shorter line, with its label beside it
-                float sw = Compact ? 120 : 170, sh = Compact ? 16 : 26, sx = right - sw, sy = Compact ? 80 : 66;
+                float sw = Compact ? 120 : 170, sh = Compact ? 16 : 26, sx = right - 3 - sw, sy = Compact ? 80 : 66;   // the dot (radius 3) ends on `right`
                 long mn = pts.Min(p => p.Value), mx = pts.Max(p => p.Value); if (mx == mn) mx = mn + 1;
                 var line = new List<PointF>();
                 for (int i = 0; i < pts.Count; i++)
@@ -73,14 +76,14 @@ namespace SpaceHunter
                 {
                     var hl = "Free space since " + pts[0].Key.ToString("d MMM"); var hs = g.MeasureString(hl, fHist);
                     if (Compact) g.DrawString(hl, fHist, b, sx - hs.Width - 10, sy + sh / 2 - hs.Height / 2);
-                    else g.DrawString(hl, fHist, b, right - hs.Width, sy + sh + 3);
+                    else g.DrawString(hl, fHist, b, new RectangleF(pad, sy + sh + 3, right - pad, 22), far);
                 }
             }
             if (FreedAll > 0)
                 using (var b = new SolidBrush(Theme.DisplayMuted))
                 {
                     var fl = "Freed so far: " + Engine.Fmt(FreedAll) + " in " + Cleans + (Cleans == 1 ? " clean" : " cleans");
-                    var fs = g.MeasureString(fl, fSmall); g.DrawString(fl, fSmall, b, right - fs.Width, Compact ? 58 : 116);
+                    g.DrawString(fl, fSmall, b, new RectangleF(pad, Compact ? 58 : 116, right - pad, 22), far);
                 }
 
             // the disk: used | ticked (orange) | review first, not ticked (hatched) | free
@@ -114,10 +117,11 @@ namespace SpaceHunter
 
         float Legend(Graphics g, float x, float y, Color c, bool hatch, string text, Color ink)
         {
-            var box = new RectangleF(x, y + 3, 13, 13);
+            var box = new RectangleF(x, y + 1.8f, 13, 13);   // centred on the words' x-height
             if (hatch) Theme.Hatch(g, box, c, Theme.Screen);
             else using (var b = new SolidBrush(c)) g.FillRectangle(b, box);
-            if (c == Theme.DisplayTrack) using (var p = new Pen(Theme.DisplayMuted)) g.DrawRectangle(p, box.X, box.Y, box.Width, box.Height);
+            // the outline sits inside the box, so the "Free" swatch is the same size as the others
+            if (c == Theme.DisplayTrack) using (var p = new Pen(Theme.DisplayMuted)) g.DrawRectangle(p, box.X + 0.5f, box.Y + 0.5f, box.Width - 1, box.Height - 1);
             using (var b = new SolidBrush(ink)) g.DrawString(text, fLegend, b, x + 19, y);
             return x + 19 + g.MeasureString(text, fLegend).Width + 24;
         }
@@ -206,17 +210,19 @@ namespace SpaceHunter
                 var hf = on ? fSubB : fName2; Color hc = on || hot ? Theme.Ink : Theme.Muted;
                 string nameDot = Theme.TierName(lvl);
                 using (var b = new SolidBrush(hc)) g.DrawString(nameDot, hf, b, x, r.Y + 10);
-                float bx2 = x + g.MeasureString(nameDot, hf).Width + 10;
+                // placed by the semibold width always, so the box doesn't shift when the section opens
+                float bx2 = x + g.MeasureString(nameDot, fSubB).Width + 10;
                 boxes[i] = RectangleF.Empty;
                 if (nItems > 0)   // the box: filled with a tick (all), a dash (some), or empty (none)
                 {
-                    float th2 = g.MeasureString("Ag", hf).Height;
+                    float th2 = g.MeasureString("Ag", fSubB).Height;
                     var bxr = new RectangleF(bx2, r.Y + 10 + th2 / 2 - 7.5f, 14, 14); boxes[i] = bxr;
                     bool all = nTicked == nItems;
-                    if (nTicked == 0) using (var pen = new Pen(on || hot ? Theme.Ink : Theme.Soft, 1.4f)) g.DrawRectangle(pen, bxr.X, bxr.Y, bxr.Width, bxr.Height);
+                    // rounded like the rows' boxes
+                    if (nTicked == 0) using (var path = Theme.Round(bxr, 2)) using (var pen = new Pen(on || hot ? Theme.Ink : Theme.Soft, 1.4f)) g.DrawPath(pen, path);
                     else
                     {
-                        using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, bxr);
+                        using (var path = Theme.Round(bxr, 2)) using (var b = new SolidBrush(Theme.Orange)) g.FillPath(b, path);
                         if (all) using (var pen = new Pen(Theme.OnOrange, 1.7f)) g.DrawLines(pen, new[] { new PointF(bxr.X + 3f, bxr.Y + 7.2f), new PointF(bxr.X + 6f, bxr.Y + 10.2f), new PointF(bxr.X + 11.2f, bxr.Y + 3.8f) });
                         else using (var b = new SolidBrush(Theme.OnOrange)) g.FillRectangle(b, bxr.X + 3.5f, bxr.Y + 6.1f, 7, 2f);
                     }
@@ -242,6 +248,7 @@ namespace SpaceHunter
                     using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisWord })
                     {
                         string d = Theme.TierDesc(lvl);
+                        dw = Theme.Balanced(g, d, fDesc, dw);   // two even lines, never one word alone on the second
                         var dm = g.MeasureString(d, fDesc, (int)dw);
                         float dh = Math.Min(dm.Height, 36);
                         g.DrawString(d, fDesc, b, new RectangleF(dx, ny + ns.Height / 2 - dh / 2 + 1, dw, dh + 2), sf);
@@ -351,7 +358,9 @@ namespace SpaceHunter
         List<Category> cats = new List<Category>();
         public Level Tier = Level.Safe;
         float totalH, scroll, dragOffset; int hover = -1; bool dragThumb;
-        const float RowH = 54, SmallH = 38, ToolsH = 80;
+        const float RowH = 54, SmallH = 38;
+        float toolsH = 110;   // the section header row: set from the measured explain text
+        public float HeaderH { get { return toolsH; } }
         public Category Selected, OpenItem;   // OpenItem: the row whose panel is showing
         public event EventHandler SelectionChanged, CheckedChanged, PanelRequested;
         Font fName = Theme.CSemi(10.5f), fNameSel = Theme.CBold(10.5f), fLine = Theme.CSans(9f), fSize = Theme.CSemi(11f),
@@ -365,7 +374,7 @@ namespace SpaceHunter
         public void Relayout()
         {
             rows.Clear(); float y = 0;
-            float th = ToolsH + 30;   // room for the section's call to action
+            float th = toolsH;   // the section's heading, its explain line(s) and call to action (measured in OnPaint)
             rows.Add(new Row { Y = y, H = th, Tools = true }); y += th;
             var items = cats.Where(x => x.Level == Tier).ToList();
             var full = items.Where(x => !IsEmpty(x)).OrderByDescending(x => x.Bytes).ToList();
@@ -472,12 +481,20 @@ namespace SpaceHunter
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = Begin(e); g.Clear(Theme.Chassis);
-            float w = LW - 14;
+            // the rows span the same edges as the section rail above (18 in from each side)
+            float x0 = 18, w = LW - 18;
+            float wantTools = toolsH;
             var nowrap = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
             for (int ri = 0; ri < rows.Count; ri++)
             {
                 var r = rows[ri];
                 float top = r.Y - scroll;
+                if (r.Tools)   // measured even when scrolled out of view, so its height is always right
+                {
+                    float ew0 = Theme.Balanced(g, Theme.TierExplain(Tier), fLine, Math.Min(w - 40, 820));
+                    float eh0 = Math.Min(g.MeasureString(Theme.TierExplain(Tier), fLine, (int)ew0).Height, 38);
+                    wantTools = (float)Math.Round(40 + eh0 + 8 + 20 + 12);   // heading, explain, gap, call to action, gap
+                }
                 if (top > LH || top + r.H < 0) continue;
                 if (r.Tools)
                 {
@@ -485,12 +502,12 @@ namespace SpaceHunter
                     using (var b = new SolidBrush(Theme.Ink)) g.DrawString(t, fTitle, b, 22, top + 14);
                     var a = "Untick all"; var n = "Tick all";
                     var aw = g.MeasureString(a, fTool); var nw = g.MeasureString(n, fTool);
-                    tickNone = new RectangleF(w - aw.Width - 4, top + 13, aw.Width + 4, 22);
+                    tickNone = new RectangleF(w - aw.Width - 2, top + 13, aw.Width + 4, 22);   // its underline ends on the rail's end
                     tickAll = new RectangleF(tickNone.X - nw.Width - 22, top + 13, nw.Width + 4, 22);
                     using (var b = new SolidBrush(Theme.Ink)) { g.DrawString(n, fTool, b, tickAll.X + 2, top + 14); g.DrawString(a, fTool, b, tickNone.X + 2, top + 14); }
                     using (var p = new Pen(Theme.Ink)) { g.DrawLine(p, tickAll.X + 2, top + 33, tickAll.Right - 2, top + 33); g.DrawLine(p, tickNone.X + 2, top + 33, tickNone.Right - 2, top + 33); }
-                    // what this section is, in one plain line
-                    float ew = Math.Min(w - 40, 820);
+                    // what this section is, in one plain line (two even lines when it wraps)
+                    float ew = Theme.Balanced(g, Theme.TierExplain(Tier), fLine, Math.Min(w - 40, 820));
                     var em = g.MeasureString(Theme.TierExplain(Tier), fLine, (int)ew);
                     using (var b = new SolidBrush(Theme.Muted)) g.DrawString(Theme.TierExplain(Tier), fLine, b, new RectangleF(22, top + 40, ew, 38));
                     // the call to action: its own line, an orange bar and orange-deep words
@@ -499,15 +516,16 @@ namespace SpaceHunter
                     using (var b = new SolidBrush(Theme.OrangeDeep))
                     using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisWord, FormatFlags = StringFormatFlags.NoWrap })
                         g.DrawString(Theme.TierCta(Tier), fNoticeB, b, new RectangleF(32, cy2, w - 50, 20), sf);
-                    using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
+                    using (var p = new Pen(Theme.Line)) g.DrawLine(p, x0, top + r.H - 1, w, top + r.H - 1);
                     continue;
                 }
                 if (r.Note != null) { using (var b = new SolidBrush(Theme.Soft)) g.DrawString(r.Note, fLine, b, 22, top + 12); continue; }
 
                 var c = r.C;
                 bool empty = IsEmpty(c), small = r.H == SmallH;
-                if (c == Selected || hover == ri) using (var br = new SolidBrush(c == Selected ? Theme.Selected : Theme.Hover)) g.FillRectangle(br, 10, top, w - 6, r.H - 1);
-                using (var p = new Pen(Theme.Line)) g.DrawLine(p, 22, top + r.H - 1, w, top + r.H - 1);
+                // the fill spans exactly the separator's span
+                if (c == Selected || hover == ri) using (var br = new SolidBrush(c == Selected ? Theme.Selected : Theme.Hover)) g.FillRectangle(br, x0, top, w - x0, r.H - 1);
+                using (var p = new Pen(Theme.Line)) g.DrawLine(p, x0, top + r.H - 1, w, top + r.H - 1);
 
                 // checkbox: filled orange with a dark tick, an ink outline, or grey when there's nothing to clear
                 var box = new RectangleF(24, top + (r.H - 17) / 2f, 17, 17);
@@ -533,8 +551,9 @@ namespace SpaceHunter
                 string files = !small && !c.Blocked && c.Scanned && c.Kind != Kind.RunHistory ? (c.Partial ? "picked" : c.Files.ToString("N0") + (c.Files == 1 ? " file" : " files")) : "";
                 var sizeFont = c.Blocked ? fLine : fSize;
                 var sz = g.MeasureString(size, sizeFont); var fz = g.MeasureString(files, fFiles);
-                using (var br = new SolidBrush(empty || c.Blocked ? Theme.Soft : Theme.Ink)) g.DrawString(size, sizeFont, br, right - sz.Width, top + (c.Blocked ? 18 : small ? 9 : 9));
-                using (var br = new SolidBrush(Theme.Soft)) g.DrawString(files, fFiles, br, right - fz.Width, top + 30);
+                // the size sits on the name's baseline, the file count on the subline's
+                using (var br = new SolidBrush(empty || c.Blocked ? Theme.Soft : Theme.Ink)) g.DrawString(size, sizeFont, br, right - sz.Width, top + (c.Blocked ? 18 : small ? 7.6f : 7.4f));
+                using (var br = new SolidBrush(Theme.Soft)) g.DrawString(files, fFiles, br, right - fz.Width, top + 30.8f);
 
                 float tw = right - Math.Max(sz.Width, fz.Width) - 18 - x;
                 var nameFont = c == Selected ? fNameSel : fName;
@@ -564,6 +583,7 @@ namespace SpaceHunter
             }
             var th = Thumb();
             if (!th.IsEmpty) using (var p = Theme.Round(th, 2)) using (var br = new SolidBrush(Color.FromArgb(120, Theme.Ink))) g.FillPath(br, p);
+            if (Math.Abs(wantTools - toolsH) > 0.5f) { toolsH = wantTools; Relayout(); }   // the header's real height: lay out again
         }
     }
 
@@ -587,11 +607,12 @@ namespace SpaceHunter
         public DetailPanel()
         {
             BackColor = Theme.Pane; DoubleBuffered = true;
-            Padding = new Padding(0, Theme.D(60), 0, 0);   // a fixed band for the section name and Close
+            // a fixed band for the section name and Close; one pixel at the left keeps the Line-coloured rule visible
+            Padding = new Padding(1, Theme.D(60), 0, 0);
             clip.Dock = DockStyle.Fill; clip.BackColor = Theme.Pane; Controls.Add(clip);
             flow.FlowDirection = FlowDirection.TopDown; flow.WrapContents = false;
             flow.AutoScroll = false; flow.AutoSize = true; flow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            flow.Padding = Theme.Pad(28, 2, 24, 30); flow.BackColor = Theme.Pane; flow.Location = Point.Empty;
+            flow.Padding = new Padding(Theme.D(28) - 1, Theme.D(2), Theme.D(24), Theme.D(30));   // less the rule's pixel flow.BackColor = Theme.Pane; flow.Location = Point.Empty;
             clip.Controls.Add(flow);
             // no stock scrollbar: the wheel moves the content, and a thin bar shows where you are
             thumb.BackColor = Theme.Disabled; thumb.Width = Theme.D(4); thumb.Visible = false;
@@ -604,12 +625,15 @@ namespace SpaceHunter
             closeKey = new Key("close") { Height = Theme.D(30) };
             closeKey.Click += (s, e) => { if (CloseRequested != null) CloseRequested(this, EventArgs.Empty); };
             Controls.Add(closeKey); closeKey.BringToFront();
-            Resize += (s, e) => closeKey.Location = new Point(Width - closeKey.Width - Theme.D(22), Theme.D(18));
+            Resize += (s, e) => PlaceHead();
 
             tag = L(Theme.Semi(9.5f), Theme.Muted, 2);
-            flow.Controls.Remove(tag); Controls.Add(tag); tag.Location = new Point(Theme.D(28), Theme.D(26));
-            title = L(Theme.Bold(14f), Theme.Ink, 2); title.AutoSize = false; title.AutoEllipsis = true; title.Height = Theme.D(30);
+            flow.Controls.Remove(tag); Controls.Add(tag); tag.Location = new Point(Theme.D(28 + 1.6f), Theme.D(26));   // letters on the title's left edge
+            tag.SizeChanged += (s, e) => PlaceHead();
+            // the name wraps to a second line rather than cutting off (FitWidths caps it at two lines)
+            title = L(Theme.Bold(14f), Theme.Ink, 6); title.AutoEllipsis = true;
             stats = L(Theme.Sans(10.5f), Theme.Ink, 14);
+            stats.Margin = new Padding(Theme.D(0.8f), 0, 0, Theme.D(14));   // smaller type sits a hair further in: line its letters up with the title's
 
             whatHead = Head("What to clean");
             modeRow = Row(6);
@@ -638,16 +662,17 @@ namespace SpaceHunter
             safe = Section("Is it safe?");
             after = Section("What happens after");
             // three short lines always in view; the full notes above open with "More about this item"
-            summary = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 3, BackColor = Theme.Pane, Margin = Theme.Pad(0, 4, 0, 4), Padding = new Padding(0) };
+            summary = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 3, BackColor = Theme.Pane, Margin = new Padding(Theme.D(1.6f), Theme.D(4), 0, Theme.D(4)), Padding = new Padding(0) };
             summary.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Theme.D(92))); summary.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            Func<string, Label> sk = t => new Label { Text = t, AutoSize = true, Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, BackColor = Theme.Pane, Margin = Theme.Pad(0, 0, 0, 4), UseMnemonic = false };
+            // the key a pixel lower, so it shares its value's baseline
+            Func<string, Label> sk = t => new Label { Text = t, AutoSize = true, Font = Theme.Sans(9.5f), ForeColor = Theme.Muted, BackColor = Theme.Pane, Margin = new Padding(0, Math.Max(1, Theme.D(0.8f)), 0, Theme.D(4)), UseMnemonic = false };
             Func<Label> sv = () => new Label { AutoSize = true, Font = Theme.Sans(9.75f), ForeColor = Theme.Ink, BackColor = Theme.Pane, Margin = Theme.Pad(0, 0, 0, 4), UseMnemonic = false };
             sumWhat = sv(); sumGoes = sv(); sumAfter = sv();
             summary.Controls.Add(sk("What it is"), 0, 0); summary.Controls.Add(sumWhat, 1, 0);
             summary.Controls.Add(sk("What goes"), 0, 1); summary.Controls.Add(sumGoes, 1, 1);
             summary.Controls.Add(sk("After"), 0, 2); summary.Controls.Add(sumAfter, 1, 2);
             flow.Controls.Add(summary);
-            moreLink = new LinkLabel { Text = "More about this item", AutoSize = true, Font = Theme.Semi(9.5f), LinkColor = Theme.Ink, ActiveLinkColor = Theme.OrangeDeep, VisitedLinkColor = Theme.Ink, BackColor = Theme.Pane, Margin = Theme.Pad(0, 0, 0, 14), LinkBehavior = LinkBehavior.AlwaysUnderline, UseMnemonic = false };
+            moreLink = new LinkLabel { Text = "More about this item", AutoSize = true, Font = Theme.Semi(9.5f), LinkColor = Theme.Ink, ActiveLinkColor = Theme.OrangeDeep, VisitedLinkColor = Theme.Ink, BackColor = Theme.Pane, Margin = new Padding(Theme.D(1.6f), 0, 0, Theme.D(14)), LinkBehavior = LinkBehavior.AlwaysUnderline, UseMnemonic = false };
             moreLink.LinkClicked += (s, e) => { more = !more; ShowMore(); };
             flow.Controls.Add(moreLink);
             foldersHead = Head("Folders  ·  keep one to never clean it");
@@ -714,7 +739,7 @@ namespace SpaceHunter
             var l = new Label { AutoSize = true, Font = f, ForeColor = col, Margin = Theme.Pad(0, 0, 0, bottom), BackColor = Theme.Pane, UseMnemonic = false };
             flow.Controls.Add(l); return l;
         }
-        Label Head(string t) { var h = L(Theme.Semi(10f), Theme.Muted, 2); h.Text = t; return h; }
+        Label Head(string t) { var h = L(Theme.Semi(10f), Theme.Muted, 2); h.Margin = new Padding(Theme.D(0.8f), 0, 0, Theme.D(2)); h.Text = t; return h; }
         Label Section(string heading) { var h = Head(heading); var l = L(Theme.Sans(10.25f), Theme.Ink, 14); details.Add(h); details.Add(l); return l; }
         void ShowMore()
         {
@@ -729,11 +754,21 @@ namespace SpaceHunter
             int i = t.IndexOf(". "); return i > 0 && i < 160 ? t.Substring(0, i + 1) : t;
         }
 
+        // the header band: Close at the flow's right padding, the section name centred on Close
+        void PlaceHead()
+        {
+            if (closeKey == null || tag == null) return;
+            closeKey.Location = new Point(Width - closeKey.Width - Theme.D(24), Theme.D(18));
+            // the label's letters sit low in its box: lift it so its capitals centre on CLOSE's
+            tag.Location = new Point(tag.Left, closeKey.Top + closeKey.Height / 2 - tag.Height / 2 - Theme.D(2.8f));
+        }
+
         void FitWidths()
         {
             int w = Math.Max(Theme.D(200), clip.ClientSize.Width - flow.Padding.Horizontal - Theme.D(4));
             foreach (Control c in flow.Controls) if (c is Label && c != title) c.MaximumSize = new Size(w, 0);
-            title.Width = w; tag.MaximumSize = new Size(w - closeKey.Width - Theme.D(8), 0);
+            title.MaximumSize = new Size(w, 2 * TextRenderer.MeasureText("Ag", title.Font).Height);   // two lines at most
+            tag.MaximumSize = new Size(w - closeKey.Width - Theme.D(8), 0);
             inside.Width = w;
             foreach (var l in new[] { sumWhat, sumGoes, sumAfter }) l.MaximumSize = new Size(Math.Max(Theme.D(120), w - Theme.D(96)), 0);
         }
@@ -966,9 +1001,9 @@ namespace SpaceHunter
             body.Controls.Add(listHost); body.Controls.Add(tiers);
             drawer = new Drawer(listHost);
 
-            status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(22, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
+            status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(20, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
             // which version this is, always visible (bottom right)
-            status.Controls.Add(new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = Theme.Pad(0, 11, 22, 0),
+            status.Controls.Add(new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = new Padding(0, Theme.D(9.8f), Theme.D(12.8f), 0),   // on the status line's baseline, ending on the display's right edge
                                             TextAlign = ContentAlignment.TopRight, ForeColor = Theme.Soft, Font = Theme.Sans(8.5f), BackColor = Theme.Chassis, UseMnemonic = false });
             divider = new Panel { Dock = DockStyle.Bottom, Height = Math.Max(1, Theme.D(1)), BackColor = Theme.Line };
             BuildUpdateBar();
@@ -1045,7 +1080,7 @@ namespace SpaceHunter
             if (drawer.IsOpen) { drawer.Close(); list.OpenItem = null; list.Invalidate(); }
             Refresh();   // paint everything first: the dimmed backdrop is a picture of this window
             Func<RectangleF> rail = () => { var r = Part(tiers); return new RectangleF(r.X + 8, r.Y, r.Width - 16, r.Height); };
-            Func<RectangleF> rows = () => { var lp = Part(list); return new RectangleF(lp.X + 8, lp.Y + 110, lp.Width - 16, Math.Min(lp.Height - 110, 3 * 54)); };
+            Func<RectangleF> rows = () => { var lp = Part(list); float hh = list.HeaderH; return new RectangleF(lp.X + 8, lp.Y + hh, lp.Width - 16, Math.Min(lp.Height - hh, 3 * 54)); };
             Action openFirst = () =>
             {
                 var first = cats.Where(c => c.Level == tiers.Current && (c.Bytes > 0 || c.Files > 0)).OrderByDescending(c => c.Bytes).FirstOrDefault();
@@ -1102,9 +1137,11 @@ namespace SpaceHunter
         {
             // The Storage map is a tool of its own, alone at the left. The cleaning keys sit together at the right:
             // scan again, protected folders and reset to default lead into the one big Clean key.
+            // the row spans the display above it exactly: Storage map on its left edge, Clean ending on its right edge,
+            // and Clean centred on the other keys' centre
             int y = Theme.D(14);
-            cleanKey.Location = new Point(keys.Width - cleanKey.Width - Theme.D(18), Theme.D(10));
-            finderKey.Location = new Point(Theme.D(18), y);
+            cleanKey.Location = new Point(keys.Width - cleanKey.Width, y + (scanKey.Height - cleanKey.Height) / 2);
+            finderKey.Location = new Point(0, y);
             int x = cleanKey.Left - Theme.D(12);
             foreach (var k in new[] { resetKey, protectKey, scanKey }) { x -= k.Width; k.Location = new Point(x, y); x -= Theme.D(8); }
         }
