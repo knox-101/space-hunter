@@ -480,7 +480,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     keys.append(&hspacer());
     let scan_key = key("scan again", &[]);
     let protect = key("protected folders", &[]);
-    let reset = key("back to recommended", &[]);
+    let reset = key("default cleanup", &[]);
     reset.set_margin_end(4);
     let clean = key("clean", &["primary"]);
     keys.append(&scan_key); keys.append(&protect); keys.append(&reset); keys.append(&clean);
@@ -674,7 +674,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
                 }
                 engine::settings::save(&st.cats);
             }
-            u.status.set_text("Back to recommended: Quick clean ticked, the usual ages. Protected folders stay protected.");
+            u.status.set_text("Default cleanup: Quick clean ticked, the usual ages. Protected folders stay protected.");
             scan(&u, None);
         });
         let u = ui.clone();
@@ -890,7 +890,9 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
     crate::theme::rgb(cr, pal.line);
     cr.rectangle(0.0, rail_y, w, 2.0);
     let _ = cr.fill();
-    let tw = w / 3.0;
+    const GAP: f64 = 6.0;   // between the tabs
+    const PAD: f64 = 12.0;  // text inset inside a tab
+    let tw = (w - 2.0 * GAP) / 3.0;
     let hover = u.rail_hover.get();
     let box_hover = u.rail_box_hover.get();
     let mut boxes = [(0.0, 0.0, 0.0, 0.0); 3];
@@ -903,8 +905,20 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
         let ticked: u64 = items.iter().filter(|c| c.included()).map(|c| c.clean_bytes()).sum();
         let n_items = items.iter().filter(|c| c.bytes > 0 || c.files > 0).count();
         let n_ticked = items.iter().filter(|c| c.included() && (c.bytes > 0 || c.files > 0)).count();
-        let x0 = i as f64 * tw;
-        let x = x0;
+        let x0 = i as f64 * (tw + GAP);
+        // the open section is a filled tab standing on the rail; a hovered one gets a faint fill
+        if on || hot {
+            crate::theme::rgb(cr, if on { pal.selected } else { pal.hover });
+            let r = 6.0;
+            cr.new_sub_path();
+            cr.move_to(x0, rail_y);
+            cr.arc(x0 + r, r, r, std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+            cr.arc(x0 + tw - r, r, r, 1.5 * std::f64::consts::PI, 2.0 * std::f64::consts::PI);
+            cr.line_to(x0 + tw, rail_y);
+            cr.close_path();
+            let _ = cr.fill();
+        }
+        let x = x0 + PAD;
         let ty = 8.0;
         let text_ink = if on || hot { pal.ink } else { pal.muted };
         // the box sits after the name as set in semibold, so it never shifts when the open section changes
@@ -968,9 +982,9 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
         let (sw, sh) = bl.pixel_size();
         let ny = 30.0;
         crate::theme::rgb(cr, if on || hot { pal.ink } else { pal.muted });
-        cr.move_to(x0 - bl.pixel_extents().0.x() as f64, ny);   // the first glyph's ink on the column's edge
+        cr.move_to(x - bl.pixel_extents().0.x() as f64, ny);   // the first glyph's ink on the name's edge
         pangocairo::functions::show_layout(cr, &bl);
-        let dx = x0 + sw as f64 + 10.0;
+        let dx = x + sw as f64 + 10.0;
         let dw = x0 + tw - dx - 12.0;
         if dw > 60.0 {
             let dl = layout(da, "Schibsted Grotesk 9");
@@ -990,7 +1004,7 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
     }
     u.rail_boxes.set(boxes);
     rgba(cr, ORANGE, 1.0);
-    cr.rectangle(u.mark.get() * tw, rail_y - 2.0, tw, 5.0);
+    cr.rectangle(u.mark.get() * (tw + GAP), rail_y - 2.0, tw, 5.0);
     let _ = cr.fill();
 }
 
@@ -2480,7 +2494,7 @@ const GUIDE: [(&str, &str); 9] = [
     ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
     ("See what fills your disk", "Storage map shows every folder by size, on any disk. Nothing there deletes anything; you can add a folder to your cleanup list."),
     ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
-    ("Back to recommended", "Puts the ticks and ages back to how they started. Scan again measures everything afresh."),
+    ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages. Scan again measures everything afresh."),
     ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
     ("Your look, and this guide", "Light, dark or your computer's setting. The ? key shows this guide again whenever you want."),
 ];

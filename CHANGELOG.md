@@ -3,6 +3,12 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## Unreleased
+
+- **"Back to recommended" is now "Default cleanup":** it puts the ticks and ages back to the first-time setup.
+- **The open section is a filled tab** standing on the rail, so you can see at a glance which one the list below
+  belongs to; hovering another section lightly fills it.
+
 ## 1.6.0 (2026-11-21)
 
 - **A finish you can't miss.** When cleaning ends, the display fills the window and your drive appears as a ring:

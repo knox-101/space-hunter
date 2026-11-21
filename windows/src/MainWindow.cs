@@ -138,6 +138,13 @@ namespace SpaceHunter
         int hover = -1, boxHover = -1;
         Font fName = Theme.CBold(11.5f), fName2 = Theme.CSans(9.75f), fDesc = Theme.CSans(9f), fSize = Theme.CSemi(13f), fSub = Theme.CSans(8.75f), fSubB = Theme.CSemi(9.75f);
         static readonly Level[] Order = { Level.Safe, Level.Review, Level.Caution };
+        const float Pad = 12, Gap = 6;   // text inset inside a tab; space between tabs
+        static System.Drawing.Drawing2D.GraphicsPath TopRound(RectangleF r, float rad)
+        {
+            var p = new System.Drawing.Drawing2D.GraphicsPath(); float d = rad * 2;
+            p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddLine(r.Right, r.Bottom, r.X, r.Bottom); p.CloseFigure(); return p;
+        }
 
         readonly System.Windows.Forms.Timer slide = new System.Windows.Forms.Timer { Interval = 15 };
         readonly System.Diagnostics.Stopwatch slideClock = new System.Diagnostics.Stopwatch();
@@ -150,7 +157,7 @@ namespace SpaceHunter
             slide.Tick += (s, e) => { Invalidate(); if (slideClock.ElapsedMilliseconds > 320) { slide.Stop(); markFrom = markTo; } };
         }
 
-        RectangleF Tile(int i) { float w = (LW - 2 * 18) / 3f; return new RectangleF(18 + i * w, 4, w, LH - 4); }
+        RectangleF Tile(int i) { float w = (LW - 2 * 18 - 2 * Gap) / 3f; return new RectangleF(18 + i * (w + Gap), 4, w, LH - 4); }
         float MarkAt()
         {
             if (markFrom < 0) markFrom = markTo = Array.IndexOf(Order, Current);
@@ -205,7 +212,11 @@ namespace SpaceHunter
                 long total = items.Sum(c => c.Bytes), ticked = items.Where(c => c.Included).Sum(c => c.CleanBytes);
                 int nTicked = items.Count(c => c.Included && (c.Blocked || c.Bytes > 0 || c.Files > 0));
                 int nItems = items.Count(c => c.Blocked || c.Bytes > 0 || c.Files > 0);
-                float x = r.X + 4;
+                // the open section is a filled tab standing on the rail; a hovered one gets a faint fill
+                if (on || hot)
+                    using (var path = TopRound(new RectangleF(r.X, r.Y, r.Width, railY - r.Y), 6))
+                    using (var b = new SolidBrush(on ? Theme.Selected : Theme.Hover)) g.FillPath(b, path);
+                float x = r.X + Pad + 4;
                 // risk in greyscale too: the same small gutter mark as the rows (none for Quick clean)
                 var hf = on ? fSubB : fName2; Color hc = on || hot ? Theme.Ink : Theme.Muted;
                 string nameDot = Theme.TierName(lvl);
@@ -241,8 +252,8 @@ namespace SpaceHunter
                 // the big size, and what's in it beside the number
                 string size = Engine.Fmt(total); var ns = g.MeasureString(size, fBig);
                 float ny = r.Y + 32;
-                using (var b = new SolidBrush(on || hot ? Theme.Ink : Theme.Muted)) g.DrawString(size, fBig, b, r.X, ny);
-                float dx = r.X + ns.Width + 6, dw = r.Right - dx - 12;
+                using (var b = new SolidBrush(on || hot ? Theme.Ink : Theme.Muted)) g.DrawString(size, fBig, b, r.X + Pad, ny);
+                float dx = r.X + Pad + ns.Width + 6, dw = r.Right - dx - 12;
                 if (dw > 60)
                     using (var b = new SolidBrush(on ? Theme.Muted : Theme.Soft))
                     using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisWord })
@@ -255,7 +266,7 @@ namespace SpaceHunter
                     }
             }
             // the orange marker under the open section, sliding when you switch
-            float tw = (LW - 36) / 3f, mx = 18 + MarkAt() * tw;
+            float tw = Tile(0).Width, mx = 18 + MarkAt() * (tw + Gap);
             using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, mx, railY - 2, tw, 5);
         }
     }
@@ -982,7 +993,7 @@ namespace SpaceHunter
             strip.Controls.Add(topKeys);
             topKeys.GuideClicked += (s, e) => StartGuide(0);
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            scanKey = new Key("scan again"); finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("back to recommended");
+            scanKey = new Key("scan again"); finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("default cleanup");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
             keys.Controls.AddRange(new Control[] { scanKey, finderKey, protectKey, resetKey, cleanKey });
@@ -1101,8 +1112,8 @@ namespace SpaceHunter
                     Body = "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list." },
                 new GuideStep { Get = () => Part(protectKey), Title = "Keep what must never go",
                     Body = "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already." },
-                new GuideStep { Get = () => Part(resetKey), Title = "Back to recommended",
-                    Body = "Puts the ticks and ages back to how they started. Scan again measures everything afresh." },
+                new GuideStep { Get = () => Part(resetKey), Title = "Default cleanup",
+                    Body = "Back to the first-time setup: Quick clean ticked, the usual ages. Scan again measures everything afresh." },
                 new GuideStep { Get = () => Part(cleanKey), Title = "Clean always asks first",
                     Body = "You see the list of what goes and choose Permanently delete or Recycle Bin. When it's done, a ring shows the space you got back." },
                 new GuideStep { Get = () => { var r = Part(topKeys); var b = topKeys.Bounds_; return new RectangleF(r.X + b.X, r.Y + b.Y, b.Width, b.Height); },
@@ -1130,7 +1141,7 @@ namespace SpaceHunter
             Settings.Save(cats);
             if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current);
             Enqueue(cats);
-            status.Text = "Back to recommended: Quick clean ticked, the usual ages. Protected folders stay protected.";
+            status.Text = "Default cleanup: Quick clean ticked, the usual ages. Protected folders stay protected.";
         }
 
         void PlaceKeys(Control keys)

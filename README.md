@@ -42,7 +42,7 @@ The same app on Linux (and on Mac), with the same names, look and features:
 
 Light, dark, or follow the system: the three small keys at the top right. The first time you open it, a short
 guide walks through everything that matters, one part of the window at a time; the **?** key beside them shows it
-again. **Back to recommended** puts the ticks and ages back to how they started.
+again. **Default cleanup** puts the ticks and ages back to the first-time setup.
 
 ## Safe by design
 

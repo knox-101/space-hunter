@@ -824,7 +824,7 @@ final class AppState: ObservableObject {
             save(cats[i])
         }
         scan()
-        status = "Back to recommended: Quick clean ticked, the usual ages. Protected folders stay protected."
+        status = "Default cleanup: Quick clean ticked, the usual ages. Protected folders stay protected."
     }
 
     func clean(toTrash: Bool, sel: [Cat]) {
@@ -1094,7 +1094,7 @@ struct MainView: View {
                 Button("Scan again") { state.scan() }.buttonStyle(KeyStyle()).disabled(state.scanning > 0 || state.cleanRunning)
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
                     .guidePart(5)
-                Button("Back to recommended") { state.resetAll() }.buttonStyle(KeyStyle())
+                Button("Default cleanup") { state.resetAll() }.buttonStyle(KeyStyle())
                     .guidePart(6)
                     .padding(.trailing, 4)
                 Button(state.cleanRunning ? "Show cleaning" : "Clean \(Engine.fmt(state.selectedBytes))") {
@@ -1169,7 +1169,7 @@ struct MainView: View {
     }
 
     // The parts the nine steps light, in order: the display; the section rail; the first three rows under the list's
-    // header; the item panel; the Storage map key; Protected folders; Back to recommended; Clean; the top-right keys.
+    // header; the item panel; the Storage map key; Protected folders; Default cleanup; Clean; the top-right keys.
     func guideTargets(_ g: GeometryProxy, _ a: [Int: Anchor<CGRect>]) -> [CGRect?] {
         func part(_ i: Int) -> CGRect? { a[i].map { g[$0] } }
         let rail: CGRect? = part(10).map { $0.insetBy(dx: -10, dy: 0) }
@@ -1361,20 +1361,37 @@ struct TierBar: View {
     @State private var hover: Level? = nil
     var body: some View {
         GeometryReader { g in
-            let w = g.size.width / 3
+            let w = (g.size.width - 2 * TierBar.gap) / 3
             ZStack(alignment: .bottomLeading) {
                 Rectangle().fill(Theme.line).frame(height: 2).padding(.bottom, 1)
-                HStack(spacing: 0) {
+                HStack(spacing: TierBar.gap) {
                     ForEach(Level.allCases, id: \.self) { lvl in
                         TierColumn(lvl: lvl, hover: $hover).frame(width: w, height: g.size.height)
                     }
                 }
                 Rectangle().fill(Theme.orange).frame(width: w, height: 5)
-                    .offset(x: w * CGFloat(state.tier.rawValue))
+                    .offset(x: (w + TierBar.gap) * CGFloat(state.tier.rawValue))
                     .animation(.easeOut(duration: 0.32), value: state.tier)
             }
         }
         .frame(height: 82)
+    }
+    static let gap: CGFloat = 6   // between the tabs
+}
+
+// The open section is a filled tab standing on the rail: rounded at the top only.
+struct TabShape: Shape {
+    var r: CGFloat = 6
+    func path(in b: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: b.minX, y: b.maxY))
+        p.addLine(to: CGPoint(x: b.minX, y: b.minY + r))
+        p.addArc(center: CGPoint(x: b.minX + r, y: b.minY + r), radius: r, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        p.addLine(to: CGPoint(x: b.maxX - r, y: b.minY))
+        p.addArc(center: CGPoint(x: b.maxX - r, y: b.minY + r), radius: r, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
+        p.addLine(to: CGPoint(x: b.maxX, y: b.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 
@@ -1427,8 +1444,9 @@ struct TierColumn: View {
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.trailing, 14).padding(.top, 6).padding(.bottom, 12)
+        .padding(.leading, 12).padding(.trailing, 14).padding(.top, 6).padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(TabShape().fill(on ? Theme.selected : hot ? Theme.hover : Color.clear).padding(.bottom, 3))
         .contentShape(Rectangle())
         .onHover { h in if h { hover = lvl } else if hover == lvl { hover = nil } }
         .onTapGesture {
@@ -2229,7 +2247,7 @@ struct GuideAnchors: PreferenceKey {
 }
 
 extension View {
-    // marks a part the guide can light (0 display, 2 Storage map, 3 Clean, 5 Protected folders, 6 Back to recommended,
+    // marks a part the guide can light (0 display, 2 Storage map, 3 Clean, 5 Protected folders, 6 Default cleanup,
     // 9 top-right keys, 10 section rail, 11 list, 12 list header, 13 item panel)
     func guidePart(_ i: Int) -> some View { anchorPreference(key: GuideAnchors.self, value: .bounds) { [i: $0] } }
 }
@@ -2256,7 +2274,7 @@ final class GuideModel: ObservableObject {
         ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
         ("See what fills your disk", "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list."),
         ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
-        ("Back to recommended", "Puts the ticks and ages back to how they started. Scan again measures everything afresh."),
+        ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages. Scan again measures everything afresh."),
         ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
         ("Your look, and this guide", "Light, dark or your Mac's setting. The ? key shows this guide again whenever you want."),
     ]
