@@ -965,17 +965,36 @@ enum Updater {
         SecKeyVerifySignature(key, .rsaSignatureMessagePKCS1v15SHA256, data as CFData, sig as CFData, nil)
     }
 
-    // Returns nil when the new version is opening (the caller quits), or a sentence saying why it didn't update.
+    // Where this copy really lives. An app downloaded from the internet and opened where it landed (usually Downloads)
+    // is run by macOS from a hidden read-only copy ("App Translocation"), so it can't replace itself there: ask macOS for
+    // the original. Returns nil when it's translocated and macOS won't say where from.
+    static func realLocation() -> URL? {
+        let here = Bundle.main.bundleURL
+        guard here.path.contains("/AppTranslocation/") else { return here }
+        typealias Original = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+        guard let lib = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+              let sym = dlsym(lib, "SecTranslocateCreateOriginalPathForURL") else { return nil }
+        let f = unsafeBitCast(sym, to: Original.self)
+        guard let u = f(here as CFURL, nil) else { return nil }
+        let url = u.takeRetainedValue() as URL
+        return url.path.contains("/AppTranslocation/") ? nil : url
+    }
+
+    // Returns nil when the new version is opening (the caller quits), or a sentence saying what happened instead.
     static func install(_ r: ReleaseInfo, say: @escaping (String) -> Void) -> String? {
         guard let key = publicKey() else { return "This copy wasn't built with the release key, so it can't check updates. Download the new version from GitHub instead." }
+        let fm = FileManager.default
+        var fresh: URL? = nil
         do {
             say("Downloading Space Hunter \(r.version) …")
             let zip = try Data(contentsOf: r.zipURL), sig = try Data(contentsOf: r.sigURL)
             say("Checking its signature …")
             guard verify(zip, sig, key: key) else { return "The download's signature didn't match, so it wasn't installed. Nothing was changed." }
             say("Installing …")
-            let fm = FileManager.default
-            let dir = fm.temporaryDirectory.appendingPathComponent("SpaceHunter-update-\(UUID().uuidString)")
+            let target = realLocation()
+            // unpack beside the app (same disk), so the swap is a simple rename; the temporary folder if that's not allowed
+            var dir = fm.temporaryDirectory.appendingPathComponent("SpaceHunter-update-\(UUID().uuidString)")
+            if let t = target, let near = try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: t, create: true) { dir = near }
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             let zipFile = dir.appendingPathComponent("update.zip")
             try zip.write(to: zipFile)
@@ -983,10 +1002,19 @@ enum Updater {
             unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
             unzip.arguments = ["-x", "-k", zipFile.path, dir.path]
             try unzip.run(); unzip.waitUntilExit()
-            let fresh = dir.appendingPathComponent("Space Hunter.app")
-            guard unzip.terminationStatus == 0, fm.fileExists(atPath: fresh.path) else { return "The update didn't unpack. Nothing was changed." }
-            let here = Bundle.main.bundleURL
-            _ = try fm.replaceItemAt(here, withItemAt: fresh)
+            let app = dir.appendingPathComponent("Space Hunter.app")
+            guard unzip.terminationStatus == 0, fm.fileExists(atPath: app.path) else { return "The update didn't unpack. Nothing was changed." }
+            try? fm.removeItem(at: zipFile)
+            fresh = app
+            guard let here = target, fm.isWritableFile(atPath: here.deletingLastPathComponent().path) else {
+                return handOver(app, r.version, why: target == nil ? "macOS is running this copy from a protected place" : "this copy's folder can't be written to")
+            }
+            _ = try fm.replaceItemAt(here, withItemAt: app)
+            // never quarantined again, so macOS won't run it from a hidden copy next time
+            let clear = Process()
+            clear.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            clear.arguments = ["-dr", "com.apple.quarantine", here.path]
+            try? clear.run(); clear.waitUntilExit()
             // reopen once this copy has quit
             let reopen = Process()
             reopen.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -994,8 +1022,27 @@ enum Updater {
             try reopen.run()
             return nil
         } catch {
+            if let app = fresh, fm.fileExists(atPath: app.path) { return handOver(app, r.version, why: error.localizedDescription) }
             return "The update didn't install (\(error.localizedDescription)). Nothing was changed."
         }
+    }
+
+    // When this copy can't be replaced where it is: the checked new version goes to Downloads, shown in Finder, to drag
+    // into Applications. Your settings stay either way.
+    static func handOver(_ app: URL, _ version: String, why: String) -> String {
+        let fm = FileManager.default
+        let downloads = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? Engine.home
+        let folder = downloads.appendingPathComponent("Space Hunter \(version)")
+        let dest = folder.appendingPathComponent("Space Hunter.app")
+        do {
+            try? fm.removeItem(at: folder)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            try fm.moveItem(at: app, to: dest)
+        } catch {
+            return "The update couldn't be saved (\(error.localizedDescription)). Download it from GitHub instead."
+        }
+        DispatchQueue.main.async { NSWorkspace.shared.activateFileViewerSelecting([dest]) }
+        return "Couldn't replace this copy (\(why)). The new version is in Downloads: quit, then drag it into Applications."
     }
 }
 
@@ -1010,7 +1057,7 @@ struct UpdateBar: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Space Hunter \(release.version) is ready").font(Theme.semi(14)).foregroundColor(Theme.screenInk)
                 Text(message ?? "You have \(Updater.current). Updating takes a few seconds and keeps your settings.")
-                    .font(Theme.sans(12)).foregroundColor(Theme.screenMuted).lineLimit(2)
+                    .font(Theme.sans(12)).foregroundColor(Theme.screenMuted).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button("What's new") { if let p = release.page, let u = URL(string: p) { NSWorkspace.shared.open(u) } }

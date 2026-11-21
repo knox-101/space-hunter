@@ -3,6 +3,14 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## Unreleased
+
+- **Mac: updating works wherever the app is.** An app opened straight from Downloads is run by macOS from a hidden,
+  read-only copy, so the update couldn't replace it ("no permission to save"). Space Hunter now finds the real copy and
+  replaces that, unpacks next to it, and clears the "downloaded from the internet" mark so it won't happen again. If the
+  folder still can't be written to, the checked new version is put in Downloads and shown in Finder, to drag into
+  Applications.
+
 ## 1.6.2 (2026-11-21)
 
 - **What's inside follows the age you choose, as you change it.** Files too new for "only older than" show
