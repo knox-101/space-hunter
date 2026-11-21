@@ -6,6 +6,8 @@ Double-click it; there's nothing to install. If Windows SmartScreen warns, click
 
 For macOS 13 or later, Apple silicon or Intel. Unzip it and move **Space Hunter** to Applications **before opening it** (opened straight from Downloads, older versions couldn't update themselves). The first time, open it once (macOS will refuse), then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 13–14, right-click the app → **Open** also works.
 
+**Already have Space Hunter 1.6.2 or older on a Mac and the update says it "doesn't have permission to save"?** Download `SpaceHunter-mac.zip` above once by hand, unzip it and drag **Space Hunter** into Applications, replacing the old one. Your settings stay, and from 1.6.3 on updates install by themselves.
+
 ### Linux → [SpaceHunter-x86_64.AppImage](https://github.com/knox-101/space-hunter/releases/download/vVERSION/SpaceHunter-x86_64.AppImage)
 
 For any current Linux with GTK 4 (Ubuntu 22.04 or later, Fedora, Debian 12, Arch, Mint 21 and others). Make it runnable (right-click → Properties → Allow executing, or `chmod +x SpaceHunter-x86_64.AppImage`) and double-click it. With Nix: `nix run github:knox-101/space-hunter`.
