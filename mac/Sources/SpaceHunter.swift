@@ -700,6 +700,9 @@ final class AppState: ObservableObject {
     @Published var log: [String] = []
     @Published var expected: Int64 = 1
     @Published var update: ReleaseInfo?
+    @Published var asking = false              // the card is asking about the public totals (an update card wins)
+    var askShown = false                       // asked by itself already this launch
+    let guideSeenAtStart = GuideModel.seen     // asked only on a launch after the first-run guide was seen
     private var scanGen: [String: Int] = [:]   // per item: which measurement is the newest
     @Published var results: [String] = []      // one plain line per item, shown when a clean is done
     // for the finish: what each item freed, and the disk measured before and after (never a made-up number)
@@ -889,9 +892,24 @@ final class AppState: ObservableObject {
                     self.cats[j].picks = []; self.cats[j].pickBytes = -1; self.cats[j].pickFiles = 0
                 }
                 self.disk = Engine.disk(); self.scan()
+                Stats.maybeSend(force: true)   // the total now includes this clean (only if you said yes; never in test runs)
                 self.status = "Cleaning finished. The list is being measured again."
             }
         }
+    }
+
+    // The public-totals question: asked once (after the first-run guide, on a later launch), and again only when you
+    // click the version number.
+    func showAsk() {
+        guard update == nil else { return }
+        askShown = true; asking = true
+    }
+    func answerAsk(_ yes: Bool) {
+        Stats.set(yes)
+        if yes { Stats.maybeSend(force: true) }
+        asking = false
+        status = yes ? "Thanks: you're counted in the public totals. Click the version number to change it."
+                     : "Not counted. Click the version number at the bottom right if you change your mind."
     }
 
     func stop() { counter?.cancel = true }
@@ -1049,6 +1067,75 @@ enum Updater {
     }
 }
 
+// MARK: - Public totals
+// Only if you say yes (asked once). Sent: a random ID made on this Mac, the version, "mac", and the total space freed
+// and number of cleans so far. Never file names, paths, or anything about what was cleaned. At most once in 20 hours
+// when a scan finishes, and after a clean. The choice, the ID and the last send are kept in the app's settings.
+enum Stats {
+    static let endpoint = "https://space-hunter-stats.knox-101.workers.dev"   // the stats/ worker
+    static let explained = "https://github.com/knox-101/space-hunter#public-totals"
+    static let choiceKey = "share.choice", idKey = "share.id", lastKey = "share.last"
+
+    static var choice: String { UserDefaults.standard.string(forKey: choiceKey) ?? "" }
+    static var asked: Bool { choice == "yes" || choice == "no" }
+    static var on: Bool { choice == "yes" }
+
+    static func set(_ yes: Bool) {
+        let d = UserDefaults.standard
+        d.set(yes ? "yes" : "no", forKey: choiceKey)
+        if yes && (d.string(forKey: idKey) ?? "").isEmpty { d.set(UUID().uuidString, forKey: idKey) }
+        if !yes { d.removeObject(forKey: lastKey) }
+    }
+
+    // force: after a clean (so the total includes it) and right after you say yes
+    static func maybeSend(force: Bool) {
+        if GuideModel.testRun { return }   // never from a test or screenshot run
+        let d = UserDefaults.standard
+        guard on, let id = d.string(forKey: idKey), !id.isEmpty else { return }
+        let last = d.double(forKey: lastKey)   // seconds since 1970; 0 = never
+        if !force && last > 0 && Date().timeIntervalSince1970 - last < 20 * 3600 { return }
+        let all = Engine.freedAllTime()
+        let obj: [String: Any] = ["id": id, "v": Updater.current, "os": "mac", "freed": max(0, all.0), "cleans": max(0, all.1)]
+        guard let url = URL(string: endpoint + "/ping"), let body = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("SpaceHunter/\(Updater.current)", forHTTPHeaderField: "User-Agent")
+        req.httpBody = body
+        URLSession.shared.dataTask(with: req) { _, resp, _ in
+            // offline or blocked: try again another day
+            if let h = resp as? HTTPURLResponse, h.statusCode >= 200, h.statusCode < 300 {
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Stats.lastKey)
+            }
+        }.resume()
+    }
+}
+
+// The public-totals question, in the update card's place and with its look.
+struct AskBar: View {
+    @EnvironmentObject var state: AppState
+    var on: Bool { Stats.on }
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Theme.orange).frame(width: 10, height: 10).padding(.trailing, 8)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(on ? "You're counted in Space Hunter's public totals" : "Count yourself in Space Hunter's public totals?")
+                    .font(Theme.semi(14)).foregroundColor(Theme.screenInk)
+                Text("Shares only how much you've freed and your version. Never file names or what was cleaned.")
+                    .font(Theme.sans(12)).foregroundColor(Theme.screenMuted).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("What's sent") { if let u = URL(string: Stats.explained) { NSWorkspace.shared.open(u) } }
+                .buttonStyle(KeyStyle())
+            Button(on ? "Stop" : "No thanks") { state.answerAsk(false) }.buttonStyle(KeyStyle())
+            Button(on ? "Keep counting me" : "Count me in") { state.answerAsk(true) }.buttonStyle(KeyStyle(primary: true))
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
+        .padding(.horizontal, 18).padding(.vertical, 10)
+    }
+}
+
 struct UpdateBar: View {
     @EnvironmentObject var state: AppState
     let release: ReleaseInfo
@@ -1166,12 +1253,15 @@ struct MainView: View {
                 }
             }
             .animation(.easeOut(duration: 0.26), value: state.openID)
-            if let u = state.update { UpdateBar(release: u) } else {
+            if let u = state.update { UpdateBar(release: u) } else if state.asking { AskBar() } else {
                 Rectangle().fill(Theme.line).frame(height: 1)
                 HStack {
                     Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
                     Spacer()
                     Text("Space Hunter \(Updater.current)").font(Theme.sans(10.5)).foregroundColor(Theme.soft)   // which version this is
+                        .contentShape(Rectangle())
+                        .onHover { h in if h { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+                        .onTapGesture { NSCursor.pop(); state.showAsk() }   // change your answer about the public totals
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
             }
@@ -1190,7 +1280,13 @@ struct MainView: View {
         .onAppear {
             ThemeMode.apply(state.theme)
             state.scan()
-            Updater.check { r in DispatchQueue.main.async { state.update = r } }   // one quiet check; offline = nothing happens
+            Updater.check { r in
+                DispatchQueue.main.async {
+                    // an update wins over the public-totals question (which may be asked again on a later scan)
+                    if r != nil && state.asking { state.asking = false; state.askShown = false }
+                    state.update = r
+                }
+            }   // one quiet check; offline = nothing happens
             // what a guide step does before it points: open the biggest item's panel, or close the panel
             let s = state
             guide.enter = { step in
@@ -1205,7 +1301,15 @@ struct MainView: View {
         .sheet(isPresented: $confirm) { ConfirmSheet(confirm: $confirm).environmentObject(state) }
         .onChange(of: state.cleaning) { c in if c { openWindow(id: "cleaning") } }
         // once, the first time a scan finishes (never during a clean); if another window is in front, when this one is
-        .onChange(of: state.scanning) { n in if n == 0 { autoGuide() } }
+        .onChange(of: state.scanning) { n in if n == 0 { autoGuide(); afterScan() } }
+    }
+
+    // A scan finished: the daily public-totals send (only if you said yes), or the question, once.
+    func afterScan() {
+        let s = state
+        if GuideModel.testRun { return }
+        if Stats.asked { Stats.maybeSend(force: false) }
+        else if s.guideSeenAtStart && !s.askShown && guide.step == nil && !s.cleaning && !s.cleanRunning && s.update == nil { s.showAsk() }
     }
 
     func startGuide() {

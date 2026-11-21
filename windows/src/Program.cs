@@ -261,6 +261,17 @@ namespace SpaceHunter
 
             Updater.CleanUpOld();
             var form = new MainForm { SnapshotPath = snap, OpenPanelFor = Arg(args, "--open"), FramesDir = Arg(args, "--frames"), KeepPlaceOut = Arg(args, "--test-keep-place") };
+            if (Arg(args, "--test-ask") != null)   // test hook: the public-totals question, drawn off-screen to <png> (nothing is saved)
+            {
+                string ap = Arg(args, "--test-ask");
+                form.Shown += (s0, e0) =>
+                {
+                    form.ShowAsk();
+                    var t = new System.Windows.Forms.Timer { Interval = 1500 };
+                    t.Tick += (s1, e1) => { t.Stop(); using (var bm = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bm, new Rectangle(0, 0, bm.Width, bm.Height)); bm.Save(ap); } form.Close(); };
+                    t.Start();
+                };
+            }
             if (Arg(args, "--snapshot-scan") != null)   // test hook: the main window while the items are still being measured
             {
                 string ss = Arg(args, "--snapshot-scan");

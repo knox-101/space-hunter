@@ -989,7 +989,7 @@ namespace SpaceHunter
         readonly System.Windows.Forms.Timer ageDebounce = new System.Windows.Forms.Timer { Interval = 600 };
         Category pendingAge;
         public int GuideAt = -1;   // test hook: open the guide at this step, then snapshot
-        ThemeSwitch topKeys; GuideOverlay guide; bool testRun;   // test runs never open the guide by themselves
+        ThemeSwitch topKeys; GuideOverlay guide; bool testRun, askShown, guideSeenAtStart = GuideOverlay.Seen;   // test runs never open the guide by themselves
         public int TestAge = -1;   // test hook: the opened item's age, in minutes (not saved)
         public string SnapshotPath, OpenPanelFor, FramesDir, KeepPlaceOut; public List<string> PickPaths;   // test hook: picks in the opened item
 
@@ -1032,8 +1032,10 @@ namespace SpaceHunter
 
             status = new Label { Dock = DockStyle.Bottom, Height = Theme.D(34), Padding = Theme.Pad(20, 10, 0, 0), ForeColor = Theme.Muted, Font = Theme.Sans(9f), BackColor = Theme.Chassis, UseMnemonic = false };
             // which version this is, always visible (bottom right)
-            status.Controls.Add(new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = new Padding(0, Theme.D(9.8f), Theme.D(12.8f), 0),   // on the status line's baseline, ending on the display's right edge
-                                            TextAlign = ContentAlignment.TopRight, ForeColor = Theme.Soft, Font = Theme.Sans(8.5f), BackColor = Theme.Chassis, UseMnemonic = false });
+            var ver = new Label { Text = "Space Hunter " + AppVersion.Text, Dock = DockStyle.Right, AutoSize = false, Width = Theme.D(170), Padding = new Padding(0, Theme.D(9.8f), Theme.D(12.8f), 0),   // on the status line's baseline, ending on the display's right edge
+                                  TextAlign = ContentAlignment.TopRight, ForeColor = Theme.Soft, Font = Theme.Sans(8.5f), BackColor = Theme.Chassis, UseMnemonic = false, Cursor = Cursors.Hand };
+            ver.Click += (s, e) => { if (!updateBar.Visible || askMode) ShowAsk(); };   // change your answer about the public totals
+            status.Controls.Add(ver);
             divider = new Panel { Dock = DockStyle.Bottom, Height = Math.Max(1, Theme.D(1)), BackColor = Theme.Line };
             BuildUpdateBar();
             Controls.Add(body); Controls.Add(top); Controls.Add(updateBar); Controls.Add(divider); Controls.Add(status);
@@ -1197,6 +1199,25 @@ namespace SpaceHunter
 
         // ---- updates: a card at the bottom, in place of the status line, when GitHub has a newer version ----
         Panel updateBar, divider; Label updateText, updateSub; Key updateKey, laterKey, newsKey; Release pending;
+        bool askMode;   // the card is asking about the public totals, not offering an update
+
+        // Asked once (after the first-run guide, on a later launch), and again only when you click the version number.
+        public void ShowAsk()
+        {
+            askMode = true; bool on = Stats.On;
+            updateText.Text = on ? "You're counted in Space Hunter's public totals" : "Count yourself in Space Hunter's public totals?";
+            updateSub.Text = "Shares only how much you've freed and your version. Never file names or what was cleaned.";
+            updateKey.Text = on ? "keep counting me" : "count me in"; laterKey.Text = on ? "stop" : "no thanks"; newsKey.Text = "what's sent";
+            updateKey.Enabled = laterKey.Enabled = newsKey.Enabled = true;
+            status.Visible = divider.Visible = false; updateBar.Visible = true; LayoutBar(); updateBar.Invalidate();
+        }
+        void EndAsk(bool on)
+        {
+            Stats.Set(on); if (on) Stats.MaybeSend(true);
+            askMode = false; updateKey.Text = "update & relaunch"; laterKey.Text = "later"; newsKey.Text = "what's new";
+            HideUpdate();
+            status.Text = on ? "Thanks: you're counted in the public totals. Click the version number to change it." : "Not counted. Click the version number at the bottom right if you change your mind.";
+        }
 
         void BuildUpdateBar()
         {
@@ -1213,21 +1234,12 @@ namespace SpaceHunter
             updateSub = new Label { AutoSize = false, Font = Theme.Sans(9f), ForeColor = Theme.DisplayMuted, TextAlign = ContentAlignment.TopLeft, UseMnemonic = false, BackColor = Theme.Screen, AutoEllipsis = true };
             updateKey = new Key("update & relaunch", true); laterKey = new Key("later"); newsKey = new Key("what's new");
             updateBar.Controls.Add(updateText); updateBar.Controls.Add(updateSub); updateBar.Controls.Add(newsKey); updateBar.Controls.Add(laterKey); updateBar.Controls.Add(updateKey);
-            updateBar.Resize += (s, e) =>
-            {
-                int mid = Theme.D(8) + (updateBar.Height - Theme.D(18)) / 2, gap = Theme.D(8);
-                int y = mid - updateKey.Height / 2;
-                updateKey.Location = new Point(updateBar.Width - updateKey.Width - Theme.D(34), y);
-                laterKey.Location = new Point(updateKey.Left - laterKey.Width - gap, y);
-                newsKey.Location = new Point(laterKey.Left - newsKey.Width - gap, y);
-                int tx = Theme.D(18 + 44), tw = Math.Max(10, newsKey.Left - tx - Theme.D(16));
-                updateText.Bounds = new Rectangle(tx, mid - Theme.D(22), tw, Theme.D(21));
-                updateSub.Bounds = new Rectangle(tx, mid + Theme.D(1), tw, Theme.D(20));
-            };
-            laterKey.Click += (s, e) => HideUpdate();
-            newsKey.Click += (s, e) => { if (pending != null && pending.Page != null) try { Process.Start(pending.Page); } catch { } };
+            updateBar.Resize += (s, e) => LayoutBar();
+            laterKey.Click += (s, e) => { if (askMode) EndAsk(false); else HideUpdate(); };
+            newsKey.Click += (s, e) => { if (askMode) { try { Process.Start(Stats.Explained); } catch { } } else if (pending != null && pending.Page != null) try { Process.Start(pending.Page); } catch { } };
             updateKey.Click += (s, e) =>
             {
+                if (askMode) { EndAsk(true); return; }
                 if (pending == null) return;
                 if (cleaning) { updateSub.Text = "A clean is running. Update once it's done."; return; }   // never two copies at once
                 updateKey.Enabled = laterKey.Enabled = newsKey.Enabled = false;
@@ -1244,9 +1256,24 @@ namespace SpaceHunter
             };
         }
 
+        void LayoutBar()
+        {
+            {
+                int mid = Theme.D(8) + (updateBar.Height - Theme.D(18)) / 2, gap = Theme.D(8);
+                int y = mid - updateKey.Height / 2;
+                updateKey.Location = new Point(updateBar.Width - updateKey.Width - Theme.D(34), y);
+                laterKey.Location = new Point(updateKey.Left - laterKey.Width - gap, y);
+                newsKey.Location = new Point(laterKey.Left - newsKey.Width - gap, y);
+                int tx = Theme.D(18 + 44), tw = Math.Max(10, newsKey.Left - tx - Theme.D(16));
+                updateText.Bounds = new Rectangle(tx, mid - Theme.D(22), tw, Theme.D(21));
+                updateSub.Bounds = new Rectangle(tx, mid + Theme.D(1), tw, Theme.D(20));
+            }
+        }
+
         public void ShowUpdate(Release r)
         {
             pending = r;
+            if (askMode) { askMode = false; askShown = false; updateKey.Text = "update & relaunch"; laterKey.Text = "later"; newsKey.Text = "what's new"; updateKey.Enabled = laterKey.Enabled = newsKey.Enabled = true; }
             updateText.Text = "Space Hunter " + r.Version + " is ready";
             updateSub.Text = "You have " + AppVersion.Text + ". Updating takes a few seconds and keeps your settings.";
             // the card takes the status line's place instead of stacking on top of it
@@ -1319,6 +1346,8 @@ namespace SpaceHunter
                         gt.Start();
                     }
                     if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
+                    else if (!testRun && Stats.Asked) Stats.MaybeSend(false);
+                    else if (!testRun && !Stats.Asked && guideSeenAtStart && !askShown && guide == null && !cleaning && !updateBar.Visible) { askShown = true; ShowAsk(); }
                     else if (!GuideOverlay.Seen && !testRun && guide == null && !cleaning)
                     {
                         if (ActiveForm == this) StartGuide(0);
@@ -1364,6 +1393,7 @@ namespace SpaceHunter
                 foreach (var c in originals) { c.Picks.Clear(); c.PickBytes = -1; }   // picks are for one clean
                 cleaning = false; running = null; watch.Stop(); pf.Dispose();
                 ReadDisk(); Enqueue(cats);
+                if (!testRun) Stats.MaybeSend(true);   // the total now includes this clean (only if you said yes)
                 status.Text = "Cleaning finished. The list is being measured again.";
             };
             pf.Show(this);

@@ -12,6 +12,10 @@ for fixes, the middle number is for new features, and the first number is for bi
   Documents or Downloads, and the scan waits until you answer. If nothing moves for a few seconds, the main window and
   the Storage map now say "waiting for macOS" and to click Allow, instead of just spinning.
 
+- **Public totals, only if you say yes.** Once, after your first visit, Space Hunter asks whether to count you in its
+  public totals (installs, active this month, space freed). Nothing is sent unless you agree; click the version number
+  at the bottom right to change your answer. What's sent is listed in the README; the server's code is in `stats/`.
+
 ## 1.6.3 (2026-11-21)
 
 - **Mac: updating works wherever the app is.** An app opened straight from Downloads is run by macOS from a hidden,

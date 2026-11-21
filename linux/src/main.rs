@@ -4,6 +4,7 @@
 
 mod engine;
 mod storage;
+mod stats;
 mod updater;
 mod ui;
 

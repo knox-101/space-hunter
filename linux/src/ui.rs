@@ -82,6 +82,10 @@ pub struct Ui {
     prog_win: RefCell<Option<gtk::Window>>,
     opts: Opts,
     bottom: gtk::Box,
+    update_on: Cell<bool>,                    // the update card is showing (it wins over the public-totals question)
+    ask_card: RefCell<Option<gtk::Box>>,      // the public-totals question, when it's showing
+    ask_shown: Cell<bool>,                    // the question came up by itself this launch
+    guide_seen_at_start: bool,                // the first-run guide had been seen before this launch
     scan_gen: RefCell<std::collections::HashMap<String, u64>>,     // per item: which measurement is the newest
     dir_sizes: RefCell<std::collections::HashMap<PathBuf, u64>>,   // folder sizes for "What's inside", measured once
     dir_times: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, std::time::SystemTime, Option<std::time::SystemTime>)>>,   // newest (with the folder's own date), newest file, oldest file (none: no files)
@@ -582,10 +586,19 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
         title, explain, cta, list_sw: sw.clone(), guide: RefCell::new(None), guide_pending: Cell::new(false), rows, panel_rev, panel,
         psw: psw.clone(), panel_for: RefCell::new(None), scroll_gen: Cell::new(0), status,
         prog_win: RefCell::new(None), opts,
-        bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), dir_times: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
+        bottom, update_on: Cell::new(false), ask_card: RefCell::new(None), ask_shown: Cell::new(false), guide_seen_at_start: guide_seen(),
+        scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), dir_times: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
         more: Cell::new(false),
         glyph_peers,
     });
+
+    {   // the version number, bottom right: click it to change your answer about the public totals
+        ver.set_cursor_from_name(Some("pointer"));
+        let click = gtk::GestureClick::new();
+        let u = ui.clone();
+        click.connect_released(move |_, _, _, _| { if !u.update_on.get() { show_ask(&u); } });
+        ver.add_controller(click);
+    }
 
     {
         let u = ui.clone();
@@ -770,6 +783,8 @@ fn check_update(u: &Rc<Ui>) {
 
 // The update card: at the bottom, in place of the status line.
 fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
+    hide_ask(u); u.ask_shown.set(false);   // an update wins over the public-totals question (which can come up again later)
+    u.update_on.set(true);
     let can_install = crate::updater::self_path().is_some();
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     card.add_css_class("update-card");
@@ -788,7 +803,7 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
     let page = r.page.clone();
     news.connect_clicked(move |_| { if let Some(p) = &page { let _ = gtk::gio::AppInfo::launch_default_for_uri(p, None::<&gtk::gio::AppLaunchContext>); } });
     let (uu, c2) = (u.clone(), card.clone());
-    later.connect_clicked(move |_| { uu.bottom.remove(&c2); if let Some(p) = uu.status.parent() { p.set_visible(true); } });
+    later.connect_clicked(move |_| { uu.update_on.set(false); uu.bottom.remove(&c2); if let Some(p) = uu.status.parent() { p.set_visible(true); } });
     if can_install {
         let go = key("update & relaunch", &["primary"]);
         card.append(&go);
@@ -818,6 +833,65 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
     }
     if let Some(p) = u.status.parent() { p.set_visible(false); }
     u.bottom.append(&card);
+}
+
+// A run started with a test hook: nothing opens by itself and nothing is sent.
+fn test_run(u: &Ui) -> bool {
+    let o = &u.opts;
+    o.quiet || o.open.is_some() || o.confirm || o.progress_dir.is_some() || o.storage.is_some() || o.protect || o.guide.is_some()
+}
+
+// The public-totals question, asked once (after the first-run guide, on a later launch) and again only when you click
+// the version number. The same card as an update, in place of the status line.
+fn show_ask(u: &Rc<Ui>) {
+    if u.update_on.get() { return; }
+    hide_ask(u);
+    let on = crate::stats::is_on();
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    card.add_css_class("update-card");
+    let dot = label("\u{25CF}", "update-dot"); dot.set_valign(gtk::Align::Center);
+    card.append(&dot);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2); text.set_valign(gtk::Align::Center);
+    text.append(&label(if on { "You're counted in Space Hunter's public totals" } else { "Count yourself in Space Hunter's public totals?" }, "update-title"));
+    text.append(&label("Shares only how much you've freed and your version. Never file names or what was cleaned.", "update-sub"));
+    card.append(&text);
+    card.append(&hspacer());
+    let sent = key("what's sent", &[]);
+    let no = key(if on { "stop" } else { "no thanks" }, &[]);
+    let yes = key(if on { "keep counting me" } else { "count me in" }, &["primary"]);
+    card.append(&sent); card.append(&no); card.append(&yes);
+    sent.connect_clicked(|_| { let _ = gtk::gio::AppInfo::launch_default_for_uri(crate::stats::EXPLAINED, None::<&gtk::gio::AppLaunchContext>); });
+    let uu = u.clone();
+    no.connect_clicked(move |_| end_ask(&uu, false));
+    let uu = u.clone();
+    yes.connect_clicked(move |_| end_ask(&uu, true));
+    if let Some(p) = u.status.parent() { p.set_visible(false); }
+    u.bottom.append(&card);
+    *u.ask_card.borrow_mut() = Some(card);
+}
+
+fn hide_ask(u: &Ui) {
+    let c = u.ask_card.borrow_mut().take();
+    if let Some(c) = c { u.bottom.remove(&c); }
+}
+
+fn end_ask(u: &Rc<Ui>, on: bool) {
+    crate::stats::set(on);
+    if on { crate::stats::maybe_send(true); }
+    hide_ask(u);
+    if let Some(p) = u.status.parent() { p.set_visible(true); }
+    u.status.set_text(if on { "Thanks: you're counted in the public totals. Click the version number to change it." }
+                      else { "Not counted. Click the version number at the bottom right if you change your mind." });
+}
+
+// Every time a scan finishes: send the totals (at most once in 20 hours, only if you said yes), or ask once.
+fn scan_finished(u: &Rc<Ui>) {
+    if test_run(u) || u.st.borrow().pending > 0 { return; }
+    if crate::stats::asked() { crate::stats::maybe_send(false); }
+    else if u.guide_seen_at_start && !u.ask_shown.get() && u.guide.borrow().is_none() && !u.st.borrow().cleaning && !u.update_on.get() {
+        u.ask_shown.set(true);
+        show_ask(u);
+    }
 }
 
 fn test_cat(dir: PathBuf) -> Cat {
@@ -1761,6 +1835,7 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
         if got.get() >= n {
             let first = { let mut st = uu.st.borrow_mut(); let f = !st.first_scan_done && st.pending == 0; if f { st.first_scan_done = true; } f };
             if first { after_first_scan(&uu); }
+            scan_finished(&uu);
             return glib::ControlFlow::Break;
         }
         glib::ControlFlow::Continue
@@ -2533,6 +2608,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 for c in st.cats.iter_mut().filter(|c| cleaned_ids.contains(&c.id)) { c.picks.clear(); c.pick_bytes = None; }
             }
             uu.status.set_text("Cleaning finished. The list is being measured again.");
+            if !test_run(&uu) { crate::stats::maybe_send(true); }   // the total now includes this clean (only if you said yes)
             scan(&uu, None);
             return glib::ControlFlow::Break;
         }

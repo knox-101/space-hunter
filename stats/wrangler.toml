@@ -1,0 +1,8 @@
+name = "space-hunter-stats"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "space-hunter-stats"
+database_id = "FILL-IN-AFTER-CREATE"   # from: npx wrangler d1 create space-hunter-stats

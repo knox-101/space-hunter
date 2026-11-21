@@ -1,7 +1,7 @@
 # Space Hunter
 
 **Finds the folders silently filling your disk, explains each one, and clears the ones you pick after one
-confirmation.** Free for Windows 10/11, macOS 13+ and Linux. No account, no tracking, a few MB at most.
+confirmation.** Free for Windows 10/11, macOS 13+ and Linux. No account, no tracking unless you opt in, a few MB at most.
 
 ### [⬇ Download the latest version](https://github.com/knox-101/space-hunter/releases/latest)
 
@@ -63,8 +63,23 @@ again. **Default cleanup** puts the ticks and ages back to the first-time setup 
 - Personal folders (Documents, Desktop, Pictures, OneDrive, `.ssh` and similar) are never cleaned. Folders you mark
   as **protected** are never touched, and AI agents' memory folders are always skipped. AI tools' and editors' own
   settings folders (`.claude`, `.codex`, `.vscode` and similar) can't be added to the cleanup list.
-- Its only network use is one check on GitHub for a new version when it opens. Updates install only if they're signed
-  with the project's key.
+- Its only network use is one check on GitHub for a new version when it opens, and the public totals below if you
+  say yes. Updates install only if they're signed with the project's key.
+
+## Public totals
+
+Once, after your first visit, Space Hunter asks whether to count you in its public totals. Nothing is sent unless you
+click **Count me in**, and you can change your answer any time by clicking the version number at the bottom right.
+
+If you say yes, it sends, at most once a day and after each clean:
+
+- a random install number it made up (so the same copy is counted once; it isn't tied to you or your computer),
+- your system (Windows, Mac or Linux) and the Space Hunter version,
+- the total space freed and the number of cleans so far.
+
+Never file names, folder paths, what was cleaned, or anything else about your computer. The server keeps no IP
+addresses. Its code is in [`stats/`](stats/worker.js), and the totals are public at
+[space-hunter-stats.knox-101.workers.dev/stats](https://space-hunter-stats.knox-101.workers.dev/stats).
 
 ## More
 
