@@ -169,13 +169,6 @@ namespace SpaceHunter
                                                                      : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
             var typo = StringFormat.GenericTypographic;   // the left column starts its letters on `pad`, like the big number and the bar
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString(label, fLabel, b, pad, 12, typo);
-            if (scanning)   // a large turning ring at the right for the whole scan: impossible to miss
-            {
-                float rr = 26, cx = W - pad - rr - 6, cy = H / 2 - 4;
-                using (var pen = new Pen(Theme.DisplayTrack, 5f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
-                using (var pen = new Pen(Theme.Orange, 5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                    g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (float)(spin.Elapsed.TotalSeconds * 300 % 360), 110);
-            }
             if (cur != null)
             {
                 string num, unit; Theme.SizeParts(cur.Size, out num, out unit);
@@ -193,7 +186,7 @@ namespace SpaceHunter
             {
                 // a big running count and a bar, so the scan is impossible to miss
                 using (var b = new SolidBrush(Theme.Orange)) g.DrawString(BigFolders.Scanned.ToString("N0") + " FILES", fBig, b, pad - 9, 28);
-                float bx = pad, by = 98, bw = W - 2 * pad - 80, bh = 14;   // leaves room for the ring
+                float bx = pad, by = 98, bw = W - 2 * pad, bh = 14;   // the full width of the display
                 using (var b = new SolidBrush(Theme.DisplayTrack)) g.FillRectangle(b, bx, by, bw, bh);
                 if (target > 0)
                 {

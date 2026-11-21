@@ -43,6 +43,7 @@ pub struct Ui {
     hero: gtk::Label,
     unit: gtk::Label,
     beside1: gtk::Label,
+    spin: gtk::DrawingArea,                   // one turning ring beside the number while the items are measured
     beside2: gtk::Label,
     disk_text: gtk::Label,
     freed_text: gtk::Label,
@@ -444,9 +445,23 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     unit.set_valign(gtk::Align::End); unit.set_margin_bottom(12);
     heroes.append(&hero); heroes.append(&unit);
     num.append(&heroes);
+    // while the items are measured: one turning ring beside the number, moved by the clock (shown only then)
+    let spin = gtk::DrawingArea::new();
+    spin.set_content_width(26); spin.set_content_height(26); spin.set_valign(gtk::Align::Center); spin.set_margin_end(-6);
+    let spin_t0 = std::time::Instant::now();
+    spin.set_draw_func(move |_, cr, w, h| {
+        let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, 10.5);
+        cr.set_line_width(3.5);
+        cr.set_source_rgb(0.227, 0.227, 0.220); cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI); let _ = cr.stroke();
+        let a = (spin_t0.elapsed().as_secs_f64() * 300f64.to_radians()) % (2.0 * std::f64::consts::PI);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.set_source_rgb(1.0, 0.357, 0.122); cr.arc(cx, cy, r, a, a + 1.9); let _ = cr.stroke();
+    });
+    spin.add_tick_callback(|w, _| { w.queue_draw(); glib::ControlFlow::Continue });   // only runs while it's shown
+    num.append(&spin);
     let beside = gtk::Box::new(gtk::Orientation::Vertical, 4);
     beside.set_valign(gtk::Align::Center);
-    let beside1 = label("measuring\u{2026}", "beside");
+    let beside1 = label("measuring every item", "beside");
     let beside2 = label("", "beside-muted");
     beside.append(&beside1); beside.append(&beside2);
     num.append(&beside);
@@ -561,7 +576,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let glyph_peers: Vec<gtk::Widget> = vec![space_lbl.clone().upcast(), bar.clone().upcast(), legend.clone().upcast()];
     let ui = Rc::new(Ui {
         st: RefCell::new(St { cats: Vec::new(), tier: Level::Safe, open: None, pending: 0, cleaning: false, first_scan_done: false }),
-        win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
+        win, hero, unit, beside1, spin, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
         legend_ticked, legend_not, clean, map_key: map.clone(), protect_key: protect.clone(), reset_key: reset.clone(), top_keys, display, overlay, rail, rail_box_hover: Cell::new(-1),
         rail_hover: Cell::new(-1), rail_boxes: Cell::new([(0.0, 0.0, 0.0, 0.0); 3]), mark: Cell::new(0.0), sliding: Cell::new(false), slide_gen: Cell::new(0),
         title, explain, cta, list_sw: sw.clone(), guide: RefCell::new(None), guide_pending: Cell::new(false), rows, panel_rev, panel,
@@ -842,7 +857,8 @@ fn refresh_top(u: &Rc<Ui>) {
     align_to_glyph(&u.hero, &peers);
     u.unit.set_text(&unit);
     let freed = engine::history::total();
-    if st.pending > 0 { u.beside1.set_text("measuring\u{2026}"); }
+    u.spin.set_visible(st.pending > 0);
+    if st.pending > 0 { u.beside1.set_text("measuring every item"); }
     else if only_safe { u.beside1.set_text(if freed.1 == 0 { "all safe to clean  \u{00B7}  press Clean to start" } else { "all safe to clean" }); }
     else { u.beside1.set_text("includes items to check first"); }
     u.beside2.set_text(&if not_ticked > 0 { format!("+ {} more you can check yourself", fmt(not_ticked)) } else { String::new() });

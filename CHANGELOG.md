@@ -3,6 +3,12 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## Unreleased
+
+- **One loading mark each.** The Storage map shows just its bar while it measures (the turning ring is gone, so
+  nothing overlaps the bar any more, and the bar runs the full width). The main window shows a small turning ring
+  beside the number, "measuring every item", while it scans.
+
 ## 1.6.3 (2026-11-21)
 
 - **Mac: updating works wherever the app is.** An app opened straight from Downloads is run by macOS from a hidden,

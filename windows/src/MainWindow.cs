@@ -26,6 +26,12 @@ namespace SpaceHunter
 
         public float DesignHeight { get { return Compact ? 172 : 206; } }
 
+        // while the items are measured: one turning ring beside the number, moved by the clock (~60 fps)
+        readonly System.Windows.Forms.Timer spinTick = new System.Windows.Forms.Timer { Interval = 16 };
+        readonly System.Diagnostics.Stopwatch spin = System.Diagnostics.Stopwatch.StartNew();
+        public DisplayPanel() { spinTick.Tick += (s, e) => { if (Scanning) Invalidate(); else spinTick.Stop(); }; }
+        public void SetScanning(bool on) { if (on == Scanning) return; Scanning = on; if (on) { spin.Restart(); spinTick.Start(); } Invalidate(); }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = Begin(e); float W = LW, H = LH;
@@ -49,6 +55,16 @@ namespace SpaceHunter
                 g.DrawString(num, fBig, b, pad - 12.5f, 30);   // the digits start on the label's and the bar's edge
                 g.DrawString(unit, fUnit, b, pad - 12.5f + ns.Width - 8, 30 + ns.Height - g.MeasureString(unit, fUnit).Height - 13);
                 // beside the number: what kind of space it is, and what else is there if you look
+                if (Scanning)
+                {
+                    float tx = pad - 12.5f + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14, rr = 11, cx = tx + rr + 2, cy = 62;
+                    var old = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var pen = new Pen(Theme.DisplayTrack, 3.5f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
+                    using (var pen = new Pen(Theme.Orange, 3.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                        g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (float)(spin.Elapsed.TotalSeconds * 300 % 360), 110);
+                    g.SmoothingMode = old;
+                    using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString("measuring every item", fLegend, ib, cx + rr + 10, cy - g.MeasureString("Ag", fLegend).Height / 2);
+                }
                 if (!Scanning && Selected > 0)
                 {
                     float tx = pad - 12.5f + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14;
@@ -1171,7 +1187,7 @@ namespace SpaceHunter
             disp.Selected = cats.Where(c => c.Included).Sum(c => c.CleanBytes);
             disp.OnlySafe = !cats.Any(c => c.Included && !c.Safe && (c.Bytes > 0 || c.Files > 0));
             disp.ReviewUnticked = cats.Where(c => !c.Included && !c.Safe && c.Kind != Kind.RecycleBin).Sum(c => c.Bytes);
-            disp.Scanning = busy;
+            disp.SetScanning(busy);
             disp.Invalidate(); tiers.Invalidate(); list.Invalidate();
             cleanKey.Text = cleaning ? "show cleaning" : "clean " + Engine.Fmt(disp.Selected);
             cleanKey.Enabled = cleaning || !busy && cats.Any(c => c.Checked && (c.Blocked || c.Scanned && (c.Bytes > 0 || c.Files > 0)) || c.Partial && c.PickBytes > 0);

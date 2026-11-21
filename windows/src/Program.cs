@@ -261,6 +261,11 @@ namespace SpaceHunter
 
             Updater.CleanUpOld();
             var form = new MainForm { SnapshotPath = snap, OpenPanelFor = Arg(args, "--open"), FramesDir = Arg(args, "--frames"), KeepPlaceOut = Arg(args, "--test-keep-place") };
+            if (Arg(args, "--snapshot-scan") != null)   // test hook: the main window while the items are still being measured
+            {
+                string ss = Arg(args, "--snapshot-scan");
+                form.Shown += (s0, e0) => { var t = new System.Windows.Forms.Timer { Interval = 700 }; t.Tick += (s1, e1) => { t.Stop(); Snap(form, ss); form.Close(); }; t.Start(); };
+            }
             if (Arg(args, "--age") != null) form.TestAge = int.Parse(Arg(args, "--age"));   // test hook: with --open, that item's age in minutes
             if (Arg(args, "--guide") != null) form.GuideAt = int.Parse(Arg(args, "--guide"));   // test hook: the guide at step N
             if (Arg(args, "--pick") != null) form.PickPaths = Arg(args, "--pick").Split('|').ToList();

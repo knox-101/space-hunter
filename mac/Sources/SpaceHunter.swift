@@ -1328,6 +1328,13 @@ struct DisplayView: View {
                             Text(p.0).font(Theme.display(76)).padding(.leading, -7)   // the glyph side bearing: the digit lines up with the label and bar
                             Text(p.1).font(Theme.display(28))
                         }.foregroundColor(Theme.orange)
+                        // beside the number: one turning ring while the items are measured
+                        if state.scanning > 0 {
+                            HStack(spacing: 10) {
+                                SpinRing(width: 3.5).frame(width: 22, height: 22)
+                                Text("measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                            }
+                        }
                         // beside the number: what kind of space it is, and what else is there if you look
                         if state.scanning == 0 && state.selectedBytes > 0 {
                             let onlySafe = !state.cats.contains { $0.included && !$0.isSafe && ($0.bytes > 0 || $0.files > 0) }
@@ -2814,21 +2821,21 @@ struct FinderHeader: View {
             }
         }
         .padding(20).frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 150)
-        .overlay(alignment: .trailing) { if scanner.running { SpinRing().frame(width: 56, height: 56).padding(.trailing, 28) } }
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
     }
 }
 
-// A large turning ring for the whole scan: impossible to miss.
+// A turning ring beside the number while the items are measured.
 struct SpinRing: View {
+    var width: CGFloat = 5
     @State private var start = Date()
     var body: some View {
         // driven by time at the display's frame rate (300° a second), so a late frame never jumps
         TimelineView(.animation) { tl in
             let angle = (max(0, tl.date.timeIntervalSince(start)) * 300).truncatingRemainder(dividingBy: 360)
             ZStack {
-                Circle().stroke(Theme.track, lineWidth: 5)
-                Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                Circle().stroke(Theme.track, lineWidth: width)
+                Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: width, lineCap: .round))
                     .rotationEffect(.degrees(angle))
             }
         }
