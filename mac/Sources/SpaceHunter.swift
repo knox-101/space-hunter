@@ -3,7 +3,8 @@
 // Space Hunter (macOS) - finds the folders that silently fill your disk, explains each one, and cleans the
 // ticked ones. Same design and features as the Windows version ("Instrument + Strata": warm-grey chassis,
 // one dark display, orange as the only accent, square hardware keys, three safety sections).
-// Build with ./build.sh (Xcode or Command Line Tools). macOS 13+.
+// Build with ./build.sh (Xcode or Command Line Tools). macOS 11 Big Sur and newer: only SwiftUI that macOS 11 has is
+// used, so the same code runs everywhere (no Window scenes, TimelineView or Canvas; see AppWindows, Ticker, Sketch).
 
 import SwiftUI
 import AppKit
@@ -527,7 +528,7 @@ extension Color {
             NSColor(srgbRed: CGFloat((h >> 16) & 0xFF) / 255, green: CGFloat((h >> 8) & 0xFF) / 255, blue: CGFloat(h & 0xFF) / 255, alpha: 1)
         }
         let l = ns(light), d = ns(dark)
-        return Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+        return Color(NSColor(name: nil, dynamicProvider: { appearance in   // Color(_:) rather than Color(nsColor:), which needs macOS 12
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? d : l
         }))
     }
@@ -634,13 +635,188 @@ struct Hatch: View {
     var ink = Theme.orange
     var ground = Theme.track
     var body: some View {
-        Canvas { ctx, size in
-            var p = Path(); var x: CGFloat = -size.height
-            while x < size.width { p.move(to: CGPoint(x: x, y: size.height)); p.addLine(to: CGPoint(x: x + size.height, y: 0)); x += 5 }
-            ctx.stroke(p, with: .color(ink), lineWidth: 1.5)
-        }
-        .background(ground).clipped()
+        HatchLines().stroke(ink, lineWidth: 1.5)
+            .background(ground).clipped()
     }
+}
+
+// The hatch's diagonal lines, 5 pt apart, as a shape (a Canvas would need macOS 12)
+struct HatchLines: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path(); var x: CGFloat = -r.height
+        while x < r.width { p.move(to: CGPoint(x: x, y: r.height)); p.addLine(to: CGPoint(x: x + r.height, y: 0)); x += 5 }
+        return p
+    }
+}
+
+// MARK: - Drawing and timing that work on macOS 11
+// SwiftUI's Canvas and TimelineView arrived in macOS 12. These two small stand-ins do the same jobs on every version,
+// so there's one code path and the app looks and moves the same on 11, 12 and newer.
+
+// A drawing written like a Canvas (fill, stroke, draw text, in the view's own points), recorded as steps and shown as
+// ordinary shapes and text stacked in order. The calls carry Canvas's names, so the drawing code reads as before.
+struct Sketch {
+    struct Shading {   // what Canvas calls a shading; here always a plain colour (.color(...), as in the Canvas calls)
+        let ink: Color
+        static func color(_ c: Color) -> Shading { Shading(ink: c) }
+    }
+    enum Step {
+        case fill(Path, Color)
+        case stroke(Path, Color, StrokeStyle)
+        case text(Text, CGPoint, UnitPoint)
+        case erase(Path)
+    }
+    private(set) var steps: [Step] = []
+    private(set) var erases = false
+
+    mutating func fill(_ p: Path, with s: Shading) { steps.append(.fill(p, s.ink)) }
+    mutating func stroke(_ p: Path, with s: Shading, style: StrokeStyle) { steps.append(.stroke(p, s.ink, style)) }
+    mutating func stroke(_ p: Path, with s: Shading, lineWidth: CGFloat = 1) { stroke(p, with: s, style: StrokeStyle(lineWidth: lineWidth)) }
+    // the text at its own natural size, with the given point of it (its top centre, its centre, ...) placed at `at`
+    mutating func draw(_ t: Text, at: CGPoint, anchor: UnitPoint = .center) { steps.append(.text(t, at, anchor)) }
+    // clears what was drawn before under this shape (the moon icon: a disc with a bite out of it)
+    mutating func erase(_ p: Path) { steps.append(.erase(p)); erases = true }
+}
+
+// Shows a Sketch: fills the space it's given, like a Canvas does.
+struct SketchView: View {
+    let paint: (inout Sketch, CGSize) -> Void
+    init(_ paint: @escaping (inout Sketch, CGSize) -> Void) { self.paint = paint }
+    var body: some View {
+        if #available(macOS 12, *) { SketchCanvas(paint: paint) } else { legacy }
+    }
+    // macOS 11: each step becomes an ordinary shape or text, stacked in order
+    var legacy: some View {
+        GeometryReader { g in
+            let s = SketchView.record(g.size, paint)
+            // only a drawing that erases needs its own layer, so the erasing can't reach what's behind the view
+            if s.erases { SketchLayers(sketch: s, size: g.size).compositingGroup() } else { SketchLayers(sketch: s, size: g.size) }
+        }
+    }
+    static func record(_ size: CGSize, _ paint: (inout Sketch, CGSize) -> Void) -> Sketch {
+        var s = Sketch(); paint(&s, size); return s
+    }
+}
+
+// macOS 12 and newer: the same steps replayed into a real Canvas, which draws them in place every frame (the finish has
+// dozens of moving pieces; as separate views that would be far heavier)
+@available(macOS 12, *)
+struct SketchCanvas: View {
+    let paint: (inout Sketch, CGSize) -> Void
+    var body: some View {
+        Canvas { ctx, size in
+            let s = SketchView.record(size, paint)
+            for step in s.steps {
+                switch step {
+                case .fill(let p, let c): ctx.fill(p, with: .color(c))
+                case .stroke(let p, let c, let st): ctx.stroke(p, with: .color(c), style: st)
+                case .text(let t, let at, let a): ctx.draw(t, at: at, anchor: a)
+                case .erase(let p):   // only what this canvas drew before is cleared
+                    var e = ctx; e.blendMode = .destinationOut; e.fill(p, with: .color(.black))
+                }
+            }
+        }
+    }
+}
+
+struct SketchLayers: View {
+    let sketch: Sketch
+    let size: CGSize
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            ForEach(sketch.steps.indices, id: \.self) { i in layer(sketch.steps[i]) }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+    @ViewBuilder
+    func layer(_ step: Sketch.Step) -> some View {
+        switch step {
+        case .fill(let p, let c):
+            p.fill(c)
+        case .stroke(let p, let c, let st):
+            p.stroke(c, style: st)
+        case .text(let t, let at, let a):
+            // an overlay never changes the size of what it sits on, so text near an edge can't shift the drawing
+            Color.clear.overlay(
+                t.fixedSize()
+                    .alignmentGuide(HorizontalAlignment.leading) { d in d.width * a.x - at.x }
+                    .alignmentGuide(VerticalAlignment.top) { d in d.height * a.y - at.y },
+                alignment: .topLeading)
+        case .erase(let p):
+            p.fill(Color.black).blendMode(.destinationOut)
+        }
+    }
+}
+
+// The clock behind a Ticker. While running it publishes the time every `interval` seconds; it skips frames while its
+// window is hidden (minimised, covered or on another Space), as TimelineView does, so nothing redraws unseen.
+final class FrameClock: ObservableObject {
+    @Published private(set) var now = Date()
+    let interval: TimeInterval
+    weak var window: NSWindow?
+    private var timer: Timer?
+    init(interval: TimeInterval) { self.interval = interval }
+    func run(_ on: Bool) {
+        if !on { timer?.invalidate(); timer = nil; return }
+        guard timer == nil else { return }
+        now = Date()
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if let w = self.window, !w.occlusionState.contains(.visible) { return }
+            self.now = Date()
+        }
+        t.tolerance = interval * 0.1
+        RunLoop.main.add(t, forMode: .common)   // keeps going while a menu is open or the window is being dragged
+        timer = t
+    }
+    deinit { timer?.invalidate() }
+}
+
+// Redraws its content with the current time: every display frame (1/60 s) by default, like TimelineView(.animation),
+// or every second with every: 1, like TimelineView(.periodic(by: 1)). paused: true holds the last time and stops the
+// timer. Anything it moves is placed by the clock, so a late frame never makes it jump.
+struct Ticker<Content: View>: View {
+    let paused: Bool
+    let interval: TimeInterval
+    let content: (Date) -> Content
+    @StateObject private var clock: FrameClock
+    init(every interval: TimeInterval = 1.0 / 60, paused: Bool = false, @ViewBuilder content: @escaping (Date) -> Content) {
+        self.paused = paused
+        self.interval = interval
+        self.content = content
+        _clock = StateObject(wrappedValue: FrameClock(interval: interval))
+    }
+    var body: some View {
+        if #available(macOS 12, *) {
+            // macOS 12 and newer: TimelineView, which follows the display (120 frames a second on a ProMotion screen)
+            if interval >= 0.5 {
+                TimelineView(.periodic(from: Date(), by: interval)) { tl in content(tl.date) }
+            } else {
+                TimelineView(.animation(minimumInterval: nil, paused: paused)) { tl in content(tl.date) }
+            }
+        } else { legacy }
+    }
+    // macOS 11: a timer at 60 frames a second
+    var legacy: some View {
+        let c = clock
+        return content(c.now)
+            .background(WindowSpy { w in c.window = w })
+            .onAppear { clock.run(!paused) }
+            .onDisappear { clock.run(false) }
+            .onChange(of: paused) { p in clock.run(!p) }
+    }
+}
+
+// Tells its owner which window it's in, once it's in one (and again if it moves); never on every redraw.
+struct WindowSpy: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+    final class Spy: NSView {
+        var found: ((NSWindow?) -> Void)?
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); found?(window) }
+    }
+    func makeNSView(context: Context) -> Spy { let v = Spy(); v.found = found; return v }
+    func updateNSView(_ nsView: Spy, context: Context) {}
 }
 
 // A tick box: empty (an ink outline), all (orange with a tick), some (orange with a dash, files picked by hand),
@@ -1195,18 +1371,84 @@ struct SpaceHunterApp: App {
             MainView().environmentObject(state).frame(minWidth: 1000, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
-        Window("Storage map", id: "finder") {
-            FinderView().environmentObject(state)
+        // The other three windows are AppKit windows (see AppWindows). They're listed in the Window menu, as SwiftUI
+        // lists a window of its own there.
+        .commands {
+            CommandGroup(before: .windowList) {
+                Button("Storage map") { AppWindows.shared.open("finder", state: state) }
+                Button("Cleaning") { AppWindows.shared.open("cleaning", state: state) }
+                Button("Protected folders") { AppWindows.shared.open("protect", state: state) }
+            }
         }
-        .defaultSize(width: 940, height: 760)
-        Window("Cleaning", id: "cleaning") {
-            ProgressSheet().environmentObject(state)
+    }
+}
+
+// The Storage map, Cleaning and Protected folders windows. SwiftUI's own single windows (Window scenes, opened with
+// openWindow) need macOS 13, so each one is a plain AppKit window holding its SwiftUI view, with the same title, size
+// and smallest size. There's never more than one of each: opening one that's open brings it to the front. Closing one
+// throws its view away, so it starts afresh next time, as a SwiftUI window does.
+final class AppWindows: NSObject, NSWindowDelegate {
+    static let shared = AppWindows()
+    // posted as a window closes, with its id as the object (the Storage map stops its scan, the Cleaning window ends
+    // the clean's finish); the views' own onDisappear does the same, this makes sure of it
+    static let willClose = Notification.Name("SpaceHunter.windowWillClose")
+
+    struct Spec { let title: String; let size: CGSize; let minSize: CGSize }
+    // minSize: the smallest each view allows (its .frame(minWidth:, minHeight:))
+    static let specs: [String: Spec] = [
+        "finder": Spec(title: "Storage map", size: CGSize(width: 940, height: 760), minSize: CGSize(width: 760, height: 520)),
+        "cleaning": Spec(title: "Cleaning", size: CGSize(width: 780, height: 560), minSize: CGSize(width: 680, height: 480)),
+        "protect": Spec(title: "Protected folders", size: CGSize(width: 720, height: 600), minSize: CGSize(width: 560, height: 420)),
+    ]
+
+    private var windows: [String: NSWindow] = [:]
+
+    func open(_ id: String, state: AppState) {
+        if let w = windows[id] {
+            if w.isMiniaturized { w.deminiaturize(nil) }
+            w.makeKeyAndOrderFront(nil)
+            return
         }
-        .defaultSize(width: 780, height: 560)
-        Window("Protected folders", id: "protect") {
-            ProtectView().environmentObject(state)
+        guard let spec = AppWindows.specs[id] else { return }
+        let view: AnyView
+        switch id {
+        case "finder": view = AnyView(FinderView().environmentObject(state))
+        case "cleaning": view = AnyView(ProgressSheet().environmentObject(state))
+        default: view = AnyView(ProtectView().environmentObject(state))
         }
-        .defaultSize(width: 720, height: 600)
+        let host = NSHostingController(rootView: view)
+        if #available(macOS 13, *) { host.sizingOptions = [.minSize] }   // never sized to the content's ideal size, as a SwiftUI window isn't
+        let w = NSWindow(contentRect: NSRect(origin: .zero, size: spec.size),
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        w.contentViewController = host
+        w.title = spec.title
+        w.isReleasedWhenClosed = false   // this keeps it until it closes
+        w.tabbingMode = .disallowed      // one of each, never a tab
+        w.contentMinSize = spec.minSize
+        w.setContentSize(spec.size)      // setting the content above sized the window to it; back to the usual size
+        w.center()
+        _ = w.setFrameAutosaveName("SpaceHunter." + id)   // where you last left it, if anywhere
+        w.delegate = self
+        windows[id] = w
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    func close(_ id: String) { windows[id]?.close() }
+
+    // the Cleaning window's title follows the clean (Cleaning, Stopped, Done)
+    func setTitle(_ id: String, _ title: String) {
+        if let w = windows[id], w.title != title { w.title = title }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let w = notification.object as? NSWindow, let id = windows.first(where: { $0.value === w })?.key else { return }
+        NotificationCenter.default.post(name: AppWindows.willClose, object: id)
+        windows[id] = nil
+        w.delegate = nil
+        w.saveFrame(usingName: "SpaceHunter." + id)   // where you left it ...
+        _ = w.setFrameAutosaveName("")                 // ... and the name is free for the next window
+        // take the SwiftUI view out once the window has gone, so its onDisappear runs and its state is let go
+        DispatchQueue.main.async { w.contentViewController = nil }
     }
 }
 
@@ -1214,7 +1456,6 @@ struct SpaceHunterApp: App {
 
 struct MainView: View {
     @EnvironmentObject var state: AppState
-    @Environment(\.openWindow) private var openWindow
     @State private var confirm = false
     @StateObject private var guide = GuideModel()
 
@@ -1242,12 +1483,12 @@ struct MainView: View {
                 .buttonStyle(KeyStyle(primary: true, big: true))
                 .disabled(!state.cleaning && (state.scanning > 0 || state.selectedBytes == 0))
                 // while scanning: a faint fill as items are measured, and a soft sheen passing over, so it reads as working
-                .overlay {
+                .overlay(Group {
                     if state.scanning > 0 && !state.cleanRunning {
                         KeySheen(progress: state.cats.isEmpty ? 0 : Double(state.cats.filter { $0.scanned }.count) / Double(state.cats.count))
-                            .clipShape(RoundedRectangle(cornerRadius: 4)).padding(.bottom, 2).allowsHitTesting(false)
+                            .clipShape(RoundedRectangle(cornerRadius: 4)).allowsHitTesting(false)
                     }
-                }
+                })
                 .guidePart(3)
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -1312,6 +1553,9 @@ struct MainView: View {
         // once, the first time a scan finishes (never during a clean); if another window is in front, when this one is
         .onChange(of: state.scanning) { n in if n == 0 { autoGuide(); afterScan() } }
     }
+
+    // the Storage map, Cleaning and Protected folders windows (one of each; see AppWindows)
+    func openWindow(id: String) { AppWindows.shared.open(id, state: state) }
 
     // A scan finished: the daily public-totals send (only if you said yes), or the question, once.
     func afterScan() {
@@ -1395,7 +1639,7 @@ struct TopIcon: View {
     let kind: Int
     let ink: Color
     var body: some View {
-        Canvas { ctx, size in
+        SketchView { ctx, size in
             let cx = size.width / 2, cy = size.height / 2
             let line = StrokeStyle(lineWidth: 1.6, lineCap: .round)
             switch kind {
@@ -1408,10 +1652,9 @@ struct TopIcon: View {
                     rays.addLine(to: CGPoint(x: cx + CGFloat(cos(a)) * 8.2, y: cy + CGFloat(sin(a)) * 8.2))
                 }
                 ctx.stroke(rays, with: .color(ink), style: line)
-            case 1:
-                var c = ctx
-                c.clip(to: Path(ellipseIn: CGRect(x: cx - 2.2, y: cy - 9.2, width: 12, height: 12)), options: .inverse)
-                c.fill(Path(ellipseIn: CGRect(x: cx - 6.5, y: cy - 6.5, width: 13, height: 13)), with: .color(ink))
+            case 1:   // a disc with a smaller disc taken out of its upper right: a crescent
+                ctx.fill(Path(ellipseIn: CGRect(x: cx - 6.5, y: cy - 6.5, width: 13, height: 13)), with: .color(ink))
+                ctx.erase(Path(ellipseIn: CGRect(x: cx - 2.2, y: cy - 9.2, width: 12, height: 12)))
             case 2:
                 ctx.stroke(Path(ellipseIn: CGRect(x: cx - 6.5, y: cy - 6.5, width: 13, height: 13)), with: .color(ink), style: line)
                 var half = Path()
@@ -1449,8 +1692,8 @@ struct DisplayView: View {
                             HStack(spacing: 10) {
                                 SpinRing(width: 3.5).frame(width: 22, height: 22)
                                 // macOS holds the scan while it asks for access to Desktop, Documents or Downloads: say so
-                                TimelineView(.periodic(from: Date(), by: 1)) { tl in
-                                    let stalled = tl.date.timeIntervalSince(state.lastScanTick) > 4
+                                Ticker(every: 1) { now in
+                                    let stalled = now.timeIntervalSince(state.lastScanTick) > 4
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(stalled ? "waiting for macOS" : "measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
                                         if stalled {
@@ -1608,7 +1851,7 @@ struct TierColumn: View {
                     // unticks it when all of it is ticked; the open section stays as it is
                     HStack(alignment: .center, spacing: 6) {
                         SectionBox(state: boxState, ink: on || hot ? Theme.ink : Theme.soft)
-                        Text(sub).font(headFont).foregroundColor(headInk).lineLimit(1).underline(boxHover)
+                        Text(sub).underline(boxHover).font(headFont).foregroundColor(headInk).lineLimit(1)   // Text.underline: macOS 11 (the View one is 13+)
                     }
                     .padding(5).contentShape(Rectangle())
                     .onHover { boxHover = $0 }
@@ -2102,7 +2345,7 @@ enum FinishBeat {
     }
 
     // The bar while cleaning; at the end it fades and the disk appears as a ring (measured before and after).
-    static func draw(_ ctx: inout GraphicsContext, size: CGSize, ms: Double, bar: CGFloat, details: Bool, binOnly: Bool,
+    static func draw(_ ctx: inout Sketch, size: CGSize, ms: Double, bar: CGFloat, details: Bool, binOnly: Bool,
                      before: Int64, after: Int64, total: Int64, disk: String) {
         let W = size.width, pad: CGFloat = 20
         let fin = ms >= 0
@@ -2204,7 +2447,6 @@ struct DottedRule: Shape {
 
 struct ProgressSheet: View {
     @EnvironmentObject var state: AppState
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var finishStart: Date?     // the finish is playing
     @State private var settled = false        // the finish has played (or was skipped)
@@ -2228,11 +2470,11 @@ struct ProgressSheet: View {
                     .offset(y: finished && grown && !details ? 360 : 0)   // sinks away as the display grows
                     .opacity(finished && grown && !details ? 0 : 1)
                 // redrawn every frame while cleaning (the bar glides) and during the finish; still once it has settled
-                TimelineView(.animation(paused: state.cleanDone && finishStart == nil)) { tl in
+                Ticker(paused: state.cleanDone && finishStart == nil) { now in
                     GeometryReader { g in
-                        let ms = msNow(tl.date)
+                        let ms = msNow(now)
                         let grow: CGFloat = !finished || details ? 0 : settled ? 1 : CGFloat(FinishBeat.ease(ms / FinishBeat.grow))
-                        display(ms: ms, date: tl.date, width: g.size.width)
+                        display(ms: ms, date: now, width: g.size.width)
                             .frame(width: g.size.width, height: baseH + max(0, g.size.height - baseH) * grow)
                     }
                 }
@@ -2269,18 +2511,23 @@ struct ProgressSheet: View {
         // Esc closes it too, once it's done
         .background(Button("") { if canClose { close() } }.keyboardShortcut(.cancelAction).opacity(0).allowsHitTesting(false))
         .navigationTitle(windowTitle)
+        .onChange(of: windowTitle) { t in AppWindows.shared.setTitle("cleaning", t) }
         .onAppear {
             // opened again after the clean ended (it was closed while cleaning): straight to the end
             if state.cleanDone { if state.cleanStopped { settled = true } else { settle() } }
+            AppWindows.shared.setTitle("cleaning", windowTitle)
         }
         .onChange(of: state.cleanRunning) { r in
             if r { gen += 1; finishStart = nil; settled = false; grown = false; doneBeat = false; listShown = false; details = false }
         }
         .onChange(of: state.cleanDone) { d in if d { beginFinish() } }
         .onDisappear { if state.cleanDone { state.finishCleaning() } }
+        .onReceive(NotificationCenter.default.publisher(for: AppWindows.willClose)) { n in
+            if n.object as? String == "cleaning", state.cleanDone { state.finishCleaning() }
+        }
     }
 
-    func close() { state.finishCleaning(); dismiss() }
+    func close() { state.finishCleaning(); AppWindows.shared.close("cleaning") }
 
     func msNow(_ d: Date) -> Double {
         if !finished { return -1 }                  // cleaning, or stopped
@@ -2325,7 +2572,7 @@ struct ProgressSheet: View {
         let before = state.freeBefore, after = state.freeAfter, diskTotal = state.diskTotal, disk = state.diskName
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 7).fill(Theme.screen)
-            Canvas { ctx, size in
+            SketchView { ctx, size in
                 FinishBeat.draw(&ctx, size: size, ms: ms, bar: barFraction, details: showDetails, binOnly: binOnly,
                                 before: before, after: after, total: diskTotal, disk: disk)
             }
@@ -2822,8 +3069,8 @@ struct DriveList: View {
                 }
                 .padding(.horizontal, 20).frame(height: 56)
                 .background(hover == c.id ? Theme.hover : Color.clear)
-                .overlay(alignment: .leading) { if sel { Rectangle().fill(Theme.orange).frame(width: 4).padding(.vertical, 6) } }
-                .overlay(alignment: .bottom) { if i < choices.count - 1 { Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 16) } }
+                .overlay(Group { if sel { Rectangle().fill(Theme.orange).frame(width: 4).padding(.vertical, 6) } }, alignment: .leading)
+                .overlay(Group { if i < choices.count - 1 { Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 16) } }, alignment: .bottom)
                 .contentShape(Rectangle())
                 .onHover { inside in if inside { hover = c.id } else if hover == c.id { hover = nil } }
                 .onTapGesture { pick(c) }
@@ -2913,6 +3160,9 @@ struct FinderView: View {
         .onExitCommand { withAnimation(.easeOut(duration: 0.12)) { listOpen = false } }
         .onAppear { if scanner.root == nil { place = VolumeChoice.all().first; start(Engine.home.path) } }
         .onDisappear { scanner.cancel = true }   // closing the map stops its scan
+        .onReceive(NotificationCenter.default.publisher(for: AppWindows.willClose)) { n in
+            if n.object as? String == "finder" { scanner.cancel = true }
+        }
         .onChange(of: scanner.root?.id) { _ in current = scanner.root }
     }
 
@@ -2930,8 +3180,8 @@ struct FinderHeader: View {
     let target: Int64
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TimelineView(.periodic(from: Date(), by: 1)) { tl in
-                let stalled = scanner.running && tl.date.timeIntervalSince(scanner.lastTick) > 3
+            Ticker(every: 1) { now in
+                let stalled = scanner.running && now.timeIntervalSince(scanner.lastTick) > 3
                 Text(stalled ? "Storage map  ·  waiting for macOS: if it asks to access a folder, click Allow"
                      : scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
                     .font(Theme.semi(12)).foregroundColor(stalled ? Theme.screenInk : Color(hex: 0xB4B1AA))
@@ -2963,14 +3213,14 @@ struct KeySheen: View {
     @State private var start = Date()
     var body: some View {
         GeometryReader { g in
-            TimelineView(.animation) { tl in
+            Ticker { now in
                 let w = g.size.width, band = w * 0.35
-                let t = (tl.date.timeIntervalSince(start)).truncatingRemainder(dividingBy: 1.6) / 1.6
+                let t = (now.timeIntervalSince(start)).truncatingRemainder(dividingBy: 1.6) / 1.6
                 let x = -band + (w + band) * (1 - (1 - t) * (1 - t))
                 ZStack(alignment: .leading) {
                     Rectangle().fill(Theme.orange.opacity(0.16)).frame(width: w * min(1, max(0, progress)))
                         .animation(.easeOut(duration: 0.4), value: progress)
-                    LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.28), Color.white.opacity(0)], startPoint: .leading, endPoint: .trailing)
+                    LinearGradient(gradient: Gradient(colors: [Color.white.opacity(0), Color.white.opacity(0.28), Color.white.opacity(0)]), startPoint: .leading, endPoint: .trailing)
                         .frame(width: band).offset(x: x)
                 }
                 .frame(width: w, height: g.size.height, alignment: .leading)
@@ -2985,8 +3235,8 @@ struct SpinRing: View {
     @State private var start = Date()
     var body: some View {
         // driven by time at the display's frame rate (300° a second), so a late frame never jumps
-        TimelineView(.animation) { tl in
-            let angle = (max(0, tl.date.timeIntervalSince(start)) * 300).truncatingRemainder(dividingBy: 360)
+        Ticker { now in
+            let angle = (max(0, now.timeIntervalSince(start)) * 300).truncatingRemainder(dividingBy: 360)
             ZStack {
                 Circle().stroke(Theme.track, lineWidth: width)
                 Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: width, lineCap: .round))
@@ -3277,10 +3527,10 @@ struct ScanBar: View {
                     Rectangle().fill(Theme.orange).frame(width: g.size.width * min(1, CGFloat(Double(done) / Double(target))))
                 } else {
                     // 150 pt a second by the clock, wrapped round the track and the block's own width
-                    TimelineView(.animation) { tl in
+                    Ticker { now in
                         let block = g.size.width * 0.22
                         let span = Double(max(1, g.size.width + block))
-                        let x = (max(0, tl.date.timeIntervalSince(start)) * 150).truncatingRemainder(dividingBy: span)
+                        let x = (max(0, now.timeIntervalSince(start)) * 150).truncatingRemainder(dividingBy: span)
                         Rectangle().fill(Theme.orange)
                             .frame(width: block)
                             .offset(x: CGFloat(x) - block)

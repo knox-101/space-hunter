@@ -59,10 +59,32 @@ namespace SpaceHunter
         [STAThread]
         static int Main(string[] args)
         {
-            // long paths (past the old 260-character limit) work instead of throwing; must be set before any file access
+            // long paths (past the old 260-character limit) work instead of throwing. These must be set before anything
+            // touches a path, and compiling a method that uses other classes can already run their set-up code, so Main
+            // does only this and the rest starts in Run.
             AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
             AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
-            if (Has(args, "--version")) { Console.WriteLine("Space Hunter " + AppVersion.Text); return 0; }
+            return Run(args);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static int Run(string[] args)
+        {
+            if (Has(args, "--version")) { Console.WriteLine("Space Hunter " + AppVersion.Text + " " + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture); return 0; }
+            // one exe for Intel/AMD and ARM; its Windows structures are laid out for 64-bit, so 32-bit Windows is refused
+            if (!Environment.Is64BitProcess)
+            {
+                MessageBox.Show("Space Hunter needs 64-bit Windows 10 or 11 (Intel, AMD or ARM).", "Space Hunter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return 1;
+            }
+            if (Arg(args, "--test-longpath") != null)   // test hook: can this copy read and walk a path past the old limit?
+            {
+                string lp = Arg(args, "--test-longpath"); bool legacy, block;
+                AppContext.TryGetSwitch("Switch.System.IO.UseLegacyPathHandling", out legacy); AppContext.TryGetSwitch("Switch.System.IO.BlockLongPaths", out block);
+                Console.WriteLine("legacy=" + legacy + " block=" + block);
+                try { Console.WriteLine("exists=" + new FileInfo(@"\\?\" + lp).Exists); } catch (Exception e) { Console.WriteLine("error " + e.GetType().Name + ": " + e.Message); }
+                return 0;
+            }
             string pretend = Arg(args, "--test-check");   // test hook: check for an update as if this were an older version
             if (pretend != null)
             {

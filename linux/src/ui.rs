@@ -453,7 +453,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     num.append(&heroes);
     // while the items are measured: one turning ring beside the number, moved by the clock (shown only then)
     let spin = gtk::DrawingArea::new();
-    spin.set_content_width(26); spin.set_content_height(26); spin.set_valign(gtk::Align::Center); spin.set_margin_end(-6);
+    spin.set_content_width(26); spin.set_content_height(26); spin.set_valign(gtk::Align::Center);
     let spin_t0 = std::time::Instant::now();
     spin.set_draw_func(move |_, cr, w, h| {
         let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, 10.5);
@@ -523,7 +523,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
             let (w, h) = (w as f64, h as f64);
             let (mx, my) = (alloc.margin_start() as f64, alloc.margin_top() as f64);
             let fw = (w - mx - alloc.margin_end() as f64).max(1.0);
-            let fh = (h - my - alloc.margin_bottom() as f64 - 2.0).max(1.0);   // the face, above the key's shadow
+            let fh = (h - my - alloc.margin_bottom() as f64).max(1.0);   // the face is the whole button (its shadow is drawn outside it)
             shown.set(shown.get() + (target.get() - shown.get()) * 0.12);
             let r = 4.0;
             cr.new_sub_path();

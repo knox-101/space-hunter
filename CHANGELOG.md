@@ -3,6 +3,17 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.6.5 (2026-11-23)
+
+- **Runs on more computers.** Windows: one SpaceHunter.exe now runs natively on Windows on ARM (Snapdragon laptops,
+  Surface Pro X) as well as Intel and AMD; 32-bit Windows gets a clear message instead of failing. Mac: macOS 11 Big Sur
+  and 12 Monterey are supported, not just 13 and later.
+- **Windows: files deeper than the old 260-character path limit are cleaned now.** They used to be skipped without a
+  word, and one such folder could stop the empty folders beside it from being removed. With Recycle Bin chosen they're
+  kept (the Recycle Bin can't take paths that long) and the log says so.
+- Mac: the clean's finish is drawn in one go again on macOS 12 and later, and animations follow the screen's refresh
+  (120 a second on ProMotion). Mac and Linux: the Clean key's scanning sheen now covers the whole key.
+
 ## 1.6.4 (2026-11-23)
 
 - **One loading mark each.** The Storage map shows just its bar while it measures (the turning ring is gone, so

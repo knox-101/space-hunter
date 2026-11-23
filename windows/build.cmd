@@ -21,7 +21,9 @@ set KEY=
 if exist ..\update-key\update-key.xml set KEY=/resource:..\update-key\update-key.xml,update-key.xml
 set ICON=
 if exist assets\SpaceHunter.ico set ICON=/win32icon:assets\SpaceHunter.ico
-"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /platform:x64 /optimize+ ^
+rem anycpu: one exe that runs natively on 64-bit Intel/AMD and on Windows on ARM (Snapdragon, Surface Pro X: needs
+rem .NET Framework 4.8.1, which Windows 11 on ARM has); 32-bit Windows is refused at start (see Program.cs)
+"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /platform:anycpu /optimize+ ^
   /win32manifest:app.manifest %ICON% %RES% /resource:cleaners.json,cleaners.json %KEY% ^
   /reference:System.Web.Extensions.dll /out:SpaceHunter.exe src\*.cs obj\Version.cs
 if errorlevel 1 (echo BUILD FAILED & exit /b 1)

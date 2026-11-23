@@ -1348,8 +1348,8 @@ namespace SpaceHunter
                         gt.Tick += (s8, e8) => { gt.Stop(); Program.Snap(this, sp); Close(); };
                         gt.Start();
                     }
+                    if (SnapshotPath == null && !testRun && Stats.Asked) Stats.MaybeSend(false);   // its own check: never in the guide's way
                     if (SnapshotPath != null) { var sp = SnapshotPath; SnapshotPath = null; BeginInvoke((Action)(() => { Program.Snap(this, sp); Close(); })); }
-                    else if (!testRun && Stats.Asked) Stats.MaybeSend(false);
                     else if (!testRun && !Stats.Asked && guideSeenAtStart && !askShown && guide == null && !cleaning && !updateBar.Visible) { askShown = true; ShowAsk(); }
                     else if (!GuideOverlay.Seen && !testRun && guide == null && !cleaning)
                     {

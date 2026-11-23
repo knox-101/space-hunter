@@ -372,9 +372,9 @@ namespace SpaceHunter
             if (Keep.IsKept(f.FullName)) return;   // on the keep list: never touched, never counted
             if (t >= cutoff) { if (delete) cnt.Skipped++; return; }
             if (!delete) { cnt.Files++; cnt.Bytes += len; return; }
-            cnt.Current = f.FullName;
-            if (touchedNow != null) touchedNow.Add(f.DirectoryName ?? "");
-            if (bin != null) { bin.Add(f.FullName, len); return; }
+            cnt.Current = Plain(f.FullName);
+            if (touchedNow != null) touchedNow.Add(Plain(f.DirectoryName ?? ""));
+            if (bin != null) { bin.Add(Plain(f.FullName), len); return; }
             bool ok = TryDelete(f);
             if (ok) { cnt.Files++; cnt.Bytes += len; } else cnt.Skipped++;
             if (cnt.OnItem != null) cnt.OnItem(f.FullName, len, ok);
@@ -391,8 +391,34 @@ namespace SpaceHunter
             catch { return false; }
         }
 
+        // Past Windows' old 260-character limit a plain path fails (unless long paths are switched on in the registry, which
+        // they aren't by default), so a folder near the limit is opened by its "\\?\" form, which has no such limit.
+        // Every check on a path (protected, skipped, built in) compares the plain form (Plain), so nothing protected
+        // slips through because it's deep.
+        public static DirectoryInfo Deep(DirectoryInfo d)
+        {
+            string f = d.FullName;
+            if (f.Length < 240 || f.StartsWith(@"\\?\")) return d;
+            return new DirectoryInfo(f.StartsWith(@"\\") ? @"\\?\UNC\" + f.Substring(2) : @"\\?\" + f);
+        }
+        static FileSystemInfo Deep(FileSystemInfo i)
+        {
+            var d = i as DirectoryInfo; if (d != null) return Deep(d);
+            string f = i.FullName;
+            if (f.Length < 240 || f.StartsWith(@"\\?\")) return i;
+            return new FileInfo(f.StartsWith(@"\\") ? @"\\?\UNC\" + f.Substring(2) : @"\\?\" + f);
+        }
+        public static string Plain(string p)
+        {
+            if (p == null) return "";
+            if (p.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) return @"\\" + p.Substring(8);
+            if (p.StartsWith(@"\\?\")) return p.Substring(4);
+            return p;
+        }
+
         static void Walk(DirectoryInfo d, Action<FileInfo> onFile, Counter cnt, HashSet<string> exclude)
         {
+            d = Deep(d);
             FileSystemInfo[] items;
             try { items = d.GetFileSystemInfos(); } catch { return; }
             foreach (var i in items)
@@ -400,10 +426,11 @@ namespace SpaceHunter
                 if (cnt.Cancel) return;
                 try   // one odd entry (a name Windows can't handle) is skipped, never the end of the scan
                 {
-                    if ((i.Attributes & FileAttributes.ReparsePoint) != 0) continue;
-                    var sub = i as DirectoryInfo;
+                    var e = Deep(i);   // past the old limit: its long form, before anything reads it
+                    if ((e.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    var sub = e as DirectoryInfo;
                     if (sub != null) { if (!exclude.Contains(sub.Name) && !Keep.IsKept(sub.FullName) && !Custom.IsSkipped(sub.FullName, skipNow)) Walk(sub, onFile, cnt, exclude); }
-                    else onFile((FileInfo)i);
+                    else onFile((FileInfo)e);
                 }
                 catch { cnt.Skipped++; }
             }
@@ -428,20 +455,26 @@ namespace SpaceHunter
         // moment ago (say, an installer's working folder in Temp) stays.
         static void RemoveEmptyDirs(DirectoryInfo d, bool isRoot, HashSet<string> exclude, DateTime cutoff)
         {
+            d = Deep(d);
             DirectoryInfo[] subs;
             try { subs = d.GetDirectories(); } catch { return; }
-            foreach (var s in subs)
-                if ((s.Attributes & FileAttributes.ReparsePoint) == 0 && !exclude.Contains(s.Name) && !Keep.IsKept(s.FullName) && !Custom.IsSkipped(s.FullName, skipNow)) RemoveEmptyDirs(s, false, exclude, cutoff);
+            foreach (var s0 in subs)
+                try   // one folder that can't be read never stops the rest
+                {
+                    var s = Deep(s0);
+                    if ((s.Attributes & FileAttributes.ReparsePoint) == 0 && !exclude.Contains(s.Name) && !Keep.IsKept(s.FullName) && !Custom.IsSkipped(s.FullName, skipNow)) RemoveEmptyDirs(s, false, exclude, cutoff);
+                }
+                catch { }
             if (isRoot) return;
             try
             {
                 if (d.GetFileSystemInfos().Length != 0) return;
-                bool emptiedNow = touchedNow != null && touchedNow.Contains(d.FullName);
+                bool emptiedNow = touchedNow != null && touchedNow.Contains(Plain(d.FullName));
                 bool old = d.CreationTime < cutoff && d.LastWriteTime < cutoff;
                 if (!emptiedNow && !old) return;
                 if ((d.Attributes & FileAttributes.ReadOnly) != 0) d.Attributes &= ~FileAttributes.ReadOnly;
                 d.Delete();
-                if (touchedNow != null && d.Parent != null) touchedNow.Add(d.Parent.FullName);   // its parent may be empty now too
+                if (touchedNow != null && d.Parent != null) touchedNow.Add(Plain(d.Parent.FullName));   // its parent may be empty now too
             }
             catch { }
         }
@@ -608,6 +641,12 @@ namespace SpaceHunter
 
         public void Add(string path, long size)
         {
+            if (path.Length >= 260)
+            {
+                cnt.Skipped++;
+                if (cnt.OnNote != null) cnt.OnNote("kept, its path is too long for the Recycle Bin (choose Permanently delete to clean it): " + path);
+                return;
+            }
             if (!HasBin(path))
             {
                 cnt.Skipped++;
@@ -722,12 +761,14 @@ namespace SpaceHunter
         }
         public static bool IsBuiltIn(string path)
         {
+            path = Engine.Plain(path);
             foreach (var k in BuiltIn)
                 if (path.Equals(k, StringComparison.OrdinalIgnoreCase) || path.StartsWith(k + "\\", StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
         public static bool IsKept(string path)
         {
+            path = Engine.Plain(path);
             if (IsBuiltIn(path)) return true;
             lock (gate)
             {
@@ -779,7 +820,7 @@ namespace SpaceHunter
         {
             if (set == null || set.Count == 0) return false;
             // walk up by plain string cuts: no path parsing, so an odd or very long path can't throw
-            var p = (path ?? "").TrimEnd('\\');
+            var p = Engine.Plain(path).TrimEnd('\\');
             while (p.Length > 0)
             {
                 if (set.Contains(p)) return true;

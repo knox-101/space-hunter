@@ -1,7 +1,7 @@
 # Space Hunter
 
 **Finds the folders silently filling your disk, explains each one, and clears the ones you pick after one
-confirmation.** Free for Windows 10/11, macOS 13+ and Linux. No account, no tracking, a few MB at most.
+confirmation.** Free for Windows 10/11 (Intel, AMD or ARM), macOS 11+ and Linux. No account, no tracking, a few MB at most.
 
 ### [⬇ Download the latest version](https://github.com/knox-101/space-hunter/releases/latest)
 
@@ -12,8 +12,8 @@ Windows: `SpaceHunter.exe` · Mac: `SpaceHunter-mac.zip` · Linux: `SpaceHunter-
 
 1. Unzip `SpaceHunter-mac.zip` and drag **Space Hunter** into **Applications**.
 2. Open it from Applications. The first time, macOS refuses because the app isn't from the App Store. Go to
-   **System Settings → Privacy & Security** and click **Open Anyway** (on macOS 13–14, right-click the app → **Open**
-   also works).
+   **System Settings → Privacy & Security** (on macOS 11–12: **System Preferences → Security & Privacy**) and click
+   **Open Anyway**. On macOS 11–14, right-click the app → **Open** also works.
 
 Opened straight from Downloads, macOS runs the app from a hidden read-only copy, and versions up to 1.6.2 then
 couldn't update ("doesn't have permission to save"). If that happened to you, download the latest version once by
