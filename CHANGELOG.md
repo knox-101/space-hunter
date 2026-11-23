@@ -3,6 +3,16 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.6.6 (2026-11-23)
+
+- **Windows: the count starts moving as soon as you press Clean.** Emptying the Recycle Bin used to wait for Windows to
+  finish the whole bin before showing anything, so the count sat at 0 for a long while when the bin was full. It now
+  goes item by item, and the log names each one. With Recycle Bin chosen, the first files go in a small batch, so the
+  count moves within a moment there too.
+- **Windows: the scan at launch is about four times quicker** (12 seconds down to 3 on a test machine with 110,000
+  files to measure). Files are read straight from Windows' folder listing, and a big folder's subfolders are measured
+  side by side. The numbers are exactly the same as before.
+
 ## 1.6.5 (2026-11-23)
 
 - **Runs on more computers.** Windows: one SpaceHunter.exe now runs natively on Windows on ARM (Snapdragon laptops,

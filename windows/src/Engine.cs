@@ -9,6 +9,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace SpaceHunter
@@ -54,6 +55,24 @@ namespace SpaceHunter
         {
             Checked = Level == Level.Safe; AgeMinutes = DefaultAgeMinutes; Picks.Clear(); PickBytes = -1;
             LastAge = DefaultAgeMinutes > 0 ? DefaultAgeMinutes : 14 * Engine.Day; Recycle = false;
+        }
+    }
+
+    // One file as Windows' folder listing gives it: its name, size, dates and flags in one read.
+    class Item
+    {
+        public string Path, Name;   // the plain form (no "\\?\")
+        public long Length;
+        public DateTime Write, Created;
+        public FileAttributes Attr;
+        // the newer of "last changed" and "arrived here" (copying or unzipping sets a new creation time)
+        public DateTime Age { get { return Created > Write ? Created : Write; } }
+        public string Extension { get { string n = Name ?? System.IO.Path.GetFileName(Path); int i = n.LastIndexOf('.'); return i < 0 || i == n.Length - 1 ? "" : n.Substring(i); } }
+        public string DirectoryName { get { int i = Path.LastIndexOf('\\'); return i < 0 ? "" : Path.Substring(0, i); } }
+        public static Item Of(FileInfo f)
+        {
+            try { return new Item { Path = Engine.Plain(f.FullName), Name = f.Name, Length = f.Length, Write = f.LastWriteTime, Created = f.CreationTime, Attr = f.Attributes }; }
+            catch { return null; }   // gone or unreadable: left alone
         }
     }
 
@@ -214,13 +233,8 @@ namespace SpaceHunter
                 var info = new SHQUERYRBINFO();
                 info.cbSize = Marshal.SizeOf(typeof(SHQUERYRBINFO));
                 if (SHQueryRecycleBin(null, ref info) != 0) return;
-                if (delete && info.i64NumItems > 0)
-                {
-                    cnt.Current = "Emptying the Recycle Bin";
-                    if (SHEmptyRecycleBin(IntPtr.Zero, null, 7) != 0) return;
-                    if (cnt.OnItem != null) cnt.OnItem("Recycle Bin emptied (" + info.i64NumItems + " items)", info.i64Size, true);
-                }
-                cnt.Files += info.i64NumItems; cnt.Bytes += info.i64Size;
+                if (delete && info.i64NumItems > 0) { EmptyBin(cnt); return; }
+                if (!delete) { cnt.Files += info.i64NumItems; cnt.Bytes += info.i64Size; }
                 return;
             }
 
@@ -250,7 +264,7 @@ namespace SpaceHunter
                 if (c.IsCustom && File.Exists(root))   // a single file you added
                 {
                     var fi = new FileInfo(root);
-                    if ((fi.Attributes & FileAttributes.ReparsePoint) == 0) Handle(fi, cutoff, delete, cnt, bin);
+                    if ((fi.Attributes & FileAttributes.ReparsePoint) == 0) Handle(Item.Of(fi), cutoff, delete, cnt, bin);
                     if (bin != null) bin.Flush();
                     continue;
                 }
@@ -260,16 +274,18 @@ namespace SpaceHunter
                 if ((rd.Attributes & FileAttributes.ReparsePoint) != 0) continue;   // never follow a root that is a link
                 if (Keep.IsKept(rd.FullName)) continue;
                 var ext = c.Extensions;
-                Action<FileInfo> each = f => { if (ext == null || ext.Contains(f.Extension)) Handle(f, cutoff, delete, cnt, bin); };
+                Action<Item> each = f => { if (ext == null || ext.Contains(f.Extension)) Handle(f, cutoff, delete, cnt, bin); };
                 if (c.Kind == Kind.Contents && c.TopLevelOnly)
                 {
                     FileInfo[] files; try { files = rd.GetFiles(); } catch { files = new FileInfo[0]; }
-                    foreach (var f in files) { if (cnt.Cancel) break; if ((f.Attributes & FileAttributes.ReparsePoint) == 0) each(f); }
+                    foreach (var f in files) { if (cnt.Cancel) break; if ((f.Attributes & FileAttributes.ReparsePoint) == 0) { var it = Item.Of(f); if (it != null) each(it); } }
                     if (bin != null) bin.Flush();
                 }
+                else if (c.Kind == Kind.Contents && !delete)
+                    WalkWide(rd.FullName, f => ext == null || ext.Contains(f.Extension), cutoff, cnt, exclude);
                 else if (c.Kind == Kind.Contents)
                 {
-                    Walk(rd, each, cnt, exclude);
+                    Walk(rd.FullName, each, cnt, exclude);
                     if (bin != null) bin.Flush();
                     if (delete) RemoveEmptyDirs(rd, true, exclude, cutoff);
                 }
@@ -282,8 +298,15 @@ namespace SpaceHunter
                         if (cnt.Cancel) break;
                         if ((s.Attributes & FileAttributes.ReparsePoint) != 0) continue;
                         if (Keep.IsKept(s.FullName)) continue;
+                        if (!delete)   // measuring: its newest file and its size in one read
+                        {
+                            DateTime n = AgeTime(s); var part = new Counter();
+                            Walk(s.FullName, f => { if (f.Age > n) n = f.Age; Handle(f, DateTime.MaxValue, false, part, null); }, part, exclude);
+                            if (n < cutoff) { cnt.Files += part.Files; cnt.Bytes += part.Bytes; }
+                            continue;
+                        }
                         if (Newest(s, cnt) >= cutoff) continue;
-                        Walk(s, f => Handle(f, DateTime.MaxValue, delete, cnt, bin), cnt, exclude);
+                        Walk(s.FullName, f => Handle(f, DateTime.MaxValue, delete, cnt, bin), cnt, exclude);
                         if (bin != null) bin.Flush();
                         if (delete) RemoveEmptyDirs(s, false, exclude, DateTime.MaxValue);   // the whole old session folder goes
                     }
@@ -315,12 +338,12 @@ namespace SpaceHunter
                     var fi = new FileInfo(p);
                     if (fi.Exists)
                     {
-                        if ((fi.Attributes & FileAttributes.ReparsePoint) == 0 && (ext == null || ext.Contains(fi.Extension))) Handle(fi, DateTime.MaxValue, delete, cnt, bin);
+                        if ((fi.Attributes & FileAttributes.ReparsePoint) == 0 && (ext == null || ext.Contains(fi.Extension))) Handle(Item.Of(fi), DateTime.MaxValue, delete, cnt, bin);
                         continue;
                     }
                     var di = new DirectoryInfo(p);
                     if (!di.Exists || (di.Attributes & FileAttributes.ReparsePoint) != 0 || c.TopLevelOnly || exclude.Contains(di.Name)) continue;
-                    Walk(di, f => { if (ext == null || ext.Contains(f.Extension)) Handle(f, DateTime.MaxValue, delete, cnt, bin); }, cnt, exclude);
+                    Walk(di.FullName, f => { if (ext == null || ext.Contains(f.Extension)) Handle(f, DateTime.MaxValue, delete, cnt, bin); }, cnt, exclude);
                     if (bin != null) bin.Flush();
                     if (delete) RemoveEmptyDirs(di, false, exclude, DateTime.MaxValue);   // the picked folder goes too, once empty
                 }
@@ -363,32 +386,55 @@ namespace SpaceHunter
 
         [ThreadStatic] static HashSet<string> skipNow, touchedNow;
 
-        static void Handle(FileInfo f, DateTime cutoff, bool delete, Counter cnt, RecycleBatch bin)
+        static void Handle(Item f, DateTime cutoff, bool delete, Counter cnt, RecycleBatch bin)
         {
-            if (Custom.IsSkipped(f.FullName, skipNow)) return;
-            DateTime t; long len;
+            if (f == null || Custom.IsSkipped(f.Path, skipNow)) return;
             // the newer of "last changed" and "arrived here": photos copied in today are new, whatever their date
-            try { t = AgeTime(f); len = f.Length; } catch { return; }
-            if (Keep.IsKept(f.FullName)) return;   // on the keep list: never touched, never counted
+            DateTime t = f.Age; long len = f.Length;
+            if (Keep.IsKept(f.Path)) return;   // on the keep list: never touched, never counted
             if (t >= cutoff) { if (delete) cnt.Skipped++; return; }
             if (!delete) { cnt.Files++; cnt.Bytes += len; return; }
-            cnt.Current = Plain(f.FullName);
-            if (touchedNow != null) touchedNow.Add(Plain(f.DirectoryName ?? ""));
-            if (bin != null) { bin.Add(Plain(f.FullName), len); return; }
+            cnt.Current = f.Path;
+            if (touchedNow != null) touchedNow.Add(f.DirectoryName);
+            if (bin != null) { bin.Add(f.Path, len); return; }
             bool ok = TryDelete(f);
             if (ok) { cnt.Files++; cnt.Bytes += len; } else cnt.Skipped++;
-            if (cnt.OnItem != null) cnt.OnItem(f.FullName, len, ok);
+            if (cnt.OnItem != null) cnt.OnItem(f.Path, len, ok);
         }
 
-        static bool TryDelete(FileInfo f)
+        static bool TryDelete(Item f)
         {
-            try
-            {
-                if ((f.Attributes & FileAttributes.ReadOnly) != 0) f.Attributes = FileAttributes.Normal;
-                f.Delete();
-                return true;
-            }
-            catch { return false; }
+            string lp = Long(f.Path);
+            if ((f.Attr & FileAttributes.ReadOnly) != 0) SetFileAttributesW(lp, (uint)FileAttributes.Normal);
+            return DeleteFileW(lp);
+        }
+
+        // The "\\?\" form Windows' own calls take, so no path is too long
+        static string Long(string p)
+        {
+            if (p.StartsWith(@"\\?\")) return p;
+            return p.StartsWith(@"\\") ? @"\\?\UNC\" + p.Substring(2) : @"\\?\" + p;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct WIN32_FIND_DATAW
+        {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+            public uint nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr FindFirstFileExW(string name, int infoLevel, out WIN32_FIND_DATAW data, int searchOp, IntPtr filter, int flags);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool FindNextFileW(IntPtr h, out WIN32_FIND_DATAW data);
+        [DllImport("kernel32.dll")] static extern bool FindClose(IntPtr h);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool DeleteFileW(string path);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool SetFileAttributesW(string path, uint attrs);
+        static DateTime Time(System.Runtime.InteropServices.ComTypes.FILETIME t)
+        {
+            long v = ((long)(uint)t.dwHighDateTime << 32) | (uint)t.dwLowDateTime;
+            try { return DateTime.FromFileTime(v); } catch { return DateTime.MinValue; }
         }
 
         // Past Windows' old 260-character limit a plain path fails (unless long paths are switched on in the registry, which
@@ -416,24 +462,76 @@ namespace SpaceHunter
             return p;
         }
 
-        static void Walk(DirectoryInfo d, Action<FileInfo> onFile, Counter cnt, HashSet<string> exclude)
+        // Every file under a folder, through Windows' own folder listing: each file's size, dates and flags come with the
+        // listing, so nothing asks the disk about a file twice (a cache of 80,000 small files is measured in a second or
+        // two, not ten). Always in the "\\?\" form, so no path is too long. Links are never followed.
+        static void Walk(string dir, Action<Item> onFile, Counter cnt, HashSet<string> exclude)
         {
-            d = Deep(d);
-            FileSystemInfo[] items;
-            try { items = d.GetFileSystemInfos(); } catch { return; }
-            foreach (var i in items)
+            var files = new List<Item>(); var subs = new List<string>();
+            ListDir(dir, files, subs, exclude);
+            foreach (var f in files)
             {
                 if (cnt.Cancel) return;
-                try   // one odd entry (a name Windows can't handle) is skipped, never the end of the scan
-                {
-                    var e = Deep(i);   // past the old limit: its long form, before anything reads it
-                    if ((e.Attributes & FileAttributes.ReparsePoint) != 0) continue;
-                    var sub = e as DirectoryInfo;
-                    if (sub != null) { if (!exclude.Contains(sub.Name) && !Keep.IsKept(sub.FullName) && !Custom.IsSkipped(sub.FullName, skipNow)) Walk(sub, onFile, cnt, exclude); }
-                    else onFile((FileInfo)e);
-                }
-                catch { cnt.Skipped++; }
+                try { onFile(f); } catch { cnt.Skipped++; }   // one odd file is skipped, never the end of the scan
             }
+            foreach (var sub in subs)
+            {
+                if (cnt.Cancel) return;
+                if (!Keep.IsKept(sub) && !Custom.IsSkipped(sub, skipNow)) Walk(sub, onFile, cnt, exclude);
+            }
+        }
+
+        // Measuring only (nothing is deleted): the folders under a big folder are read side by side, since a drive
+        // answers several at once. The top is opened up a level or two until there are enough folders to share out.
+        static void WalkWide(string root, Func<Item, bool> wanted, DateTime cutoff, Counter cnt, HashSet<string> exclude)
+        {
+            var skip = skipNow;
+            Action<Item, Counter> take = (f, into) => { if (wanted(f)) Handle(f, cutoff, false, into, null); };
+            var work = new List<string> { root };
+            var parts = new List<string>();
+            for (int level = 0; level < 3 && work.Count > 0 && work.Count + parts.Count < 16; level++)
+            {
+                var next = new List<string>();
+                foreach (var dir in work)
+                {
+                    var files = new List<Item>(); var subs = new List<string>();
+                    ListDir(dir, files, subs, exclude);
+                    foreach (var f in files) take(f, cnt);
+                    next.AddRange(subs.Where(x => !Keep.IsKept(x) && !Custom.IsSkipped(x, skip)));
+                }
+                work = next;
+            }
+            parts.AddRange(work);
+            Parallel.ForEach(parts, new ParallelOptions { MaxDegreeOfParallelism = 4 }, dir =>
+            {
+                skipNow = skip;   // each thread keeps its own copy of what you unticked
+                var part = new Counter();
+                Walk(dir, f => take(f, part), part, exclude);
+                lock (cnt) { cnt.Files += part.Files; cnt.Bytes += part.Bytes; cnt.Skipped += part.Skipped; }
+            });
+        }
+
+        // One folder's files and sub-folders, from Windows' folder listing (links left out)
+        static void ListDir(string dir, List<Item> files, List<string> subs, HashSet<string> exclude)
+        {
+            string p = Plain(dir).TrimEnd('\\') + "\\";
+            WIN32_FIND_DATAW d;
+            IntPtr h = FindFirstFileExW(Long(p) + "*", 1 /* basic */, out d, 0, IntPtr.Zero, 2 /* large fetch */);
+            if (h == new IntPtr(-1)) return;
+            try
+            {
+                do
+                {
+                    string name = d.cFileName;
+                    if (name == "." || name == "..") continue;
+                    var attr = (FileAttributes)d.dwFileAttributes;
+                    if ((attr & FileAttributes.ReparsePoint) != 0) continue;
+                    if ((attr & FileAttributes.Directory) != 0) { if (!exclude.Contains(name)) subs.Add(p + name); continue; }
+                    files.Add(new Item { Path = p + name, Name = name, Attr = attr, Length = ((long)d.nFileSizeHigh << 32) | d.nFileSizeLow,
+                                         Write = Time(d.ftLastWriteTime), Created = Time(d.ftCreationTime) });
+                } while (FindNextFileW(h, out d));
+            }
+            finally { FindClose(h); }
         }
 
         // A file's age: the newer of "last changed" and "arrived here" (copying or unzipping sets a new creation time), so
@@ -447,7 +545,7 @@ namespace SpaceHunter
         static DateTime Newest(DirectoryInfo d, Counter cnt)
         {
             DateTime n = AgeTime(d);
-            Walk(d, f => { try { var t = AgeTime(f); if (t > n) n = t; } catch { } }, cnt, new HashSet<string>());
+            Walk(d.FullName, f => { if (f.Age > n) n = f.Age; }, cnt, new HashSet<string>());
             return n;
         }
 
@@ -612,6 +710,79 @@ namespace SpaceHunter
             return holds.Count == 0 ? null : string.Join(", ", holds.Take(2)) + (holds.Count > 2 ? " +" + (holds.Count - 2) : "");
         }
 
+        // Empties your Recycle Bin one deleted item at a time, so the count moves from the first file: Windows' own "empty"
+        // call says nothing until it has finished, which for a few thousand items left the count at 0 for a long while.
+        // Each item is two files in the drive's $Recycle.Bin folder: $R... (the file or folder) and $I... (its original
+        // name). Whatever can't go this way (a file in use, a drive this can't open) is left to Windows' own call.
+        // onlyUnder (test hook): only items deleted from under that folder, and never Windows' own call
+        public static void EmptyBin(Counter cnt, string onlyUnder = null)
+        {
+            string sid = null;
+            try { sid = WindowsIdentity.GetCurrent().User.Value; } catch { }
+            var none = new HashSet<string>();
+            if (sid != null)
+                foreach (var drive in FixedDrives())
+                {
+                    string dir = drive.RootDirectory.FullName.TrimEnd('\\') + @"\$Recycle.Bin\" + sid;
+                    string[] infos; try { infos = Directory.GetFiles(dir, "$I*"); } catch { continue; }
+                    foreach (var info in infos)
+                    {
+                        if (cnt.Cancel) return;
+                        try
+                        {
+                            string data = Path.Combine(dir, "$R" + Path.GetFileName(info).Substring(2));
+                            string was = BinName(info) ?? "a deleted item";
+                            if (onlyUnder != null && !was.StartsWith(onlyUnder, StringComparison.OrdinalIgnoreCase)) continue;
+                            cnt.Current = "Emptying the Recycle Bin: " + was;
+                            long b0 = cnt.Bytes; bool gone;
+                            var attr = File.GetAttributes(data);   // throws if it's already gone: then only its name card goes
+                            if ((attr & FileAttributes.Directory) != 0 && (attr & FileAttributes.ReparsePoint) == 0)
+                            {
+                                Walk(data, f => { if (TryDelete(f)) { cnt.Files++; cnt.Bytes += f.Length; } }, cnt, none);
+                                try { Directory.Delete(Long(data), true); } catch { }   // the emptied folders (links are removed, never followed)
+                                gone = !Directory.Exists(data);
+                            }
+                            else if ((attr & FileAttributes.Directory) != 0) { try { Directory.Delete(Long(data)); } catch { } gone = !Directory.Exists(data); }
+                            else
+                            {
+                                var it = new Item { Path = data, Attr = attr, Length = new FileInfo(data).Length };
+                                gone = TryDelete(it);
+                                if (gone) { cnt.Files++; cnt.Bytes += it.Length; }
+                            }
+                            if (gone) { try { File.Delete(info); } catch { } }
+                            if (cnt.OnItem != null) cnt.OnItem("Recycle Bin: " + was, cnt.Bytes - b0, gone);
+                        }
+                        catch (FileNotFoundException) { if (onlyUnder == null) try { File.Delete(info); } catch { } }   // a name card with nothing behind it
+                        catch { }
+                    }
+                }
+            // anything left: Windows' own call, counted from before and after
+            var left = new SHQUERYRBINFO(); left.cbSize = Marshal.SizeOf(typeof(SHQUERYRBINFO));
+            if (onlyUnder == null && !cnt.Cancel && SHQueryRecycleBin(null, ref left) == 0 && left.i64NumItems > 0)
+            {
+                cnt.Current = "Emptying the Recycle Bin";
+                if (SHEmptyRecycleBin(IntPtr.Zero, null, 7) == 0) { cnt.Files += left.i64NumItems; cnt.Bytes += left.i64Size; }
+            }
+            try { SHUpdateRecycleBinIcon(); } catch { }
+        }
+
+        // The original path of a deleted item, from its $I file (version 1: fixed 520 bytes; version 2: length first)
+        static string BinName(string info)
+        {
+            try
+            {
+                var b = File.ReadAllBytes(info);
+                if (b.Length < 28) return null;
+                long ver = BitConverter.ToInt64(b, 0);
+                string s = ver >= 2 ? System.Text.Encoding.Unicode.GetString(b, 28, Math.Min(b.Length - 28, Math.Max(0, BitConverter.ToInt32(b, 24) * 2)))
+                                    : System.Text.Encoding.Unicode.GetString(b, 24, Math.Min(b.Length - 24, 520));
+                s = s.TrimEnd('\0'); int z = s.IndexOf('\0'); if (z >= 0) s = s.Substring(0, z);
+                return s.Length > 0 ? s : null;
+            }
+            catch { return null; }
+        }
+        [DllImport("shell32.dll")] static extern int SHUpdateRecycleBinIcon();
+
         [StructLayout(LayoutKind.Sequential)]        struct SHQUERYRBINFO { public int cbSize; public long i64Size; public long i64NumItems; }
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         static extern int SHQueryRecycleBin(string pszRootPath, ref SHQUERYRBINFO pSHQueryRBInfo);
@@ -662,19 +833,24 @@ namespace SpaceHunter
                 return;
             }
             pending.Add(new KeyValuePair<string, long>(path, size));
-            if (pending.Count >= 200) Flush();
+            if (pending.Count >= batch) Flush();
         }
+
+        // the first batch is small, so the count moves at once; each one after is twice as big, up to 200 (one shell call
+        // per batch: big batches are faster in all, small ones show progress sooner)
+        int batch = 16;
 
         public void Flush()
         {
             if (pending.Count == 0) return;
-            var batch = pending.ToList(); pending.Clear();
-            if (Shell(batch.Select(p => p.Key)))
+            batch = Math.Min(200, batch * 2);
+            var now = pending.ToList(); pending.Clear();
+            if (Shell(now.Select(p => p.Key)))
             {
-                foreach (var p in batch) Done(p, !File.Exists(p.Key));
+                foreach (var p in now) Done(p, !File.Exists(p.Key));
                 return;
             }
-            foreach (var p in batch) Done(p, Shell(new[] { p.Key }) && !File.Exists(p.Key));   // one by one, so one locked file doesn't stop the rest
+            foreach (var p in now) Done(p, Shell(new[] { p.Key }) && !File.Exists(p.Key));   // one by one, so one locked file doesn't stop the rest
         }
 
         void Done(KeyValuePair<string, long> p, bool ok)

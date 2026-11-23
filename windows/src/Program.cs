@@ -168,6 +168,15 @@ namespace SpaceHunter
                 File.WriteAllText(Arg(args, "--out") ?? Path.Combine(Engine.AppDir, "mft-test.txt"), o.ToString());
                 return 0;
             }
+            if (Arg(args, "--test-emptybin") != null)   // test hook: empty from the Recycle Bin only what was deleted from under <folder>
+            {
+                var cnt = new Counter(); long first = -1; var sw = System.Diagnostics.Stopwatch.StartNew();
+                var t = new System.Threading.Thread(() => Engine.EmptyBin(cnt, Arg(args, "--test-emptybin")));
+                t.Start();
+                while (!t.Join(5)) if (first < 0 && cnt.Files > 0) first = sw.ElapsedMilliseconds;
+                Console.WriteLine("removed " + cnt.Files + " files, " + cnt.Bytes + " bytes; first count after " + first + " ms; all done in " + sw.ElapsedMilliseconds + " ms");
+                return 0;
+            }
             if (Has(args, "--test-canadd"))   // test hook: print the add-to-cleanup-list decision for each path
             {
                 foreach (var p in args.SkipWhile(a => a != "--test-canadd").Skip(1)) { string why; bool ok = Engine.CanAdd(p, out why); Console.WriteLine((ok ? "ALLOW  " : "REFUSE ") + p + (ok ? "" : "   (" + why + ")")); }
@@ -179,11 +188,11 @@ namespace SpaceHunter
                 var all = new Counter();
                 var results = Engine.Build().Where(c => !auto || (c.Safe && c.Checked))
                     .AsParallel().AsOrdered().WithDegreeOfParallelism(4)
-                    .Select(c => { var cnt = new Counter(); Engine.Process(c, auto, cnt); return new { c, cnt }; }).ToList();
+                    .Select(c => { var cnt = new Counter(); var sw = System.Diagnostics.Stopwatch.StartNew(); Engine.Process(c, auto, cnt); return new { c, cnt, ms = sw.ElapsedMilliseconds }; }).ToList();
                 foreach (var r in results)
                 {
                     all.Files += r.cnt.Files; all.Bytes += r.cnt.Bytes; all.Skipped += r.cnt.Skipped;
-                    Console.WriteLine("{0,-52} {1,10:N0} files {2,10}  {3,-8} {4}", r.c.Name, r.cnt.Files, Engine.Fmt(r.cnt.Bytes), r.c.Level, Engine.FmtAge(r.c.AgeMinutes));
+                    Console.WriteLine("{0,-52} {1,10:N0} files {2,10}  {3,-8} {4}" + (report ? "  {5,6} ms" : ""), r.c.Name, r.cnt.Files, Engine.Fmt(r.cnt.Bytes), r.c.Level, Engine.FmtAge(r.c.AgeMinutes), r.ms);
                 }
                 string line = (auto ? "AUTO-CLEANED " : "REPORT ") + Engine.Fmt(all.Bytes) + ", " + all.Files.ToString("N0") + " files; skipped " + all.Skipped.ToString("N0");
                 Console.WriteLine(line);
