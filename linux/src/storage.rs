@@ -171,7 +171,7 @@ pub fn open(parent: &gtk::ApplicationWindow, cats: Vec<Cat>, on_change: Rc<dyn F
     let unit = label("", "hero-unit"); unit.set_valign(gtk::Align::End); unit.set_margin_bottom(8);
     top.append(&hero); top.append(&unit); top.append(&hspacer());
     let ring = gtk::DrawingArea::new(); ring.set_content_width(60); ring.set_content_height(60);
-    top.append(&ring);
+    // (the ring is never shown: the bar below is the one progress mark)
     disp.append(&top);
     let pbar = gtk::DrawingArea::new(); pbar.set_content_height(14);
     disp.append(&pbar);
@@ -346,10 +346,10 @@ fn scan(s: &Rc<Storage>) {
     // it stops when the scan ends or the map closes
     s.sm.borrow_mut().spin = std::time::Instant::now();
     let weak = Rc::downgrade(s);
-    s.ring.add_tick_callback(move |_, _| {
+    s.pbar.add_tick_callback(move |_, _| {
         let st = match weak.upgrade() { Some(st) => st, None => return glib::ControlFlow::Break };
         if !st.sm.borrow().scanning || !st.win.is_visible() { return glib::ControlFlow::Break; }
-        st.ring.queue_draw(); st.pbar.queue_draw();
+        st.pbar.queue_draw();
         glib::ControlFlow::Continue
     });
     let st = s.clone();

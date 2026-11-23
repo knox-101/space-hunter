@@ -684,6 +684,7 @@ final class AppState: ObservableObject {
     @Published var tier: Level = .safe
     @Published var openID: String?
     @Published var scanning = 0
+    var lastScanTick = Date()   // the scan started or an item finished; a long pause means macOS is asking for access
     @Published var disk = Engine.disk()
     @Published var status = ""
     @Published var freedAll = Engine.freedAllTime()
@@ -699,6 +700,9 @@ final class AppState: ObservableObject {
     @Published var log: [String] = []
     @Published var expected: Int64 = 1
     @Published var update: ReleaseInfo?
+    @Published var asking = false              // the card is asking about the public totals (an update card wins)
+    var askShown = false                       // asked by itself already this launch
+    let guideSeenAtStart = GuideModel.seen     // asked only on a launch after the first-run guide was seen
     private var scanGen: [String: Int] = [:]   // per item: which measurement is the newest
     @Published var results: [String] = []      // one plain line per item, shown when a clean is done
     // for the finish: what each item freed, and the disk measured before and after (never a made-up number)
@@ -779,6 +783,7 @@ final class AppState: ObservableObject {
         if cleanRunning { return }   // measured again once the clean is done
         // Safe-to-delete items first, so the ticked total and the CLEAN key are ready first
         let targets = cats.indices.filter { ids == nil || ids!.contains(cats[$0].id) }.sorted { cats[$0].level.rawValue < cats[$1].level.rawValue }
+        lastScanTick = Date()
         for i in targets {
             cats[i].scanned = false
             scanGen[cats[i].id, default: 0] += 1
@@ -803,6 +808,7 @@ final class AppState: ObservableObject {
                         self.cats[j].pickFiles = pickedNow.files; self.cats[j].pickBytes = pickedNow.bytes
                     }
                     self.scanning -= 1
+                    self.lastScanTick = Date()
                     self.status = self.scanning > 0 ? "Scanning \(snapshot.name)…" : (self.freedAll.0 == 0 ? "Quick clean is ticked for you: press Clean, check the list, and it's done." : "Scan done. Click a row to see what it is. Tick the box to include it.")
                     if self.scanning == 0 { self.disk = Engine.disk(); self.freedAll = Engine.freedAllTime() }
                 }
@@ -886,9 +892,24 @@ final class AppState: ObservableObject {
                     self.cats[j].picks = []; self.cats[j].pickBytes = -1; self.cats[j].pickFiles = 0
                 }
                 self.disk = Engine.disk(); self.scan()
+                Stats.maybeSend(force: true)   // the total now includes this clean (only if you said yes; never in test runs)
                 self.status = "Cleaning finished. The list is being measured again."
             }
         }
+    }
+
+    // The public-totals question: asked once (after the first-run guide, on a later launch), and again only when you
+    // click the version number.
+    func showAsk() {
+        guard Stats.enabled, update == nil else { return }
+        askShown = true; asking = true
+    }
+    func answerAsk(_ yes: Bool) {
+        Stats.set(yes)
+        if yes { Stats.maybeSend(force: true) }
+        asking = false
+        status = yes ? "Thanks: you're counted in the public totals. Click the version number to change it."
+                     : "Not counted. Click the version number at the bottom right if you change your mind."
     }
 
     func stop() { counter?.cancel = true }
@@ -1046,6 +1067,77 @@ enum Updater {
     }
 }
 
+// MARK: - Public totals
+// Only if you say yes (asked once). Sent: a random ID made on this Mac, the version, "mac", and the total space freed
+// and number of cleans so far. Never file names, paths, or anything about what was cleaned. At most once in 20 hours
+// when a scan finishes, and after a clean. The choice, the ID and the last send are kept in the app's settings.
+enum Stats {
+    static let enabled = false   // off until the stats server is live: never asks, never sends
+    static let endpoint = "https://space-hunter-stats.knox-101.workers.dev"   // the stats/ worker
+    static let explained = "https://github.com/knox-101/space-hunter#public-totals"
+    static let choiceKey = "share.choice", idKey = "share.id", lastKey = "share.last"
+
+    static var choice: String { UserDefaults.standard.string(forKey: choiceKey) ?? "" }
+    static var asked: Bool { choice == "yes" || choice == "no" }
+    static var on: Bool { choice == "yes" }
+
+    static func set(_ yes: Bool) {
+        let d = UserDefaults.standard
+        d.set(yes ? "yes" : "no", forKey: choiceKey)
+        if yes && (d.string(forKey: idKey) ?? "").isEmpty { d.set(UUID().uuidString, forKey: idKey) }
+        if !yes { d.removeObject(forKey: lastKey) }
+    }
+
+    // force: after a clean (so the total includes it) and right after you say yes
+    static func maybeSend(force: Bool) {
+        guard enabled else { return }
+        if GuideModel.testRun { return }   // never from a test or screenshot run
+        let d = UserDefaults.standard
+        guard on, let id = d.string(forKey: idKey), !id.isEmpty else { return }
+        let last = d.double(forKey: lastKey)   // seconds since 1970; 0 = never
+        if !force && last > 0 && Date().timeIntervalSince1970 - last < 20 * 3600 { return }
+        let all = Engine.freedAllTime()
+        let obj: [String: Any] = ["id": id, "v": Updater.current, "os": "mac", "freed": max(0, all.0), "cleans": max(0, all.1)]
+        guard let url = URL(string: endpoint + "/ping"), let body = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("SpaceHunter/\(Updater.current)", forHTTPHeaderField: "User-Agent")
+        req.httpBody = body
+        URLSession.shared.dataTask(with: req) { _, resp, _ in
+            // offline or blocked: try again another day
+            if let h = resp as? HTTPURLResponse, h.statusCode >= 200, h.statusCode < 300 {
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Stats.lastKey)
+            }
+        }.resume()
+    }
+}
+
+// The public-totals question, in the update card's place and with its look.
+struct AskBar: View {
+    @EnvironmentObject var state: AppState
+    var on: Bool { Stats.on }
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Theme.orange).frame(width: 10, height: 10).padding(.trailing, 8)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(on ? "You're counted in Space Hunter's public totals" : "Count yourself in Space Hunter's public totals?")
+                    .font(Theme.semi(14)).foregroundColor(Theme.screenInk)
+                Text("Shares only how much you've freed and your version. Never file names or what was cleaned.")
+                    .font(Theme.sans(12)).foregroundColor(Theme.screenMuted).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("What's sent") { if let u = URL(string: Stats.explained) { NSWorkspace.shared.open(u) } }
+                .buttonStyle(KeyStyle())
+            Button(on ? "Stop" : "No thanks") { state.answerAsk(false) }.buttonStyle(KeyStyle())
+            Button(on ? "Keep counting me" : "Count me in") { state.answerAsk(true) }.buttonStyle(KeyStyle(primary: true))
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
+        .padding(.horizontal, 18).padding(.vertical, 10)
+    }
+}
+
 struct UpdateBar: View {
     @EnvironmentObject var state: AppState
     let release: ReleaseInfo
@@ -1144,11 +1236,18 @@ struct MainView: View {
                 Button("Default cleanup") { state.resetAll() }.buttonStyle(KeyStyle())
                     .guidePart(6)
                     .padding(.trailing, 4)
-                Button(state.cleanRunning ? "Show cleaning" : "Clean \(Engine.fmt(state.selectedBytes))") {
+                Button(state.cleanRunning ? "Show cleaning" : state.scanning > 0 ? "Scanning …" : "Clean \(Engine.fmt(state.selectedBytes))") {
                     if state.cleaning { openWindow(id: "cleaning") } else { confirm = true }
                 }
                 .buttonStyle(KeyStyle(primary: true, big: true))
                 .disabled(!state.cleaning && (state.scanning > 0 || state.selectedBytes == 0))
+                // while scanning: a faint fill as items are measured, and a soft sheen passing over, so it reads as working
+                .overlay {
+                    if state.scanning > 0 && !state.cleanRunning {
+                        KeySheen(progress: state.cats.isEmpty ? 0 : Double(state.cats.filter { $0.scanned }.count) / Double(state.cats.count))
+                            .clipShape(RoundedRectangle(cornerRadius: 4)).padding(.bottom, 2).allowsHitTesting(false)
+                    }
+                }
                 .guidePart(3)
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -1163,12 +1262,15 @@ struct MainView: View {
                 }
             }
             .animation(.easeOut(duration: 0.26), value: state.openID)
-            if let u = state.update { UpdateBar(release: u) } else {
+            if let u = state.update { UpdateBar(release: u) } else if state.asking { AskBar() } else {
                 Rectangle().fill(Theme.line).frame(height: 1)
                 HStack {
                     Text(state.status).font(Theme.sans(11)).foregroundColor(Theme.muted)
                     Spacer()
                     Text("Space Hunter \(Updater.current)").font(Theme.sans(10.5)).foregroundColor(Theme.soft)   // which version this is
+                        .contentShape(Rectangle())
+                        .onHover { h in if Stats.enabled { if h { NSCursor.pointingHand.push() } else { NSCursor.pop() } } }
+                        .onTapGesture { if Stats.enabled { NSCursor.pop(); state.showAsk() } }   // change your answer about the public totals
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 8)
             }
@@ -1187,7 +1289,13 @@ struct MainView: View {
         .onAppear {
             ThemeMode.apply(state.theme)
             state.scan()
-            Updater.check { r in DispatchQueue.main.async { state.update = r } }   // one quiet check; offline = nothing happens
+            Updater.check { r in
+                DispatchQueue.main.async {
+                    // an update wins over the public-totals question (which may be asked again on a later scan)
+                    if r != nil && state.asking { state.asking = false; state.askShown = false }
+                    state.update = r
+                }
+            }   // one quiet check; offline = nothing happens
             // what a guide step does before it points: open the biggest item's panel, or close the panel
             let s = state
             guide.enter = { step in
@@ -1202,7 +1310,15 @@ struct MainView: View {
         .sheet(isPresented: $confirm) { ConfirmSheet(confirm: $confirm).environmentObject(state) }
         .onChange(of: state.cleaning) { c in if c { openWindow(id: "cleaning") } }
         // once, the first time a scan finishes (never during a clean); if another window is in front, when this one is
-        .onChange(of: state.scanning) { n in if n == 0 { autoGuide() } }
+        .onChange(of: state.scanning) { n in if n == 0 { autoGuide(); afterScan() } }
+    }
+
+    // A scan finished: the daily public-totals send (only if you said yes), or the question, once.
+    func afterScan() {
+        let s = state
+        if GuideModel.testRun { return }
+        if Stats.asked { Stats.maybeSend(force: false) }
+        else if s.guideSeenAtStart && !s.askShown && guide.step == nil && !s.cleaning && !s.cleanRunning && s.update == nil { s.showAsk() }
     }
 
     func startGuide() {
@@ -1321,13 +1437,29 @@ struct DisplayView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.scanning > 0 ? "Scanning …" : "Space to free up")
+                    Text("Space to free up")
                         .font(Theme.semi(13)).foregroundColor(Color(hex: 0xB4B1AA))
                     HStack(alignment: .center, spacing: 16) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(p.0).font(Theme.display(76)).padding(.leading, -7)   // the glyph side bearing: the digit lines up with the label and bar
                             Text(p.1).font(Theme.display(28))
                         }.foregroundColor(Theme.orange)
+                        // beside the number: one turning ring while the items are measured
+                        if state.scanning > 0 {
+                            HStack(spacing: 10) {
+                                SpinRing(width: 3.5).frame(width: 22, height: 22)
+                                // macOS holds the scan while it asks for access to Desktop, Documents or Downloads: say so
+                                TimelineView(.periodic(from: Date(), by: 1)) { tl in
+                                    let stalled = tl.date.timeIntervalSince(state.lastScanTick) > 4
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(stalled ? "waiting for macOS" : "measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                                        if stalled {
+                                            Text("If it asks to access your folders, click Allow.").font(Theme.semi(13)).foregroundColor(Theme.screenMuted)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         // beside the number: what kind of space it is, and what else is there if you look
                         if state.scanning == 0 && state.selectedBytes > 0 {
                             let onlySafe = !state.cats.contains { $0.included && !$0.isSafe && ($0.bytes > 0 || $0.files > 0) }
@@ -2561,13 +2693,15 @@ final class Scanner: ObservableObject {
     @Published var running = false
     @Published var root: FolderNode?
     var cancel = false
+    var lastTick = Date()   // the file count last moved; a long pause means macOS is asking for access
     private var count: Int64 = 0, bytes: Int64 = 0
     private let lock = NSLock()
 
     func start(_ path: String) {
-        running = true; root = nil; scanned = 0; scannedBytes = 0; count = 0; bytes = 0; cancel = false
+        running = true; root = nil; scanned = 0; scannedBytes = 0; count = 0; bytes = 0; cancel = false; lastTick = Date()
         let timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             self.lock.lock(); let c = self.count, b = self.bytes; self.lock.unlock()
+            if c != self.scanned { self.lastTick = Date() }
             self.scanned = c; self.scannedBytes = b
         }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -2796,8 +2930,12 @@ struct FinderHeader: View {
     let target: Int64
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
-                .font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA))
+            TimelineView(.periodic(from: Date(), by: 1)) { tl in
+                let stalled = scanner.running && tl.date.timeIntervalSince(scanner.lastTick) > 3
+                Text(stalled ? "Storage map  ·  waiting for macOS: if it asks to access a folder, click Allow"
+                     : scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
+                    .font(Theme.semi(12)).foregroundColor(stalled ? Theme.screenInk : Color(hex: 0xB4B1AA))
+            }
             if scanner.running {
                 Text("\(scanner.scanned) FILES").font(Theme.display(52)).foregroundColor(Theme.orange)
                 ScanBar(done: scanner.scannedBytes, target: target).frame(height: 14)
@@ -2814,21 +2952,44 @@ struct FinderHeader: View {
             }
         }
         .padding(20).frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 150)
-        .overlay(alignment: .trailing) { if scanner.running { SpinRing().frame(width: 56, height: 56).padding(.trailing, 28) } }
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
     }
 }
 
-// A large turning ring for the whole scan: impossible to miss.
+// The Clean key while it waits on a scan: a faint orange fill to the share of items measured, and a soft light band
+// passing over every 1.6 s, moved by the clock.
+struct KeySheen: View {
+    let progress: Double
+    @State private var start = Date()
+    var body: some View {
+        GeometryReader { g in
+            TimelineView(.animation) { tl in
+                let w = g.size.width, band = w * 0.35
+                let t = (tl.date.timeIntervalSince(start)).truncatingRemainder(dividingBy: 1.6) / 1.6
+                let x = -band + (w + band) * (1 - (1 - t) * (1 - t))
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Theme.orange.opacity(0.16)).frame(width: w * min(1, max(0, progress)))
+                        .animation(.easeOut(duration: 0.4), value: progress)
+                    LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.28), Color.white.opacity(0)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: band).offset(x: x)
+                }
+                .frame(width: w, height: g.size.height, alignment: .leading)
+            }
+        }
+    }
+}
+
+// A turning ring beside the number while the items are measured.
 struct SpinRing: View {
+    var width: CGFloat = 5
     @State private var start = Date()
     var body: some View {
         // driven by time at the display's frame rate (300° a second), so a late frame never jumps
         TimelineView(.animation) { tl in
             let angle = (max(0, tl.date.timeIntervalSince(start)) * 300).truncatingRemainder(dividingBy: 360)
             ZStack {
-                Circle().stroke(Theme.track, lineWidth: 5)
-                Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                Circle().stroke(Theme.track, lineWidth: width)
+                Circle().trim(from: 0, to: 0.3).stroke(Theme.orange, style: StrokeStyle(lineWidth: width, lineCap: .round))
                     .rotationEffect(.degrees(angle))
             }
         }

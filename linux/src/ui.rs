@@ -43,6 +43,7 @@ pub struct Ui {
     hero: gtk::Label,
     unit: gtk::Label,
     beside1: gtk::Label,
+    spin: gtk::DrawingArea,                   // one turning ring beside the number while the items are measured
     beside2: gtk::Label,
     disk_text: gtk::Label,
     freed_text: gtk::Label,
@@ -51,6 +52,8 @@ pub struct Ui {
     legend_ticked: gtk::Label,
     legend_not: gtk::Label,
     clean: gtk::Button,
+    sheen: gtk::DrawingArea,                  // over the Clean key while scanning
+    sheen_p: Rc<Cell<f64>>,                   // the share of items measured, for its fill
     map_key: gtk::Button,
     protect_key: gtk::Button,
     reset_key: gtk::Button,
@@ -81,6 +84,10 @@ pub struct Ui {
     prog_win: RefCell<Option<gtk::Window>>,
     opts: Opts,
     bottom: gtk::Box,
+    update_on: Cell<bool>,                    // the update card is showing (it wins over the public-totals question)
+    ask_card: RefCell<Option<gtk::Box>>,      // the public-totals question, when it's showing
+    ask_shown: Cell<bool>,                    // the question came up by itself this launch
+    guide_seen_at_start: bool,                // the first-run guide had been seen before this launch
     scan_gen: RefCell<std::collections::HashMap<String, u64>>,     // per item: which measurement is the newest
     dir_sizes: RefCell<std::collections::HashMap<PathBuf, u64>>,   // folder sizes for "What's inside", measured once
     dir_times: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, std::time::SystemTime, Option<std::time::SystemTime>)>>,   // newest (with the folder's own date), newest file, oldest file (none: no files)
@@ -444,9 +451,23 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     unit.set_valign(gtk::Align::End); unit.set_margin_bottom(12);
     heroes.append(&hero); heroes.append(&unit);
     num.append(&heroes);
+    // while the items are measured: one turning ring beside the number, moved by the clock (shown only then)
+    let spin = gtk::DrawingArea::new();
+    spin.set_content_width(26); spin.set_content_height(26); spin.set_valign(gtk::Align::Center); spin.set_margin_end(-6);
+    let spin_t0 = std::time::Instant::now();
+    spin.set_draw_func(move |_, cr, w, h| {
+        let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, 10.5);
+        cr.set_line_width(3.5);
+        cr.set_source_rgb(0.227, 0.227, 0.220); cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI); let _ = cr.stroke();
+        let a = (spin_t0.elapsed().as_secs_f64() * 300f64.to_radians()) % (2.0 * std::f64::consts::PI);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.set_source_rgb(1.0, 0.357, 0.122); cr.arc(cx, cy, r, a, a + 1.9); let _ = cr.stroke();
+    });
+    spin.add_tick_callback(|w, _| { w.queue_draw(); glib::ControlFlow::Continue });   // only runs while it's shown
+    num.append(&spin);
     let beside = gtk::Box::new(gtk::Orientation::Vertical, 4);
     beside.set_valign(gtk::Align::Center);
-    let beside1 = label("measuring\u{2026}", "beside");
+    let beside1 = label("measuring every item", "beside");
     let beside2 = label("", "beside-muted");
     beside.append(&beside1); beside.append(&beside2);
     num.append(&beside);
@@ -486,7 +507,50 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let reset = key("default cleanup", &[]);
     reset.set_margin_end(4);
     let clean = key("clean", &["primary"]);
-    keys.append(&protect); keys.append(&reset); keys.append(&clean);
+    // while scanning, over the Clean key: a faint orange fill to the share of items measured, and a soft light band
+    // passing over every 1.6 s, moved by the frame clock (only while it's shown)
+    let clean_wrap = gtk::Overlay::new();
+    clean_wrap.set_child(Some(&clean));
+    let sheen = gtk::DrawingArea::new();
+    sheen.set_can_target(false); sheen.set_visible(false);
+    let sheen_p: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
+    {
+        let target = sheen_p.clone();
+        let shown = Rc::new(Cell::new(0.0f64));
+        let t0 = std::time::Instant::now();
+        let alloc = clean.clone();
+        sheen.set_draw_func(move |_, cr, w, h| {
+            let (w, h) = (w as f64, h as f64);
+            let (mx, my) = (alloc.margin_start() as f64, alloc.margin_top() as f64);
+            let fw = (w - mx - alloc.margin_end() as f64).max(1.0);
+            let fh = (h - my - alloc.margin_bottom() as f64 - 2.0).max(1.0);   // the face, above the key's shadow
+            shown.set(shown.get() + (target.get() - shown.get()) * 0.12);
+            let r = 4.0;
+            cr.new_sub_path();
+            cr.arc(mx + fw - r, my + r, r, -std::f64::consts::FRAC_PI_2, 0.0);
+            cr.arc(mx + fw - r, my + fh - r, r, 0.0, std::f64::consts::FRAC_PI_2);
+            cr.arc(mx + r, my + fh - r, r, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
+            cr.arc(mx + r, my + r, r, std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+            cr.close_path();
+            cr.clip();
+            cr.set_source_rgba(1.0, 0.357, 0.122, 0.16);
+            cr.rectangle(mx, my, fw * shown.get().clamp(0.0, 1.0), fh);
+            let _ = cr.fill();
+            let band = fw * 0.35;
+            let t = (t0.elapsed().as_secs_f64() % 1.6) / 1.6;
+            let x = mx - band + (fw + band) * (1.0 - (1.0 - t) * (1.0 - t));
+            let g = gtk::cairo::LinearGradient::new(x, 0.0, x + band, 0.0);
+            g.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.0);
+            g.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.28);
+            g.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+            let _ = cr.set_source(&g);
+            cr.rectangle(x, my, band, fh);
+            let _ = cr.fill();
+        });
+    }
+    sheen.add_tick_callback(|w, _| { w.queue_draw(); glib::ControlFlow::Continue });   // only runs while it's shown
+    clean_wrap.add_overlay(&sheen);
+    keys.append(&protect); keys.append(&reset); keys.append(&clean_wrap);
     root.append(&keys);
 
     // the three sections: three columns on one rail, an orange marker under the open one
@@ -561,16 +625,25 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     let glyph_peers: Vec<gtk::Widget> = vec![space_lbl.clone().upcast(), bar.clone().upcast(), legend.clone().upcast()];
     let ui = Rc::new(Ui {
         st: RefCell::new(St { cats: Vec::new(), tier: Level::Safe, open: None, pending: 0, cleaning: false, first_scan_done: false }),
-        win, hero, unit, beside1, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
-        legend_ticked, legend_not, clean, map_key: map.clone(), protect_key: protect.clone(), reset_key: reset.clone(), top_keys, display, overlay, rail, rail_box_hover: Cell::new(-1),
+        win, hero, unit, beside1, spin, beside2, disk_text, freed_text, bar, bar_vals: Cell::new((0.0, 0.0, 0.0)),
+        legend_ticked, legend_not, clean, sheen, sheen_p, map_key: map.clone(), protect_key: protect.clone(), reset_key: reset.clone(), top_keys, display, overlay, rail, rail_box_hover: Cell::new(-1),
         rail_hover: Cell::new(-1), rail_boxes: Cell::new([(0.0, 0.0, 0.0, 0.0); 3]), mark: Cell::new(0.0), sliding: Cell::new(false), slide_gen: Cell::new(0),
         title, explain, cta, list_sw: sw.clone(), guide: RefCell::new(None), guide_pending: Cell::new(false), rows, panel_rev, panel,
         psw: psw.clone(), panel_for: RefCell::new(None), scroll_gen: Cell::new(0), status,
         prog_win: RefCell::new(None), opts,
-        bottom, scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), dir_times: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
+        bottom, update_on: Cell::new(false), ask_card: RefCell::new(None), ask_shown: Cell::new(false), guide_seen_at_start: guide_seen(),
+        scan_gen: RefCell::new(Default::default()), dir_sizes: RefCell::new(Default::default()), dir_times: RefCell::new(Default::default()), inside_here: RefCell::new(None), described: RefCell::new(Default::default()),
         more: Cell::new(false),
         glyph_peers,
     });
+
+    {   // the version number, bottom right: click it to change your answer about the public totals
+        if crate::stats::ENABLED { ver.set_cursor_from_name(Some("pointer")); }
+        let click = gtk::GestureClick::new();
+        let u = ui.clone();
+        click.connect_released(move |_, _, _, _| { if !u.update_on.get() { show_ask(&u); } });
+        ver.add_controller(click);
+    }
 
     {
         let u = ui.clone();
@@ -755,6 +828,8 @@ fn check_update(u: &Rc<Ui>) {
 
 // The update card: at the bottom, in place of the status line.
 fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
+    hide_ask(u); u.ask_shown.set(false);   // an update wins over the public-totals question (which can come up again later)
+    u.update_on.set(true);
     let can_install = crate::updater::self_path().is_some();
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     card.add_css_class("update-card");
@@ -773,7 +848,7 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
     let page = r.page.clone();
     news.connect_clicked(move |_| { if let Some(p) = &page { let _ = gtk::gio::AppInfo::launch_default_for_uri(p, None::<&gtk::gio::AppLaunchContext>); } });
     let (uu, c2) = (u.clone(), card.clone());
-    later.connect_clicked(move |_| { uu.bottom.remove(&c2); if let Some(p) = uu.status.parent() { p.set_visible(true); } });
+    later.connect_clicked(move |_| { uu.update_on.set(false); uu.bottom.remove(&c2); if let Some(p) = uu.status.parent() { p.set_visible(true); } });
     if can_install {
         let go = key("update & relaunch", &["primary"]);
         card.append(&go);
@@ -803,6 +878,65 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
     }
     if let Some(p) = u.status.parent() { p.set_visible(false); }
     u.bottom.append(&card);
+}
+
+// A run started with a test hook: nothing opens by itself and nothing is sent.
+fn test_run(u: &Ui) -> bool {
+    let o = &u.opts;
+    o.quiet || o.open.is_some() || o.confirm || o.progress_dir.is_some() || o.storage.is_some() || o.protect || o.guide.is_some()
+}
+
+// The public-totals question, asked once (after the first-run guide, on a later launch) and again only when you click
+// the version number. The same card as an update, in place of the status line.
+fn show_ask(u: &Rc<Ui>) {
+    if !crate::stats::ENABLED || u.update_on.get() { return; }
+    hide_ask(u);
+    let on = crate::stats::is_on();
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    card.add_css_class("update-card");
+    let dot = label("\u{25CF}", "update-dot"); dot.set_valign(gtk::Align::Center);
+    card.append(&dot);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2); text.set_valign(gtk::Align::Center);
+    text.append(&label(if on { "You're counted in Space Hunter's public totals" } else { "Count yourself in Space Hunter's public totals?" }, "update-title"));
+    text.append(&label("Shares only how much you've freed and your version. Never file names or what was cleaned.", "update-sub"));
+    card.append(&text);
+    card.append(&hspacer());
+    let sent = key("what's sent", &[]);
+    let no = key(if on { "stop" } else { "no thanks" }, &[]);
+    let yes = key(if on { "keep counting me" } else { "count me in" }, &["primary"]);
+    card.append(&sent); card.append(&no); card.append(&yes);
+    sent.connect_clicked(|_| { let _ = gtk::gio::AppInfo::launch_default_for_uri(crate::stats::EXPLAINED, None::<&gtk::gio::AppLaunchContext>); });
+    let uu = u.clone();
+    no.connect_clicked(move |_| end_ask(&uu, false));
+    let uu = u.clone();
+    yes.connect_clicked(move |_| end_ask(&uu, true));
+    if let Some(p) = u.status.parent() { p.set_visible(false); }
+    u.bottom.append(&card);
+    *u.ask_card.borrow_mut() = Some(card);
+}
+
+fn hide_ask(u: &Ui) {
+    let c = u.ask_card.borrow_mut().take();
+    if let Some(c) = c { u.bottom.remove(&c); }
+}
+
+fn end_ask(u: &Rc<Ui>, on: bool) {
+    crate::stats::set(on);
+    if on { crate::stats::maybe_send(true); }
+    hide_ask(u);
+    if let Some(p) = u.status.parent() { p.set_visible(true); }
+    u.status.set_text(if on { "Thanks: you're counted in the public totals. Click the version number to change it." }
+                      else { "Not counted. Click the version number at the bottom right if you change your mind." });
+}
+
+// Every time a scan finishes: send the totals (at most once in 20 hours, only if you said yes), or ask once.
+fn scan_finished(u: &Rc<Ui>) {
+    if test_run(u) || u.st.borrow().pending > 0 { return; }
+    if crate::stats::asked() { crate::stats::maybe_send(false); }
+    else if u.guide_seen_at_start && !u.ask_shown.get() && u.guide.borrow().is_none() && !u.st.borrow().cleaning && !u.update_on.get() {
+        u.ask_shown.set(true);
+        show_ask(u);
+    }
 }
 
 fn test_cat(dir: PathBuf) -> Cat {
@@ -842,7 +976,8 @@ fn refresh_top(u: &Rc<Ui>) {
     align_to_glyph(&u.hero, &peers);
     u.unit.set_text(&unit);
     let freed = engine::history::total();
-    if st.pending > 0 { u.beside1.set_text("measuring\u{2026}"); }
+    u.spin.set_visible(st.pending > 0);
+    if st.pending > 0 { u.beside1.set_text("measuring every item"); }
     else if only_safe { u.beside1.set_text(if freed.1 == 0 { "all safe to clean  \u{00B7}  press Clean to start" } else { "all safe to clean" }); }
     else { u.beside1.set_text("includes items to check first"); }
     u.beside2.set_text(&if not_ticked > 0 { format!("+ {} more you can check yourself", fmt(not_ticked)) } else { String::new() });
@@ -863,7 +998,9 @@ fn refresh_top(u: &Rc<Ui>) {
     u.legend_ticked.set_text(&format!("Ticked: {}", fmt(selected)));
     u.legend_not.set_text(&format!("Not ticked: {}", fmt(not_ticked)));
     let can_clean = st.pending == 0 && st.cats.iter().any(|c| c.checked && (c.bytes > 0 || c.files > 0) || c.partial() && c.pick_bytes.unwrap_or(0) > 0);
-    u.clean.set_label(&if st.cleaning { "SHOW CLEANING".to_string() } else { format!("CLEAN {}", fmt(selected)) });
+    u.sheen.set_visible(st.pending > 0 && !st.cleaning);
+    if !st.cats.is_empty() { u.sheen_p.set(st.cats.iter().filter(|c| c.scanned).count() as f64 / st.cats.len() as f64); }
+    u.clean.set_label(&if st.cleaning { "SHOW CLEANING".to_string() } else if st.pending > 0 { "SCANNING …".to_string() } else { format!("CLEAN {}", fmt(selected)) });
     u.clean.set_sensitive(st.cleaning || can_clean);
     // the rail redraws from the state; the marker sits under the open section unless it's sliding there
     if !u.sliding.get() { u.mark.set(ORDER.iter().position(|l| *l == st.tier).unwrap_or(0) as f64); }
@@ -1745,6 +1882,7 @@ fn scan(u: &Rc<Ui>, ids: Option<Vec<String>>) {
         if got.get() >= n {
             let first = { let mut st = uu.st.borrow_mut(); let f = !st.first_scan_done && st.pending == 0; if f { st.first_scan_done = true; } f };
             if first { after_first_scan(&uu); }
+            scan_finished(&uu);
             return glib::ControlFlow::Break;
         }
         glib::ControlFlow::Continue
@@ -2517,6 +2655,7 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
                 for c in st.cats.iter_mut().filter(|c| cleaned_ids.contains(&c.id)) { c.picks.clear(); c.pick_bytes = None; }
             }
             uu.status.set_text("Cleaning finished. The list is being measured again.");
+            if !test_run(&uu) { crate::stats::maybe_send(true); }   // the total now includes this clean (only if you said yes)
             scan(&uu, None);
             return glib::ControlFlow::Break;
         }

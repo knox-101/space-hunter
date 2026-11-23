@@ -261,6 +261,24 @@ namespace SpaceHunter
 
             Updater.CleanUpOld();
             var form = new MainForm { SnapshotPath = snap, OpenPanelFor = Arg(args, "--open"), FramesDir = Arg(args, "--frames"), KeepPlaceOut = Arg(args, "--test-keep-place") };
+            if (Arg(args, "--test-ask") != null)   // test hook: the public-totals question, drawn off-screen to <png> (nothing is saved)
+            {
+                string ap = Arg(args, "--test-ask");
+                form.Shown += (s0, e0) =>
+                {
+                    form.ShowAsk();
+                    var t = new System.Windows.Forms.Timer { Interval = 1500 };
+                    t.Tick += (s1, e1) => { t.Stop(); using (var bm = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bm, new Rectangle(0, 0, bm.Width, bm.Height)); bm.Save(ap); } form.Close(); };
+                    t.Start();
+                };
+            }
+            if (Arg(args, "--snapshot-scan") != null)   // test hook: the main window while the items are still being measured
+            {
+                string ss = Arg(args, "--snapshot-scan");
+                string kf = Arg(args, "--key-frames");   // with --snapshot-scan: the Clean key every 120 ms, into this folder
+                if (kf != null) form.Shown += (s0, e0) => { int n = 0; var ft = new System.Windows.Forms.Timer { Interval = 120 }; ft.Tick += (s1, e1) => { if (n >= 12) { ft.Stop(); return; } var k = form.CleanKeyForTest; using (var bm = new Bitmap(k.Width, k.Height)) { k.DrawToBitmap(bm, new Rectangle(0, 0, bm.Width, bm.Height)); bm.Save(System.IO.Path.Combine(kf, "k" + (n++) + ".png")); } }; ft.Start(); };
+                form.Shown += (s0, e0) => { var t = new System.Windows.Forms.Timer { Interval = kf != null ? 1700 : 700 }; t.Tick += (s1, e1) => { t.Stop(); using (var bm = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bm, new Rectangle(0, 0, bm.Width, bm.Height)); bm.Save(ss); } form.Close(); }; t.Start(); };   // drawn off-screen, so whatever is on top doesn't matter
+            }
             if (Arg(args, "--age") != null) form.TestAge = int.Parse(Arg(args, "--age"));   // test hook: with --open, that item's age in minutes
             if (Arg(args, "--guide") != null) form.GuideAt = int.Parse(Arg(args, "--guide"));   // test hook: the guide at step N
             if (Arg(args, "--pick") != null) form.PickPaths = Arg(args, "--pick").Split('|').ToList();

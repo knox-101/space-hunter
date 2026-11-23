@@ -349,8 +349,22 @@ namespace SpaceHunter
         bool accent;   // a tool of its own (the Storage map): an orange outline and a small block icon
         public bool Accent { get { return accent; } set { accent = value; FitWidth(); Invalidate(); } }
         bool hover, down;
+
+        // Busy: the key waits on a scan. It fills faintly from the left as items are measured, and a soft sheen passes
+        // over it every 1.6 s, so it reads as working, not broken. Moved by the clock (~60 fps), only while busy.
+        bool busy; float progress, shown;
+        readonly System.Windows.Forms.Timer busyTick = new System.Windows.Forms.Timer { Interval = 16 };
+        readonly System.Diagnostics.Stopwatch busyClock = new System.Diagnostics.Stopwatch();
+        public bool Busy
+        {
+            get { return busy; }
+            set { if (value == busy) return; busy = value; if (busy) { shown = 0; busyClock.Restart(); busyTick.Start(); } else busyTick.Stop(); Invalidate(); }
+        }
+        public float Progress { set { progress = Math.Max(0, Math.Min(1, value)); } }
+
         public Key(string text, bool primary = false)
         {
+            busyTick.Tick += (s, e) => { shown += (progress - shown) * 0.12f; Invalidate(); };
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
                      ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
             BackColor = Color.Transparent;
@@ -384,6 +398,22 @@ namespace SpaceHunter
             if (press == 0)
                 using (var p = Theme.Round(new RectangleF(0.5f, 0.5f + lift, Width - 1, Height - 1 - lift - 1), rad)) using (var b = new SolidBrush(shadow)) g.FillPath(b, p);
             using (var p = Theme.Round(face, rad)) using (var b = new SolidBrush(fill)) g.FillPath(b, p);
+            if (busy && !Enabled)
+                using (var p = Theme.Round(face, rad))
+                {
+                    var clip = g.Clip; g.SetClip(p, CombineMode.Intersect);
+                    using (var b = new SolidBrush(Color.FromArgb(Theme.IsDark ? 46 : 38, Theme.Orange))) g.FillRectangle(b, face.X, face.Y, face.Width * shown, face.Height);
+                    float band = face.Width * 0.35f, t = (float)(busyClock.Elapsed.TotalSeconds % 1.6 / 1.6);
+                    float x = face.X - band + (face.Width + band) * (1 - (1 - t) * (1 - t));   // ease-out across, then again
+                    var r = new RectangleF(x, face.Y, band, face.Height);
+                    using (var lg = new LinearGradientBrush(new RectangleF(r.X - 1, r.Y, r.Width + 2, r.Height), Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal))
+                    {
+                        var light = Color.FromArgb(Theme.IsDark ? 22 : 70, Color.White);
+                        lg.InterpolationColors = new ColorBlend { Colors = new[] { Color.FromArgb(0, light), light, Color.FromArgb(0, light) }, Positions = new[] { 0f, 0.5f, 1f } };
+                        g.FillRectangle(lg, r);
+                    }
+                    g.Clip = clip;
+                }
             var tr = new RectangleF(face.X, face.Y + s, face.Width, face.Height);
             if (accent && Enabled)
             {
