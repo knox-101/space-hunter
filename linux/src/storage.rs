@@ -412,7 +412,9 @@ fn show(s: &Rc<Storage>) {
         return;
     } };
     let cur = current(root, &sm.path);
-    s.head.set_text("Storage map  \u{00B7}  just looking, nothing is deleted here");
+    // at the top of a disk the number is what's used on it; deeper, it's the folder's own size
+    s.head.set_text(&if sm.path.is_empty() && sm.place.mount { format!("Storage map  \u{00B7}  used on {}  \u{00B7}  nothing is deleted here", sm.place.path.display()) }
+                     else { "Storage map  \u{00B7}  size of this folder  \u{00B7}  nothing is deleted here".to_string() });
     let (n, u) = split(cur.size);
     s.hero.set_text(&n); s.unit.set_text(&u);
     crate::ui::align_to_glyph(&s.hero, &[s.head.upcast_ref::<gtk::Widget>(), s.pbar.upcast_ref::<gtk::Widget>(), s.path_lbl.upcast_ref::<gtk::Widget>(), s.sub.upcast_ref::<gtk::Widget>()]);
@@ -544,7 +546,7 @@ fn caption_text(s: &Rc<Storage>) {
     if sm.root.is_none() || !s.chart.is_visible() { s.caption.set_text(""); return; }
     let t = match sm.hover.and_then(|h| sm.blocks.get(h)) {
         Some(b) => format!("{}  \u{00B7}  {}{}{}", b.name, fmt(b.size), if b.marked { "  \u{00B7}  part of it is already a cleanup item" } else { "" }, if b.target.is_some() { "  \u{00B7}  click to go inside" } else { "" }),
-        None => format!("Click a block to go inside it  \u{00B7}  orange corner: part of it is already a cleanup item{}", if sm.place.mount && sm.path.is_empty() { "  \u{00B7}  hatched: free space" } else { "" }),
+        None => format!("Click a block to go inside it  \u{00B7}  orange corner: part of it is already a cleanup item{}", if sm.place.mount && sm.path.is_empty() { "  \u{00B7}  dashed outline: free space" } else { "" }),
     };
     s.caption.set_text(&t);
 }
@@ -581,12 +583,11 @@ fn draw_chart(s: &Rc<Storage>, cr: &gtk::cairo::Context, w: f64, h: f64) {
         let (x, y, bw, bh) = (b.rect.0 + 1.5, b.rect.1 + 1.5, b.rect.2 - 3.0, b.rect.3 - 3.0);
         if bw < 2.0 || bh < 2.0 { continue; }
         let hot = sm.hover == Some(i) && b.target.is_some();
-        if b.free {
-            crate::theme::rgb(cr, pal.hover); cr.rectangle(x, y, bw, bh); let _ = cr.fill();
-            let _ = cr.save(); cr.rectangle(x, y, bw, bh); cr.clip();
-            crate::theme::rgb(cr, pal.line); cr.set_line_width(1.5);
-            let mut lx = x - bh; while lx < x + bw { cr.move_to(lx, y + bh); cr.line_to(lx + bh, y); lx += 5.0; }
-            let _ = cr.stroke(); let _ = cr.restore();
+        if b.free {   // plain, with a 1 px dashed outline
+            let _ = cr.save();
+            crate::theme::rgb(cr, pal.soft); cr.set_line_width(1.0); cr.set_dash(&[3.0, 3.0], 0.0);
+            cr.rectangle(x + 0.5, y + 0.5, bw - 1.0, bh - 1.0); let _ = cr.stroke();
+            let _ = cr.restore();
         } else {
             crate::theme::rgb(cr, if hot { pal.screen } else if b.rest { pal.hover } else { pal.key });   // pointed at: dark like the display, in both themes
             cr.rectangle(x, y, bw, bh); let _ = cr.fill();
@@ -640,12 +641,12 @@ pub fn open_protect(parent: &gtk::ApplicationWindow, on_change: Rc<dyn Fn()>) ->
     let disp = gtk::Box::new(gtk::Orientation::Vertical, 4);
     disp.add_css_class("display");
     disp.append(&label("Protected folders  \u{00B7}  never cleaned, whatever is ticked", "display-label"));
-    let hero = label("", "hero-mid");
+    let hero = label("", "hero-protect");
     disp.append(&hero);
     disp.append(&label("The places Space Hunter never touches, plus any folder you add.", "beside-muted"));
     v.append(&disp);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12); row.set_margin_top(8);
-    let add = key("add folder", &["primary-small"]);
+    let add = key("add folder", &[]);
     row.append(&add);
     row.append(&label("Anything inside a protected folder is skipped by every item, every time.", "explain"));
     v.append(&row);
@@ -674,7 +675,10 @@ pub fn open_protect(parent: &gtk::ApplicationWindow, on_change: Rc<dyn Fn()>) ->
                 list.append(&r);
             }
             let h = label("Built in", "section-title"); h.set_margin_top(14); list.append(&h);
-            for t in BUILT_IN { let l = label(t, "explain"); l.set_wrap(true); list.append(&l); }
+            // one row each, a line under it, like the main list
+            let built = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            for t in BUILT_IN { let l = label(t, "explain"); l.add_css_class("rowline"); l.add_css_class("protect-item"); l.set_wrap(true); built.append(&l); }
+            list.append(&built);
         }) as Rc<dyn Fn()>
     };
     *fill.borrow_mut() = Some(f.clone());

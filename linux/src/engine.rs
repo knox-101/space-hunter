@@ -629,7 +629,7 @@ pub fn fmt(b: u64) -> String {
     if b >= 1000.0 * g { format!("{:.2} TB", b / t) }
     else if b >= 1000.0 * m { format!("{:.1} GB", b / g) }
     else if b >= m { format!("{:.0} MB", b / m) }
-    else if b >= k { format!("{:.0} KB", b / k) }
+    else if b > 0.0 { format!("{:.0} KB", (b / k).max(1.0)) }   // a tiny clean is never "0 KB"
     else { "0 MB".to_string() }
 }
 

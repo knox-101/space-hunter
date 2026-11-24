@@ -584,7 +584,7 @@ namespace SpaceHunter
             if (b >= 1073688136909L) return (b / 1099511627776.0).ToString("0.00", inv) + " TB";
             if (b >= 1048051712L) return (b / 1073741824.0).ToString("0.0", inv) + " GB";
             if (b >= 1L << 20) return (b / 1048576.0).ToString("0", inv) + " MB";
-            if (b > 0) return (b / 1024.0).ToString("0", inv) + " KB";
+            if (b > 0) return Math.Max(1, Math.Round(b / 1024.0)).ToString("0", inv) + " KB";   // a tiny clean is never "0 KB"
             return "0 MB";
         }
 

@@ -77,6 +77,7 @@ const CSS: &str = r#"
 window, .chassis { background: $CHASSIS; }
 * { font-family: "Schibsted Grotesk"; }
 .display { background: $SCREEN; border-radius: 7px; padding: 14px 22px 18px 22px; }
+.main-display { box-shadow: inset 0 0 0 1px $BEZEL; }
 .display-label { color: #B4B1AA; font-weight: 600; font-size: 11pt; }
 .hero { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 60pt; }
 .hero-unit { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 24pt; }
@@ -88,7 +89,6 @@ button.key { background: $KFACE; background-image: none; color: $INK; border: no
              box-shadow: 0 2px 0 $KSHADOW; font-weight: 600; font-size: 9.75pt; padding: 8px 14px; min-height: 0; }
 button.key:hover { background: $KHOVER; }
 button.key:active { box-shadow: none; margin-top: 2px; margin-bottom: -2px; }
-button.key.accent { box-shadow: inset 0 0 0 2px #FF5B1F, 0 2px 0 $KSHADOW; }
 button.key.primary { background: #FF5B1F; color: #1B1B1A; box-shadow: 0 2px 0 #B5400F; font-size: 11.5pt; padding: 12px 28px; }
 button.key.primary:disabled { background: $KOFF; color: $DISABLED; box-shadow: 0 2px 0 $LINE; }
 .section-title { color: $INK; font-weight: 700; font-size: 10pt; }
@@ -105,13 +105,14 @@ button.link-btn:hover { color: $ODEEP; border-bottom-color: $ODEEP; }
 button.row-btn { background: none; background-image: none; border: none; box-shadow: none; border-radius: 0; padding: 8px 6px; }
 button.row-btn:hover { background: $HOVER; }
 button.row-btn.open { background: $SELECTED; }
+.rowline.row-open { background: $SELECTED; box-shadow: inset 3px 0 0 $INK; }
 .row-name { color: $INK; font-weight: 600; font-size: 10.5pt; }
 .row-name-dim { color: $SOFT; font-size: 10pt; }
 .row-sub { color: $SOFT; font-size: 9pt; }
 .pick-chip { background: $SCREEN; color: #E9E6DF; font-weight: 600; font-size: 8.25pt; padding: 0 6px; border-radius: 3px; }
 .row-size { color: $INK; font-weight: 600; font-size: 11pt; }
 .chevron { color: $SOFT; font-size: 16pt; }
-.chevron-open { color: #FF5B1F; font-size: 16pt; font-weight: 700; }
+.chevron-open { color: $INK; font-size: 16pt; font-weight: 700; }
 .group-note { color: $SOFT; font-size: 9pt; }
 checkbutton check { min-width: 17px; min-height: 17px; border-radius: 2px; border: 2px solid $INK; background: transparent; background-image: none; box-shadow: none; }
 checkbutton check:checked, checkbutton check:indeterminate { background: #FF5B1F; border-color: #FF5B1F; color: #1B1B1A; }
@@ -134,6 +135,8 @@ checkbutton check:checked:disabled { background: $LINE; border-color: $LINE; col
 .confirm-head { color: $MUTED; font-weight: 700; font-size: 9.5pt; }
 .confirm-how { color: $MUTED; font-weight: 600; font-size: 10pt; }
 .hero-mid { color: #FF5B1F; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 40pt; }
+.hero-protect { color: #E9E6DF; font-family: "Big Shoulders Display", "Big Shoulders Display Black"; font-weight: 900; font-size: 30pt; }
+.protect-item { padding: 9px 2px; }
 .panel-title-dark { color: #E9E6DF; font-size: 11pt; }
 button.key.drive { padding: 8px 14px; }
 .drive-text { font-weight: 600; font-size: 9.75pt; color: $INK; }
@@ -174,13 +177,14 @@ pub mod theme {
         pub chassis: u32, pub pane: u32, pub selected: u32, pub hover: u32, pub screen: u32, pub ink: u32, pub muted: u32,
         pub soft: u32, pub line: u32, pub orange_deep: u32, pub key: u32, pub key_shadow: u32, pub disabled: u32,
         pub key_off: u32, pub key_hover: u32,
+        pub bezel: u32,   // a 1 px edge round the main display: only seen in dark (in light it's the display's own colour)
     }
     const LIGHT: Pal = Pal { chassis: 0xD8D5CE, pane: 0xE4E1DA, selected: 0xE9E6E0, hover: 0xE0DDD6, screen: 0x121212, ink: 0x1B1B1A,
         muted: 0x55524C, soft: 0x57534D, line: 0xC3BFB6, orange_deep: 0x9A3409, key: 0xECEAE5, key_shadow: 0xA9A59C,
-        disabled: 0x9A968F, key_off: 0xD0CDC6, key_hover: 0xF3F1ED };
-    const DARK: Pal = Pal { chassis: 0x1E1E1C, pane: 0x262624, selected: 0x30302D, hover: 0x2A2A27, screen: 0x0B0B0A, ink: 0xECE9E3,
-        muted: 0xABA79F, soft: 0xA6A29A, line: 0x3B3A37, orange_deep: 0xFF7A45, key: 0x34332F, key_shadow: 0x0E0E0D,
-        disabled: 0x6E6B65, key_off: 0x2C2B28, key_hover: 0x3E3D38 };
+        disabled: 0x9A968F, key_off: 0xD0CDC6, key_hover: 0xF3F1ED, bezel: 0x121212 };
+    const DARK: Pal = Pal { chassis: 0x3A3632, pane: 0x423E39, selected: 0x4C4741, hover: 0x45403A, screen: 0x0B0B0A, ink: 0xECE9E3,
+        muted: 0xBDB8B0, soft: 0xB2ADA5, line: 0x58534C, orange_deep: 0xFF7A45, key: 0x4E4943, key_shadow: 0x1E1C1A,
+        disabled: 0x807B74, key_off: 0x46413B, key_hover: 0x58534D, bezel: 0x4A4640 };
     // the display's own colours, the same in both
     pub const DISPLAY_INK: u32 = 0xE9E6DF;
     pub const DISPLAY_MUTED: u32 = 0x8A8A86;
@@ -224,6 +228,7 @@ pub mod theme {
             .replace("$MUTED", &h(p.muted)).replace("$SOFT", &h(p.soft)).replace("$LINE", &h(p.line))
             .replace("$ODEEP", &h(p.orange_deep)).replace("$KFACE", &h(p.key)).replace("$KSHADOW", &h(p.key_shadow))
             .replace("$DISABLED", &h(p.disabled)).replace("$KOFF", &h(p.key_off)).replace("$KHOVER", &h(p.key_hover))
+            .replace("$BEZEL", &h(p.bezel))
     }
 
     // The desktop's light/dark choice from the freedesktop settings portal (GNOME, KDE and others). None: not known.

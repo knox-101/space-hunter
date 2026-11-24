@@ -164,7 +164,7 @@ namespace SpaceHunter
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             string phase = BigFolders.Phase;
             bool waiting = scanning && (phase == "starting" || phase == "sorting" || BigFolders.Scanned == 0);
-            string label = !scanning ? "Storage map  ·  just looking, nothing is deleted here"
+            string label = !scanning ? "Storage map  ·  " + (cur == null ? "" : cur.Path.TrimEnd('\\').Length <= 2 ? "used on " + cur.Path.TrimEnd('\\') + "  ·  " : "size of this folder  ·  ") + "nothing is deleted here"
                          : "Storage map  ·  " + (phase == "sorting" ? "sorting folders by size" : waiting ? "getting ready to measure " + (drive ?? "").TrimEnd('\\')
                                                                      : "measuring " + (drive ?? "").TrimEnd('\\') + "  ·  counting files");
             var typo = StringFormat.GenericTypographic;   // the left column starts its letters on `pad`, like the big number and the bar
@@ -508,7 +508,7 @@ namespace SpaceHunter
                 var b = blocks[i]; var r = RectangleF.Inflate(b.R, -1.5f, -1.5f);
                 if (r.Width < 2 || r.Height < 2) continue;
                 bool hot = i == hover && CanOpen(b);
-                if (b.Free) Theme.Hatch(g, r, Theme.Line, Theme.Hover);
+                if (b.Free) using (var pen = new Pen(Theme.Soft) { DashPattern = new[] { 3f, 3f } }) g.DrawRectangle(pen, r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1);
                 else using (var br = new SolidBrush(hot ? Theme.Screen : b.Rest ? Theme.Hover : Theme.Key)) g.FillRectangle(br, r);
                 if (b.Marked)
                 {

@@ -74,8 +74,8 @@ namespace SpaceHunter
         static Color[] DarkSet()
         {
             return new[] {
-                C(0x1E1E1C), C(0x262624), C(0x30302D), C(0x2A2A27), C(0x0B0B0A), C(0xE9E6E0), C(0x8A8A87), C(0x3A3A39), C(0x6F6C67),
-                C(0xECE9E3), C(0xABA79F), C(0xA6A29A), C(0x3B3A37), C(0xFF5B1E), C(0xFF7A45), C(0x34332F), C(0x0E0E0D), C(0x6E6B65), C(0x2C2B28) };
+                C(0x3A3632), C(0x423E39), C(0x4C4741), C(0x45403A), C(0x0B0B0A), C(0xE9E6E0), C(0x8A8A87), C(0x3A3A39), C(0x6F6C67),
+                C(0xECE9E3), C(0xBDB8B0), C(0xB2ADA5), C(0x58534C), C(0xFF5B1E), C(0xFF7A45), C(0x4E4943), C(0x1E1C1A), C(0x807B74), C(0x46413B) };
         }
         static Color C(int rgb) { return Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF); }
         static Color[] Current()
@@ -278,7 +278,7 @@ namespace SpaceHunter
             if (b >= 1073688136909L) { num = (b / 1099511627776.0).ToString("0.00"); unit = "TB"; }
             else if (b >= 1048051712L) { num = (b / 1073741824.0).ToString("0.0"); unit = "GB"; }
             else if (b >= 1L << 20) { num = (b / 1048576.0).ToString("0"); unit = "MB"; }
-            else if (b > 0) { num = (b / 1024.0).ToString("0"); unit = "KB"; }
+            else if (b > 0) { num = Math.Max(1, Math.Round(b / 1024.0)).ToString("0"); unit = "KB"; }
             else { num = "0"; unit = "GB"; }
         }
 
@@ -346,7 +346,7 @@ namespace SpaceHunter
     class Key : Control
     {
         public bool Primary, Toggled;
-        bool accent;   // a tool of its own (the Storage map): an orange outline and a small block icon
+        bool accent;   // a tool of its own (the Storage map): a small block icon before its name
         public bool Accent { get { return accent; } set { accent = value; FitWidth(); Invalidate(); } }
         bool hover, down;
 
@@ -417,7 +417,6 @@ namespace SpaceHunter
             var tr = new RectangleF(face.X, face.Y + s, face.Width, face.Height);
             if (accent && Enabled)
             {
-                using (var p = Theme.Round(RectangleF.Inflate(face, -1 * s, -1 * s), rad)) using (var pen = new Pen(Theme.Orange, 2 * s)) g.DrawPath(pen, p);
                 // four blocks of different sizes: a tiny picture of the map
                 float ix = face.X + 14 * s, iy = face.Y + face.Height / 2 - 6 * s + s, u = s;
                 using (var b = new SolidBrush(ink))
@@ -426,7 +425,7 @@ namespace SpaceHunter
                     g.FillRectangle(b, ix + 8 * u, iy, 6 * u, 7 * u);
                     g.FillRectangle(b, ix + 8 * u, iy + 8 * u, 3 * u, 4 * u);
                 }
-                using (var b = new SolidBrush(Theme.Orange)) g.FillRectangle(b, ix + 12 * u, iy + 8 * u, 2 * u, 4 * u);
+                using (var b = new SolidBrush(ink)) g.FillRectangle(b, ix + 12 * u, iy + 8 * u, 2 * u, 4 * u);
                 tr = new RectangleF(face.X + 24 * s, face.Y + s, face.Width - 24 * s, face.Height);
             }
             using (var b = new SolidBrush(ink))
