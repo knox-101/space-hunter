@@ -1234,7 +1234,7 @@ fn pick_chip(c: &Cat) -> String {
 fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     let h = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     h.add_css_class("rowline");
-    if open { h.add_css_class("row-open"); }   // its panel is the one showing: filled, with an ink bar at its left edge
+    if open { h.add_css_class("row-open"); }   // its panel is the one showing: filled, ink chevron (no edge bar: the checkbox sits on the row edge here)
     let chk = gtk::CheckButton::new();
     // nothing to clean: an empty grey box, as on Windows and Mac; files picked by hand: ticked, like the whole item
     chk.set_active((c.checked || c.partial()) && !empty);

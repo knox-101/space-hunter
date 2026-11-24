@@ -105,7 +105,7 @@ button.link-btn:hover { color: $ODEEP; border-bottom-color: $ODEEP; }
 button.row-btn { background: none; background-image: none; border: none; box-shadow: none; border-radius: 0; padding: 8px 6px; }
 button.row-btn:hover { background: $HOVER; }
 button.row-btn.open { background: $SELECTED; }
-.rowline.row-open { background: $SELECTED; box-shadow: inset 3px 0 0 $INK; }
+.rowline.row-open { background: $SELECTED; }
 .row-name { color: $INK; font-weight: 600; font-size: 10.5pt; }
 .row-name-dim { color: $SOFT; font-size: 10pt; }
 .row-sub { color: $SOFT; font-size: 9pt; }
