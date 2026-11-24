@@ -3689,7 +3689,7 @@ struct TreeMap: View {
             let b = bs[h]
             return b.name + "  ·  " + Engine.fmt(b.size) + (b.marked ? "  ·  part of it is already a cleanup item" : "") + (!(b.node?.kids.isEmpty ?? true) ? "  ·  click to go inside" : "")
         }
-        return "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  hatched: free space" : "")
+        return "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  dashed outline: free space" : "")
     }
 
     var body: some View {

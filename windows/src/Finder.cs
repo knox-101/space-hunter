@@ -533,7 +533,7 @@ namespace SpaceHunter
                 }
             }
             if (blocks.Count == 0) return;   // nothing to explain until the chart is there
-            string cap = "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  hatched: free space" : "");
+            string cap = "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  dashed outline: free space" : "");
             if (hover >= 0) { var hb = blocks[hover]; cap = hb.Name + "  ·  " + Engine.Fmt(hb.Size) + (hb.Marked ? "  ·  part of it is already a cleanup item" : "") + (CanOpen(hb) ? "  ·  click to go inside" : ""); }
             using (var br = new SolidBrush(Theme.Muted))
                 g.DrawString(cap, fCap, br, new RectangleF(20, LH - Caption + 4, LW - 40, 16), nowrap);
