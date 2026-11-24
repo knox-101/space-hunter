@@ -14,9 +14,9 @@ namespace SpaceHunter
     {
         readonly CanvasPanel head = new CanvasPanel();
         readonly FlowLayoutPanel rows = new FlowLayoutPanel();
-        readonly Key addKey = new Key("add folder", true);
+        readonly Key addKey = new Key("add folder");
         public bool Changed;
-        Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(40f), fSub = Theme.CSans(10f);
+        Font fLabel = Theme.CSemi(10f), fBig = Theme.CDisplay(30f), fSub = Theme.CSans(10f);
 
         public ProtectForm()
         {
@@ -24,8 +24,8 @@ namespace SpaceHunter
             MinimumSize = SizeFromClientSize(Theme.Fit(560, 420));
             StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
 
-            head.Dock = DockStyle.Top; head.Height = Theme.D(140); head.Draw += PaintHead;
-            var headWrap = new Panel { Dock = DockStyle.Top, Height = Theme.D(140 + 18), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
+            head.Dock = DockStyle.Top; head.Height = Theme.D(114); head.Draw += PaintHead;
+            var headWrap = new Panel { Dock = DockStyle.Top, Height = Theme.D(114 + 18), Padding = Theme.Pad(18, 18, 18, 0), BackColor = Theme.Chassis };
             headWrap.Controls.Add(head);
             var keys = new Panel { Dock = DockStyle.Top, Height = Theme.D(64), BackColor = Theme.Chassis };
             addKey.Location = Theme.P(18, 12); keys.Controls.Add(addKey);
@@ -55,8 +55,8 @@ namespace SpaceHunter
             using (var b = new SolidBrush(Color.FromArgb(0xB4, 0xB1, 0xAA))) g.DrawString("Protected folders  ·  never cleaned, whatever is ticked", fLabel, b, pad, 12);
             // never "0 folders": the built-in protection is always there, even before you add your own
             int n = Keep.All.Count;
-            using (var b = new SolidBrush(Theme.Orange)) g.DrawString(BuiltIn.Length + " BUILT IN + " + n + " YOURS", fBig, b, pad - 5, 28);
-            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString("The places Space Hunter never touches, plus any folder you add.", fSub, b, pad, 104);
+            using (var b = new SolidBrush(Theme.DisplayInk)) g.DrawString(BuiltIn.Length + " BUILT IN + " + n + " YOURS", fBig, b, pad - 4, 32);
+            using (var b = new SolidBrush(Theme.DisplayMuted)) g.DrawString("The places Space Hunter never touches, plus any folder you add.", fSub, b, pad, 84);
         }
 
         void Fill()
@@ -103,7 +103,11 @@ namespace SpaceHunter
         }
         Label Text_(string t, Color c, int w)
         {
-            return new Label { Text = t, AutoSize = true, MaximumSize = new Size(w, 0), Font = Theme.Sans(10f), ForeColor = c, Margin = Theme.Pad(0, 3, 0, 3), UseMnemonic = false };
+            // one row each, a line under it, like the main list
+            var l = new Label { Text = t, AutoSize = false, Width = w, Font = Theme.Sans(10f), ForeColor = c, Margin = Theme.Pad(0, 0, 0, 0), Padding = Theme.Pad(2, 9, 0, 9), UseMnemonic = false };
+            using (var g = l.CreateGraphics()) l.Height = (int)Math.Ceiling(g.MeasureString(t, l.Font, w - l.Padding.Horizontal).Height) + l.Padding.Vertical;
+            l.Paint += (s, e) => { using (var p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, 0, l.Height - 1, l.Width, l.Height - 1); };
+            return l;
         }
     }
 

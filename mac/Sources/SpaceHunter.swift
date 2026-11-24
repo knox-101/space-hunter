@@ -554,17 +554,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum Theme {
     // Light is the original warm-grey chassis; Dark keeps the same idea (one display, darker than everything around
     // it, orange as the only accent).
-    static let chassis = Color.themed(0xD8D5CE, 0x1E1E1C), pane = Color.themed(0xE4E1DA, 0x262624)
-    static let selected = Color.themed(0xE9E6E0, 0x30302D), hover = Color.themed(0xE0DDD6, 0x2A2A27)
+    static let chassis = Color.themed(0xD8D5CE, 0x3A3632), pane = Color.themed(0xE4E1DA, 0x423E39)
+    static let selected = Color.themed(0xE9E6E0, 0x4C4741), hover = Color.themed(0xE0DDD6, 0x45403A)
     static let screen = Color.themed(0x121212, 0x0B0B0A), screenInk = Color(hex: 0xE9E6DF), screenMuted = Color(hex: 0x8A8A86)
     static let track = Color(hex: 0x3A3A38), used = Color(hex: 0x6F6C66)
-    static let ink = Color.themed(0x1B1B1A, 0xECE9E3), muted = Color.themed(0x55524C, 0xABA79F)
-    static let soft = Color.themed(0x57534D, 0xA6A29A), line = Color.themed(0xC3BFB6, 0x3B3A37)
+    static let ink = Color.themed(0x1B1B1A, 0xECE9E3), muted = Color.themed(0x55524C, 0xBDB8B0)
+    static let soft = Color.themed(0x57534D, 0xB2ADA5), line = Color.themed(0xC3BFB6, 0x58534C)
     static let orange = Color(hex: 0xFF5B1F), orangeDeep = Color.themed(0x9A3409, 0xFF7A45)   // deep orange: text and links
     static let orangeShadow = Color(hex: 0xB5400F)   // the shadow under the orange key, in both
     static let onOrange = Color(hex: 0x1B1B1A)       // text, ticks and dashes on orange, in both
-    static let key = Color.themed(0xECEAE5, 0x34332F), keyShadow = Color.themed(0xA9A59C, 0x0E0E0D)
-    static let disabled = Color.themed(0x9A968F, 0x6E6B65), keyOff = Color.themed(0xD0CDC6, 0x2C2B28)
+    static let key = Color.themed(0xECEAE5, 0x4E4943), keyShadow = Color.themed(0xA9A59C, 0x1E1C1A)
+    static let disabled = Color.themed(0x9A968F, 0x807B74), keyOff = Color.themed(0xD0CDC6, 0x46413B)
 
     static func display(_ s: CGFloat) -> Font { .custom("BigShouldersDisplay-Black", size: s) }
     static func sans(_ s: CGFloat) -> Font { .custom("SchibstedGrotesk-Regular", size: s) }
@@ -600,7 +600,7 @@ struct KeyStyle: ButtonStyle {
     var primary = false
     var toggled = false
     var big = false
-    var accent = false   // a tool of its own (the Storage map): an orange outline
+    var accent = false   // a tool of its own (the Storage map): marked by its block icon, no outline
     @Environment(\.isEnabled) var enabled
     func makeBody(configuration: Configuration) -> some View {
         let pressed = configuration.isPressed
@@ -612,7 +612,6 @@ struct KeyStyle: ButtonStyle {
             .foregroundColor(text)
             .padding(.horizontal, big ? 28 : 14).frame(minWidth: big ? 230 : 30, minHeight: big ? 44 : 32)
             .background(RoundedRectangle(cornerRadius: 4).fill(fill))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(accent && enabled ? Theme.orange : Color.clear, lineWidth: 2))
             .background(RoundedRectangle(cornerRadius: 4).fill(shadow).offset(y: pressed ? 0 : 2))
             .offset(y: pressed ? 2 : 0)
             .contentShape(Rectangle())
@@ -626,7 +625,7 @@ struct MapIcon: View {
             Rectangle().fill(Theme.ink).frame(width: 7, height: 12)
             Rectangle().fill(Theme.ink).frame(width: 6, height: 7).offset(x: 8)
             Rectangle().fill(Theme.ink).frame(width: 3, height: 4).offset(x: 8, y: 8)
-            Rectangle().fill(Theme.orange).frame(width: 2, height: 4).offset(x: 12, y: 8)
+            Rectangle().fill(Theme.ink).frame(width: 2, height: 4).offset(x: 12, y: 8)
         }.frame(width: 14, height: 12, alignment: .topLeading)
     }
 }
@@ -1006,7 +1005,7 @@ final class AppState: ObservableObject {
             save(cats[i])
         }
         scan()
-        status = "Default cleanup: Quick clean ticked, the usual ages. Protected folders stay protected."
+        status = "Back to recommended: only Quick clean ticked, the usual ages. Protected folders stay protected."
     }
 
     func clean(toTrash: Bool, sel: [Cat]) {
@@ -1340,7 +1339,7 @@ struct UpdateBar: View {
                     }
                 }
             }
-            .buttonStyle(KeyStyle(primary: true)).disabled(busy)
+            .buttonStyle(KeyStyle()).disabled(busy)
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
@@ -1471,10 +1470,10 @@ struct MainView: View {
                 Button { openWindow(id: "finder") } label: { HStack(spacing: 8) { MapIcon(); Text("Storage map") } }.buttonStyle(KeyStyle(accent: true))
                     .guidePart(2)
                 Spacer()
-                // no Scan again key: Default cleanup measures everything afresh
+                // no Scan again key: Back to recommended measures everything afresh
                 Button("Protected folders") { openWindow(id: "protect") }.buttonStyle(KeyStyle())
                     .guidePart(5)
-                Button("Default cleanup") { state.resetAll() }.buttonStyle(KeyStyle())
+                Button("Back to recommended") { state.resetAll() }.buttonStyle(KeyStyle())
                     .guidePart(6)
                     .padding(.trailing, 4)
                 Button(state.cleanRunning ? "Show cleaning" : state.scanning > 0 ? "Scanning …" : "Clean \(Engine.fmt(state.selectedBytes))") {
@@ -1575,8 +1574,8 @@ struct MainView: View {
         guide.autoStart(when: { !s.cleaning && !s.cleanRunning }, before: { s.openID = nil })
     }
 
-    // The parts the nine steps light, in order: the display; the section rail; the first three rows under the list's
-    // header; the item panel; the Storage map key; Protected folders; Default cleanup; Clean; the top-right keys.
+    // The parts the eight steps light, in order: the display; the section rail; the first three rows under the list's
+    // header; the item panel; the Storage map key; Protected folders and Back to recommended together; Clean; the top-right keys.
     func guideTargets(_ g: GeometryProxy, _ a: [Int: Anchor<CGRect>]) -> [CGRect?] {
         func part(_ i: Int) -> CGRect? { a[i].map { g[$0] } }
         let rail: CGRect? = part(10).map { $0.insetBy(dx: -10, dy: 0) }
@@ -1586,7 +1585,9 @@ struct MainView: View {
             let h: CGFloat = max(20, min(l.maxY - top, 3 * 56))
             rows = CGRect(x: l.minX + 8, y: top, width: l.width - 16, height: h)
         }
-        return [part(0), rail, rows, part(13), part(2), part(5), part(6), part(3), part(9)]
+        // Protected folders and Back to recommended share one step: one cut-out around both keys
+        let keep: CGRect? = { if let a = part(5), let b = part(6) { return a.union(b) }; return part(5) ?? part(6) }()
+        return [part(0), rail, rows, part(13), part(2), keep, part(3), part(9)]
     }
 }
 
@@ -1675,6 +1676,7 @@ struct TopIcon: View {
 
 struct DisplayView: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.colorScheme) var scheme
     var body: some View {
         let p = Engine.parts(state.selectedBytes)
         VStack(alignment: .leading, spacing: 0) {
@@ -1687,17 +1689,23 @@ struct DisplayView: View {
                             Text(p.0).font(Theme.display(76)).padding(.leading, -7)   // the glyph side bearing: the digit lines up with the label and bar
                             Text(p.1).font(Theme.display(28))
                         }.foregroundColor(Theme.orange)
-                        // beside the number: one turning ring while the items are measured
+                        // beside the number: the same two lines as the "all safe to clean" text that replaces it, starting
+                        // on the same edge: what's happening, then a text-sized ring with how far it has got (nothing
+                        // moves when it ends)
                         if state.scanning > 0 {
-                            HStack(spacing: 10) {
-                                SpinRing(width: 3.5).frame(width: 22, height: 22)
-                                // macOS holds the scan while it asks for access to Desktop, Documents or Downloads: say so
-                                Ticker(every: 1) { now in
-                                    let stalled = now.timeIntervalSince(state.lastScanTick) > 4
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(stalled ? "waiting for macOS" : "measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                            let done = state.cats.filter { $0.scanned }.count
+                            let all = state.cats.count
+                            // macOS holds the scan while it asks for access to Desktop, Documents or Downloads: say so
+                            Ticker(every: 1) { now in
+                                let stalled = now.timeIntervalSince(state.lastScanTick) > 4
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(stalled ? "waiting for macOS" : "measuring every item").font(Theme.semi(13)).foregroundColor(Theme.screenInk)
+                                    HStack(spacing: 5) {
+                                        SpinRing(width: 2).frame(width: 12, height: 12)
                                         if stalled {
                                             Text("If it asks to access your folders, click Allow.").font(Theme.semi(13)).foregroundColor(Theme.screenMuted)
+                                        } else if all > 0 {
+                                            Text("\(done) of \(all) items").font(Theme.semi(13)).foregroundColor(Theme.screenMuted)
                                         }
                                     }
                                 }
@@ -1738,6 +1746,8 @@ struct DisplayView: View {
         }
         .padding(.horizontal, 22).padding(.vertical, 18)
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
+        // in dark, a 1 pt bezel keeps the display apart from the chassis
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(scheme == .dark ? Color(hex: 0x4A4640) : Color.clear, lineWidth: 1))
     }
 
     func legend(_ swatch: AnyView, _ text: String, _ ink: Color) -> some View {
@@ -1836,8 +1846,10 @@ struct TierColumn: View {
         let hot = hover == lvl && !on
         let headInk: Color = on || hot ? Theme.ink : Theme.muted
         let headFont: Font = on ? Theme.semi(13) : Theme.sans(13)
-        // the space, not a count: "none ticked", "all 17 MB ticked", "14 of 17 MB ticked"
+        // the space, not a count: "none ticked", "all 17 MB ticked", "14 of 17 MB ticked"; under 1 MB ticked
+        // (never "0 MB of 2 GB ticked") it counts items instead: "2 of 9 items ticked"
         let sub: String = nItems == 0 ? "nothing to clean" : nTicked == 0 ? "none ticked"
+            : ticked < 1_048_576 ? "\(nTicked) of \(nItems) items ticked"
             : nTicked == nItems && ticked >= total ? "all \(Engine.fmt(total)) ticked" : TierColumn.of(ticked, total) + " ticked"
         let boxState: Int = nTicked == 0 ? 0 : nTicked == nItems ? 2 : 1
         VStack(alignment: .leading, spacing: 2) {
@@ -2010,10 +2022,11 @@ struct Row: View {
                 Text(size).font(Theme.semi(14)).foregroundColor(empty ? Theme.soft : Theme.ink)
                 if !compact { Text(files).font(Theme.sans(11)).foregroundColor(Theme.soft) }
             }
-            Chevron(color: isOpen ? Theme.orange : (hovering ? Theme.ink : Theme.soft))
+            Chevron(color: isOpen || hovering ? Theme.ink : Theme.soft)
         }
         .padding(.horizontal, 18).frame(height: compact ? 40 : 56)
         .background(isOpen ? Theme.selected : (hovering ? Theme.hover : Color.clear))
+        .overlay(Rectangle().fill(isOpen ? Theme.ink : Color.clear).frame(width: 3), alignment: .leading)   // its panel is the one showing
         .overlay(Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, 18), alignment: .bottom)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -2677,7 +2690,7 @@ struct GuideAnchors: PreferenceKey {
 }
 
 extension View {
-    // marks a part the guide can light (0 display, 2 Storage map, 3 Clean, 5 Protected folders, 6 Default cleanup,
+    // marks a part the guide can light (0 display, 2 Storage map, 3 Clean, 5 Protected folders, 6 Back to recommended,
     // 9 top-right keys, 10 section rail, 11 list, 12 list header, 13 item panel)
     func guidePart(_ i: Int) -> some View { anchorPreference(key: GuideAnchors.self, value: .bounds) { [i: $0] } }
 }
@@ -2703,8 +2716,7 @@ final class GuideModel: ObservableObject {
         ("Each row is one thing to clean", "Tick a row to include it; the size is what it would free. Click the row itself to see what it is."),
         ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
         ("See what fills your disk", "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list."),
-        ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
-        ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages, and every size measured afresh."),
+        ("Protect folders, or start over", "Protected folders are never cleaned, whatever is ticked; your own files already are. Back to recommended ticks only Quick clean again."),
         ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
         ("Your look, and this guide", "Light, dark or your Mac's setting. The ? key shows this guide again whenever you want."),
     ]
@@ -2885,12 +2897,12 @@ struct ProtectView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Protected folders  ·  never cleaned, whatever is ticked").font(Theme.semi(12)).foregroundColor(Color(hex: 0xB4B1AA))
                 // never "0 folders": the built-in protection is always there, even before you add your own
-                Text("\(always.count) BUILT IN + \(mine.count) YOURS").font(Theme.display(44)).foregroundColor(Theme.orange)
+                Text("\(always.count) BUILT IN + \(mine.count) YOURS").font(Theme.display(33)).foregroundColor(Theme.screenInk)
                 Text("The places Space Hunter never touches, plus any folder you add.").font(Theme.sans(13)).foregroundColor(Theme.screenMuted)
             }
             .padding(20).frame(maxWidth: .infinity, alignment: .leading).background(RoundedRectangle(cornerRadius: 7).fill(Theme.screen))
             HStack {
-                Button("Add folder") { pick() }.buttonStyle(KeyStyle(primary: true))
+                Button("Add folder") { pick() }.buttonStyle(KeyStyle())
                 Text("Anything inside a protected folder is skipped by every item, every time.").font(Theme.sans(12)).foregroundColor(Theme.muted)
             }
             ScrollView {
@@ -2904,8 +2916,14 @@ struct ProtectView: View {
                         }
                     }
                     Text("Built in").font(Theme.semi(14)).padding(.top, 12)
-                    ForEach(always, id: \.self) { t in
-                        Text(t).font(Theme.sans(13)).foregroundColor(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                    // one row each, a line under it, like the main list
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(always, id: \.self) { t in
+                            Text(t).font(Theme.sans(13)).foregroundColor(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 2).padding(.vertical, 9)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .overlay(Rectangle().fill(Theme.line).frame(height: 1), alignment: .bottom)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3178,12 +3196,19 @@ struct FinderHeader: View {
     @ObservedObject var scanner: Scanner
     let current: FolderNode?
     let target: Int64
+    // at a disk's top level the map shows that disk's used space; deeper, the size of the folder you're in
+    var idleLabel: String {
+        guard let c = current else { return "Storage map  ·  nothing is deleted here" }
+        let atDisk = c.parent == nil && c.path != Engine.home.path
+        let disk = c.path == "/" ? Engine.diskName() : (c.path as NSString).lastPathComponent
+        return "Storage map  ·  " + (atDisk ? "used on \(disk)" : "size of this folder") + "  ·  nothing is deleted here"
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Ticker(every: 1) { now in
                 let stalled = scanner.running && now.timeIntervalSince(scanner.lastTick) > 3
                 Text(stalled ? "Storage map  ·  waiting for macOS: if it asks to access a folder, click Allow"
-                     : scanner.running ? "Storage map  ·  counting files" : "Storage map  ·  just looking, nothing is deleted here")
+                     : scanner.running ? "Storage map  ·  counting files" : idleLabel)
                     .font(Theme.semi(12)).foregroundColor(stalled ? Theme.screenInk : Color(hex: 0xB4B1AA))
             }
             if scanner.running {
@@ -3664,7 +3689,7 @@ struct TreeMap: View {
             let b = bs[h]
             return b.name + "  ·  " + Engine.fmt(b.size) + (b.marked ? "  ·  part of it is already a cleanup item" : "") + (!(b.node?.kids.isEmpty ?? true) ? "  ·  click to go inside" : "")
         }
-        return "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  hatched: free space" : "")
+        return "Click a block to go inside it  ·  orange corner: part of it is already a cleanup item" + (free > 0 ? "  ·  dashed outline: free space" : "")
     }
 
     var body: some View {
@@ -3678,7 +3703,7 @@ struct TreeMap: View {
                         let canOpen = !(b.node?.kids.isEmpty ?? true)
                         let hot = hover == i && canOpen
                         ZStack(alignment: .topLeading) {
-                            if b.free { Hatch(ink: Theme.line, ground: Theme.hover) }
+                            if b.free { Rectangle().strokeBorder(Theme.soft, style: StrokeStyle(lineWidth: 1, dash: [3, 3])) }   // plain: free space has nothing in it
                             else { Rectangle().fill(hot ? Theme.screen : b.rest ? Theme.hover : Theme.key) }
                             if r.width >= 46 && r.height >= 34 {
                                 VStack(alignment: .leading, spacing: 1) {

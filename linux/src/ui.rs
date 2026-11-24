@@ -43,7 +43,7 @@ pub struct Ui {
     hero: gtk::Label,
     unit: gtk::Label,
     beside1: gtk::Label,
-    spin: gtk::DrawingArea,                   // one turning ring beside the number while the items are measured
+    spin: gtk::DrawingArea,                   // a small turning ring on the second line while the items are measured
     beside2: gtk::Label,
     disk_text: gtk::Label,
     freed_text: gtk::Label,
@@ -221,8 +221,6 @@ fn map_icon() -> gtk::DrawingArea {
         cr.rectangle(0.0, 0.0, 7.0, 12.0);
         cr.rectangle(8.0, 0.0, 6.0, 7.0);
         cr.rectangle(8.0, 8.0, 3.0, 4.0);
-        let _ = cr.fill();
-        cr.set_source_rgb(1.0, 0.357, 0.122);
         cr.rectangle(12.0, 8.0, 2.0, 4.0);
         let _ = cr.fill();
     });
@@ -438,7 +436,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
 
     // the dark display: the number you get back, the disk as one bar with a clear legend
     let display = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    display.add_css_class("display");
+    display.add_css_class("display"); display.add_css_class("main-display");
     display.set_margin_top(6); display.set_margin_start(18); display.set_margin_end(18);
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -451,25 +449,28 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     unit.set_valign(gtk::Align::End); unit.set_margin_bottom(12);
     heroes.append(&hero); heroes.append(&unit);
     num.append(&heroes);
-    // while the items are measured: one turning ring beside the number, moved by the clock (shown only then)
+    // beside the number, two lines starting on one edge: what kind of space it is, and what else is there; while the
+    // items are measured, "measuring every item" and under it a text-sized turning ring with how far it has got
+    // (the ring sits on the second line, so nothing moves when measuring ends)
     let spin = gtk::DrawingArea::new();
-    spin.set_content_width(26); spin.set_content_height(26); spin.set_valign(gtk::Align::Center);
+    spin.set_content_width(14); spin.set_content_height(14); spin.set_valign(gtk::Align::Center);
     let spin_t0 = std::time::Instant::now();
     spin.set_draw_func(move |_, cr, w, h| {
-        let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, 10.5);
-        cr.set_line_width(3.5);
+        let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, 6.0);
+        cr.set_line_width(2.0);
         cr.set_source_rgb(0.227, 0.227, 0.220); cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI); let _ = cr.stroke();
         let a = (spin_t0.elapsed().as_secs_f64() * 300f64.to_radians()) % (2.0 * std::f64::consts::PI);
         cr.set_line_cap(gtk::cairo::LineCap::Round);
-        cr.set_source_rgb(1.0, 0.357, 0.122); cr.arc(cx, cy, r, a, a + 1.9); let _ = cr.stroke();
+        cr.set_source_rgb(1.0, 0.357, 0.122); cr.arc(cx, cy, r, a, a + 110f64.to_radians()); let _ = cr.stroke();
     });
     spin.add_tick_callback(|w, _| { w.queue_draw(); glib::ControlFlow::Continue });   // only runs while it's shown
-    num.append(&spin);
     let beside = gtk::Box::new(gtk::Orientation::Vertical, 4);
     beside.set_valign(gtk::Align::Center);
     let beside1 = label("measuring every item", "beside");
     let beside2 = label("", "beside-muted");
-    beside.append(&beside1); beside.append(&beside2);
+    let line2 = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+    line2.append(&spin); line2.append(&beside2);
+    beside.append(&beside1); beside.append(&line2);
     num.append(&beside);
     left.append(&num);
     top.append(&left);
@@ -504,7 +505,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
     keys.append(&map);
     keys.append(&hspacer());
     let protect = key("protected folders", &[]);
-    let reset = key("default cleanup", &[]);
+    let reset = key("back to recommended", &[]);
     reset.set_margin_end(4);
     let clean = key("clean", &["primary"]);
     // while scanning, over the Clean key: a faint orange fill to the share of items measured, and a soft light band
@@ -748,7 +749,7 @@ pub fn build(app: &gtk::Application, opts: Opts) -> Rc<Ui> {
                 }
                 engine::settings::save(&st.cats);
             }
-            u.status.set_text("Default cleanup: Quick clean ticked, the usual ages. Protected folders stay protected.");
+            u.status.set_text("Back to recommended: only Quick clean ticked, the usual ages. Protected folders stay protected.");
             scan(&u, None);
         });
         let u = ui.clone();
@@ -850,7 +851,7 @@ fn show_update(u: &Rc<Ui>, r: Rc<crate::updater::Release>) {
     let (uu, c2) = (u.clone(), card.clone());
     later.connect_clicked(move |_| { uu.update_on.set(false); uu.bottom.remove(&c2); if let Some(p) = uu.status.parent() { p.set_visible(true); } });
     if can_install {
-        let go = key("update & relaunch", &["primary"]);
+        let go = key("update & relaunch", &[]);   // a normal key: orange stays with what you get back
         card.append(&go);
         let (uu, r2, sub2, later2, news2) = (u.clone(), r.clone(), sub.clone(), later.clone(), news.clone());
         go.connect_clicked(move |b| {
@@ -980,7 +981,8 @@ fn refresh_top(u: &Rc<Ui>) {
     if st.pending > 0 { u.beside1.set_text("measuring every item"); }
     else if only_safe { u.beside1.set_text(if freed.1 == 0 { "all safe to clean  \u{00B7}  press Clean to start" } else { "all safe to clean" }); }
     else { u.beside1.set_text("includes items to check first"); }
-    u.beside2.set_text(&if not_ticked > 0 { format!("+ {} more you can check yourself", fmt(not_ticked)) } else { String::new() });
+    u.beside2.set_text(&if st.pending > 0 { format!("{} of {} items", st.cats.iter().filter(|c| c.scanned).count(), st.cats.len()) }
+                        else if not_ticked > 0 { format!("+ {} more you can check yourself", fmt(not_ticked)) } else { String::new() });
     let (free, total) = crate::disk("/");
     u.disk_text.set_text(&format!("{} free of {}", fmt(free), fmt(total)));
     let binned = engine::history::trashed();
@@ -1095,6 +1097,7 @@ fn draw_rail(u: &Ui, da: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h:
         // how much of it is ticked, in space
         let words = if n_items == 0 { "nothing to clean".to_string() }
                     else if n_ticked == 0 { "none ticked".to_string() }
+                    else if ticked < (1u64 << 20) { format!("{} of {} items ticked", n_ticked, n_items) }
                     else if n_ticked == n_items && ticked >= total { format!("all {} ticked", fmt(total)) }
                     else { format!("{} ticked", size_of(ticked, total)) };
         let room = (x0 + tw - bx - 10.0).max(10.0);
@@ -1231,6 +1234,7 @@ fn pick_chip(c: &Cat) -> String {
 fn row(u: &Rc<Ui>, c: &Cat, empty: bool, open: bool) -> gtk::Box {
     let h = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     h.add_css_class("rowline");
+    if open { h.add_css_class("row-open"); }   // its panel is the one showing: filled, ink chevron (no edge bar: the checkbox sits on the row edge here)
     let chk = gtk::CheckButton::new();
     // nothing to clean: an empty grey box, as on Windows and Mac; files picked by hand: ticked, like the whole item
     chk.set_active((c.checked || c.partial()) && !empty);
@@ -2667,19 +2671,18 @@ fn start_clean(u: &Rc<Ui>, sel: Vec<Cat>, to_trash: bool) {
 // ---- The first-run guide: the window dims, a lit cut-out sits on each real part in turn, a small card explains it.
 // The cut-out glides from one part to the next. "?" plays it again.
 
-const GUIDE: [(&str, &str); 9] = [
+const GUIDE: [(&str, &str); 8] = [
     ("This is what you can free", "The big number is what's ticked right now. The bar is your disk: orange is ticked, hatched is what you could still free. On the right, your disk's free space and what you've freed so far."),
     ("Three sections, by how careful to be", "Quick clean is safe and ticked for you. Big caches come back when they're needed. Deep clean may include your work. The small box ticks or unticks a whole section."),
     ("Each row is one thing to clean", "Tick a row to include it; the size is what it would free. Click the row itself to see what it is."),
     ("What it is, what goes, what happens after", "Every item explains itself. Some let you choose \u{201C}only older than\u{201D} or \u{201C}everything\u{201D}. Under What's inside, untick files to keep them, or tick just a few to clean only those."),
     ("See what fills your disk", "Storage map shows every folder by size, on any disk. Nothing there deletes anything; you can add a folder to your cleanup list."),
-    ("Keep what must never go", "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already."),
-    ("Default cleanup", "Back to the first-time setup: Quick clean ticked, the usual ages, and every size measured afresh."),
+    ("Protect folders, or start over", "Protected folders are never cleaned, whatever is ticked; your own files already are. Back to recommended ticks only Quick clean again."),
     ("Clean always asks first", "You see the list of what goes and choose Permanently delete or Trash. When it's done, a ring shows the space you got back."),
     ("Your look, and this guide", "Light, dark or your computer's setting. The ? key shows this guide again whenever you want."),
 ];
 // what each step does before it points: 0 nothing, 1 close the item panel, 2 open the biggest item of the open section
-const GUIDE_DO: [u8; 9] = [0, 1, 1, 2, 1, 0, 0, 0, 0];
+const GUIDE_DO: [u8; 8] = [0, 1, 1, 2, 1, 0, 0, 0];
 pub struct Guide {
     da: gtk::DrawingArea,
     step: Cell<usize>,
@@ -2731,9 +2734,15 @@ fn guide_target(u: &Ui, n: usize) -> R4 {
         }
         3 => bounds_of(u, u.psw.upcast_ref()),
         4 => bounds_of(u, u.map_key.upcast_ref()),
-        5 => bounds_of(u, u.protect_key.upcast_ref()),
-        6 => bounds_of(u, u.reset_key.upcast_ref()),
-        7 => bounds_of(u, u.clean.upcast_ref()),
+        5 => match (bounds_of(u, u.protect_key.upcast_ref()), bounds_of(u, u.reset_key.upcast_ref())) {   // both keys, as one
+            (Some(a), Some(b)) => {
+                let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
+                let (x1, y1) = ((a.0 + a.2).max(b.0 + b.2), (a.1 + a.3).max(b.1 + b.3));
+                Some((x0, y0, x1 - x0, y1 - y0))
+            }
+            (a, b) => a.or(b),
+        },
+        6 => bounds_of(u, u.clean.upcast_ref()),
         _ => bounds_of(u, u.top_keys.upcast_ref()).map(|b| {   // the guide key and the theme keys, not the room for their names
             let kw = TK_C * 4.0 + TK_GAP;
             (b.0 + b.2 - kw, b.1, kw, TK_H + 2.0)

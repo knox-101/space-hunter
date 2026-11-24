@@ -3,6 +3,20 @@
 All notable changes to Space Hunter. Versions follow [semantic versioning](https://semver.org): the last number is
 for fixes, the middle number is for new features, and the first number is for big changes.
 
+## 1.6.7 (2026-11-24)
+
+- **While the scan runs, the display says how far it has got.** Beside the number it now reads "measuring every item",
+  with a small turning ring and "31 of 34 items" underneath, on the same edge as the "all safe to clean" text that
+  takes its place, so nothing jumps when the scan ends.
+- **Dark mode keeps the display apart.** The window around it is a lighter warm grey, and the display has a thin edge.
+- **Orange is kept for what you get back:** the number, the disk bar, the ticks and Clean. The Storage map key, the
+  update key and Add folder are plain keys now, and the Protected folders count is set in the display's own white.
+- **Clearer words.** "Default cleanup" is now **Back to recommended**. A section whose ticked items come to less than
+  1 MB says "1 of 8 items ticked" instead of "0 MB ticked", and a tiny size shows as 1 KB, never 0 KB.
+- The row whose panel is open is marked with a dark edge (Windows and Mac). The Storage map says "used on C:" over its
+  number and draws free space as a dashed outline (hatching only ever means "not ticked"). The Protected folders list
+  has a line under each entry, and the first-run guide is one step shorter.
+
 ## 1.6.6 (2026-11-23)
 
 - **Windows: the count starts moving as soon as you press Clean.** Emptying the Recycle Bin used to wait for Windows to

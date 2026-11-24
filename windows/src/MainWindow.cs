@@ -20,6 +20,7 @@ namespace SpaceHunter
         public long Selected, ReviewUnticked, Free, Total, FreedAll;
         public int Cleans;
         public bool Scanning, Compact, OnlySafe = true;
+        public int ScanDone, ScanTotal;   // items measured so far, while scanning
         public List<KeyValuePair<DateTime, long>> History = new List<KeyValuePair<DateTime, long>>();
         Font fLabel = Theme.CSemi(11f), fHist = Theme.CSemi(10f), fBig = Theme.CDisplay(50f), fUnit = Theme.CDisplay(20f), fDisk = Theme.CSans(11f),
              fLegend = Theme.CSemi(10.5f), fSmall = Theme.CSans(9.5f);
@@ -38,6 +39,8 @@ namespace SpaceHunter
             g.Clear(Theme.Chassis);
             using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var b = new SolidBrush(Theme.Screen)) g.FillPath(b, p);
             using (var pen = new Pen(Color.Black, 2)) g.DrawLine(pen, 7, 2, W - 7, 2);   // inset lip
+            if (Theme.IsDark)   // in dark, a 1 px bezel keeps the display apart from the chassis
+                using (var p = Theme.Round(new RectangleF(0.5f, 0.5f, W - 1, H - 1), 7)) using (var pen = new Pen(Color.FromArgb(0x4A, 0x46, 0x40))) g.DrawPath(pen, p);
             float pad = 22, right = W - pad;
             // the right column is right-aligned into boxes that end on `right`, so every line ends on the same edge
             // (typographic: no GDI+ side padding, which differs by font size and made the ends ragged)
@@ -57,13 +60,20 @@ namespace SpaceHunter
                 // beside the number: what kind of space it is, and what else is there if you look
                 if (Scanning)
                 {
-                    float tx = pad - 12.5f + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14, rr = 11, cx = tx + rr + 2, cy = 62;
+                    // the same two lines as the "all safe to clean" text that replaces it, starting on the same edge:
+                    // what's happening, then a text-sized ring with how far it has got (nothing moves when it ends)
+                    float tx = pad - 12.5f + ns.Width - 8 + g.MeasureString(unit, fUnit).Width + 14, rr = 6f;
+                    using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString("measuring every item", fLegend, ib, tx, 44);
+                    var lh = g.MeasureString("Ag", fLegend).Height;
+                    float gx = tx + g.MeasureString("Ag", fLegend).Width - g.MeasureString("Ag", fLegend, PointF.Empty, StringFormat.GenericTypographic).Width;   // where GDI+ puts the first letter
+                    float cx = gx + rr, cy = 64 + lh / 2 + 0.5f;
                     var old = g.SmoothingMode; g.SmoothingMode = SmoothingMode.AntiAlias;
-                    using (var pen = new Pen(Theme.DisplayTrack, 3.5f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
-                    using (var pen = new Pen(Theme.Orange, 3.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    using (var pen = new Pen(Theme.DisplayTrack, 2f)) g.DrawEllipse(pen, cx - rr, cy - rr, 2 * rr, 2 * rr);
+                    using (var pen = new Pen(Theme.Orange, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                         g.DrawArc(pen, cx - rr, cy - rr, 2 * rr, 2 * rr, (float)(spin.Elapsed.TotalSeconds * 300 % 360), 110);
                     g.SmoothingMode = old;
-                    using (var ib = new SolidBrush(Theme.DisplayInk)) g.DrawString("measuring every item", fLegend, ib, cx + rr + 10, cy - g.MeasureString("Ag", fLegend).Height / 2);
+                    if (ScanTotal > 0)
+                        using (var mb = new SolidBrush(Theme.DisplayMuted)) g.DrawString(ScanDone + " of " + ScanTotal + " items", fLegend, mb, cx + rr + 5, 64);
                 }
                 if (!Scanning && Selected > 0)
                 {
@@ -87,7 +97,7 @@ namespace SpaceHunter
                 for (int i = 0; i < pts.Count; i++)
                     line.Add(new PointF(sx + sw * i / (pts.Count - 1), sy + sh - (float)(sh * (pts[i].Value - mn) / (double)(mx - mn))));
                 using (var pen = new Pen(Theme.DisplayInk, 1.5f)) g.DrawLines(pen, line.ToArray());
-                using (var b = new SolidBrush(Theme.Orange)) { var lp = line[line.Count - 1]; g.FillEllipse(b, lp.X - 3, lp.Y - 3, 6, 6); }
+                using (var b = new SolidBrush(Theme.DisplayInk)) { var lp = line[line.Count - 1]; g.FillEllipse(b, lp.X - 3, lp.Y - 3, 6, 6); }   // orange stays with what you get back
                 using (var b = new SolidBrush(Theme.DisplayMuted))
                 {
                     var hl = "Free space since " + pts[0].Key.ToString("d MMM"); var hs = g.MeasureString(hl, fHist);
@@ -255,7 +265,7 @@ namespace SpaceHunter
                     }
                     bx2 = bxr.Right + 6;
                 }
-                string count = nItems == 0 ? "nothing to clean" : nTicked == 0 ? "none ticked" : nTicked == nItems && ticked >= total ? "all " + Engine.Fmt(total) + " ticked" : Of(ticked, total) + " ticked";
+                string count = nItems == 0 ? "nothing to clean" : nTicked == 0 ? "none ticked" : ticked < (1L << 20) ? nTicked + " of " + nItems + " items ticked" : nTicked == nItems && ticked >= total ? "all " + Engine.Fmt(total) + " ticked" : Of(ticked, total) + " ticked";
                 using (var b = new SolidBrush(hc))
                 using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
                     g.DrawString(count, hf, b, new RectangleF(bx2, r.Y + 10, Math.Max(10, r.Right - bx2 - 10), 22), sf);
@@ -551,7 +561,8 @@ namespace SpaceHunter
                 var c = r.C;
                 bool empty = IsEmpty(c), small = r.H == SmallH;
                 // the fill spans exactly the separator's span
-                if (c == Selected || hover == ri) using (var br = new SolidBrush(c == Selected ? Theme.Selected : Theme.Hover)) g.FillRectangle(br, x0, top, w - x0, r.H - 1);
+                if (c == Selected || c == OpenItem || hover == ri) using (var br = new SolidBrush(c == Selected || c == OpenItem ? Theme.Selected : Theme.Hover)) g.FillRectangle(br, x0, top, w - x0, r.H - 1);
+                if (c == OpenItem) using (var br = new SolidBrush(Theme.Ink)) g.FillRectangle(br, x0, top, 3, r.H - 1);   // its panel is the one showing
                 using (var p = new Pen(Theme.Line)) g.DrawLine(p, x0, top + r.H - 1, w, top + r.H - 1);
 
                 // checkbox: filled orange with a dark tick, an ink outline, or grey when there's nothing to clear
@@ -566,14 +577,14 @@ namespace SpaceHunter
                 else using (var path = Theme.Round(box, 2)) using (var pen = new Pen(Theme.Ink, 1.6f)) g.DrawPath(pen, path);
 
                 // chevron at the end: the whole row opens its panel
-                using (var pen = new Pen(c == OpenItem ? Theme.Orange : hover == ri ? Theme.Ink : Theme.Soft, c == OpenItem ? 2.4f : 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                using (var pen = new Pen(c == OpenItem || hover == ri ? Theme.Ink : Theme.Soft, c == OpenItem ? 2.4f : 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                 {
                     float cx = w - 12, cy = top + r.H / 2f;
                     g.DrawLines(pen, new[] { new PointF(cx - 4, cy - 6), new PointF(cx + 2, cy), new PointF(cx - 4, cy + 6) });
                 }
 
                 float x = 56, right = w - 34;
-                string size = c.Blocked ? "size after cleaning" : !c.Scanned ? "..." : c.Kind == Kind.RunHistory ? c.Files + (c.Files == 1 ? " entry" : " entries") :
+                string size = c.Blocked ? "measured as it's cleaned" : !c.Scanned ? "..." : c.Kind == Kind.RunHistory ? c.Files + (c.Files == 1 ? " entry" : " entries") :
                               c.Partial ? (c.PickBytes < 0 ? "..." : Engine.Fmt(c.PickBytes)) : Engine.Fmt(c.Bytes);
                 string files = !small && !c.Blocked && c.Scanned && c.Kind != Kind.RunHistory ? (c.Partial ? "picked" : c.Files.ToString("N0") + (c.Files == 1 ? " file" : " files")) : "";
                 var sizeFont = c.Blocked ? fLine : fSize;
@@ -1012,7 +1023,7 @@ namespace SpaceHunter
             strip.Controls.Add(topKeys);
             topKeys.GuideClicked += (s, e) => StartGuide(0);
             var keys = new Panel { Dock = DockStyle.Bottom, Height = Theme.D(64), BackColor = Theme.Chassis };
-            finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("default cleanup");
+            finderKey = new Key("storage map") { Accent = true }; protectKey = new Key("protected folders"); resetKey = new Key("back to recommended");
             cleanKey = new Key("clean", true);
             cleanKey.Font = Theme.Semi(11.5f); cleanKey.Height = Theme.D(46); cleanKey.MinimumSize = Theme.D(240, 46); cleanKey.FitWidth();
             keys.Controls.AddRange(new Control[] { finderKey, protectKey, resetKey, cleanKey });
@@ -1130,10 +1141,8 @@ namespace SpaceHunter
                     Body = "Every item explains itself. Some let you choose \u201conly older than\u201d or \u201ceverything\u201d. Under What's inside, untick files to keep them, or tick just a few to clean only those." },
                 new GuideStep { Get = () => Part(finderKey), Enter = closePanel, Title = "See what fills your disk",
                     Body = "Storage map shows every folder by size, on any drive. Nothing there deletes anything; you can add a folder to your cleanup list." },
-                new GuideStep { Get = () => Part(protectKey), Title = "Keep what must never go",
-                    Body = "Protected folders are never cleaned, whatever is ticked. Space Hunter protects your own files and itself already." },
-                new GuideStep { Get = () => Part(resetKey), Title = "Default cleanup",
-                    Body = "Back to the first-time setup: Quick clean ticked, the usual ages, and every size measured afresh." },
+                new GuideStep { Get = () => { var a = Part(protectKey); var b = Part(resetKey); return RectangleF.Union(a, b); }, Title = "Protect folders, or start over",
+                    Body = "Protected folders are never cleaned, whatever is ticked; your own files already are. Back to recommended ticks only Quick clean again." },
                 new GuideStep { Get = () => Part(cleanKey), Title = "Clean always asks first",
                     Body = "You see the list of what goes and choose Permanently delete or Recycle Bin. When it's done, a ring shows the space you got back." },
                 new GuideStep { Get = () => { var r = Part(topKeys); var b = topKeys.Bounds_; return new RectangleF(r.X + b.X, r.Y + b.Y, b.Width, b.Height); },
@@ -1161,13 +1170,13 @@ namespace SpaceHunter
             Settings.Save(cats);
             if (drawer.IsOpen && drawer.Panel.Current != null) drawer.Panel.ShowCategory(drawer.Panel.Current);
             Enqueue(cats);
-            status.Text = "Default cleanup: Quick clean ticked, the usual ages. Protected folders stay protected.";
+            status.Text = "Back to recommended: only Quick clean ticked, the usual ages. Protected folders stay protected.";
         }
 
         void PlaceKeys(Control keys)
         {
             // The Storage map is a tool of its own, alone at the left. The cleaning keys sit together at the right:
-            // protected folders and default cleanup lead into the one big Clean key.
+            // protected folders and back to recommended lead into the one big Clean key.
             // the row spans the display above it exactly: Storage map on its left edge, Clean ending on its right edge,
             // and Clean centred on the other keys' centre
             int y = Theme.D(14);
@@ -1190,6 +1199,7 @@ namespace SpaceHunter
             disp.Selected = cats.Where(c => c.Included).Sum(c => c.CleanBytes);
             disp.OnlySafe = !cats.Any(c => c.Included && !c.Safe && (c.Bytes > 0 || c.Files > 0));
             disp.ReviewUnticked = cats.Where(c => !c.Included && !c.Safe && c.Kind != Kind.RecycleBin).Sum(c => c.Bytes);
+            disp.ScanDone = cats.Count(c => c.Scanned); disp.ScanTotal = cats.Count;
             disp.SetScanning(busy);
             disp.Invalidate(); tiers.Invalidate(); list.Invalidate();
             cleanKey.Text = cleaning ? "show cleaning" : busy ? "scanning …" : "clean " + Engine.Fmt(disp.Selected);   // the key you're waiting for says why
@@ -1235,7 +1245,7 @@ namespace SpaceHunter
             updateBar.Resize += (s, e) => updateBar.Invalidate();
             updateText = new Label { AutoSize = false, Font = Theme.Semi(11f), ForeColor = Theme.DisplayInk, TextAlign = ContentAlignment.BottomLeft, UseMnemonic = false, BackColor = Theme.Screen, AutoEllipsis = true };
             updateSub = new Label { AutoSize = false, Font = Theme.Sans(9f), ForeColor = Theme.DisplayMuted, TextAlign = ContentAlignment.TopLeft, UseMnemonic = false, BackColor = Theme.Screen, AutoEllipsis = true };
-            updateKey = new Key("update & relaunch", true); laterKey = new Key("later"); newsKey = new Key("what's new");
+            updateKey = new Key("update & relaunch"); laterKey = new Key("later"); newsKey = new Key("what's new");
             updateBar.Controls.Add(updateText); updateBar.Controls.Add(updateSub); updateBar.Controls.Add(newsKey); updateBar.Controls.Add(laterKey); updateBar.Controls.Add(updateKey);
             updateBar.Resize += (s, e) => LayoutBar();
             laterKey.Click += (s, e) => { if (askMode) EndAsk(false); else HideUpdate(); };
